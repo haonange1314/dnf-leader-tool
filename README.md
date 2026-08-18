@@ -2,7 +2,7 @@
 
 面向 DNF 国服 PC 端团长的人员管理与智能排表网站。项目通过版本化副本配置定义人数、队伍和分队规则，再结合玩家可用波次、角色强度及特殊角色标签自动生成多波排表。
 
-> 当前状态：需求设计和技术设计已经完成，应用工程尚未初始化，暂时没有可运行的 Web 服务。
+> 当前状态：阶段 0 工程和技术验证已完成。前后端工程、PostgreSQL 首迁移、内置副本种子和 OR-Tools PoC 均已建立。
 
 ## 核心能力
 
@@ -76,14 +76,59 @@ MVP 采用模块化单体架构，不引入 Redis、消息队列或微服务。�
 
 当前文档版本均为 v0.2。
 
+## 快速开始
+
+### 环境要求
+
+- Node.js 24、pnpm 11。
+- Python 3.12、uv。
+- Docker Desktop（包含 Docker Compose）。
+
+首次启动：
+
+```bash
+make bootstrap
+make up
+```
+
+`make bootstrap` 会在 `.env` 不存在时从 `.env.example` 创建本地配置，并按锁文件安装依赖。`make up` 会构建并后台启动 PostgreSQL、API 和 Web；API 容器会自动执行 Alembic 迁移和幂等种子。
+
+启动后可访问：
+
+- Web：<http://localhost:5173>
+- API 文档：<http://localhost:8000/docs>
+- 存活探针：<http://localhost:8000/api/v1/health/live>
+- 就绪探针（检查 PostgreSQL）：<http://localhost:8000/api/v1/health/ready>
+
+常用命令：
+
+```bash
+make test          # 后端 pytest + 前端 Vitest
+make check         # 静态检查、前端构建、前后端测试和 Compose 配置校验
+make solver-poc    # 运行默认 12 波团本和自定义单队 4 人 CP-SAT PoC
+make migrate       # 本机对 DATABASE_URL 执行数据库迁移
+make seed          # 幂等写入内置 12 人团本及评分公式
+make logs          # 跟踪三个容器日志
+make down          # 停止容器，保留 PostgreSQL 数据卷
+```
+
+本地 `.env` 中的 `POSTGRES_PASSWORD` 和 `DATABASE_URL` 密码必须保持一致；用于公网环境前必须替换示例密码。数据库端口只绑定到 `127.0.0.1`。
+
+不使用 Docker 时，可以分别启动开发服务：
+
+```bash
+pnpm dev
+cd backend && uv run uvicorn app.main:app --reload
+```
+
 ## 开发进度
 
 - [x] 需求梳理
 - [x] 技术设计
 - [x] 副本扩展模型
-- [ ] 初始化 React、FastAPI 和 Docker Compose 工程
-- [ ] 建立 PostgreSQL Schema 和迁移
-- [ ] 完成 OR-Tools 核心算法 PoC
+- [x] 初始化 React、FastAPI 和 Docker Compose 工程
+- [x] 建立首批副本 PostgreSQL Schema、迁移和种子
+- [x] 完成 OR-Tools 阶段 0 算法 PoC
 - [ ] 开发副本及人员管理
 - [ ] 开发排表创建、校验和自动生成
 - [ ] 开发拖拽编辑器、版本和导出
@@ -102,21 +147,19 @@ MVP 采用模块化单体架构，不引入 Redis、消息队列或微服务。�
 → 公网部署
 ```
 
-## 计划中的目录结构
+## 当前目录结构
 
 ```text
-dnf/
+dnf-leader-tool/
 ├── frontend/              # React 应用
-├── backend/               # FastAPI、领域逻辑和求解器
+├── backend/               # FastAPI、领域逻辑、模型、迁移和求解器
 ├── docs/                  # 需求和技术文档
 ├── infra/                 # 容器及反向代理配置
-├── scripts/               # 备份、恢复和运维脚本
 ├── compose.yaml
 ├── .env.example
+├── Makefile
 └── README.md
 ```
-
-仓库根目录现有的 `main.py` 只是早期示例文件，将在工程初始化阶段由正式的 `backend/app/main.py` 替代。
 
 ## 数据与部署约定
 
@@ -125,4 +168,3 @@ dnf/
 - `pnpm-lock.yaml`、`uv.lock`、Alembic 迁移和 `.env.example` 应提交到仓库。
 - 已发布副本版本和排表版本保持不可变。
 - 公网部署前必须完成数据库备份与恢复演练。
-
