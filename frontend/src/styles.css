@@ -234,6 +234,23 @@ body {
   justify-content: space-between;
   width: 100%;
 }
+.copy-fields {
+  margin-top: 16px;
+}
+.copy-fields .ant-typography {
+  display: block;
+  margin-bottom: 4px;
+}
+.copy-preview {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+.copy-change {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 @media (max-width: 760px) {
   .app-header {
     padding: 0 16px;

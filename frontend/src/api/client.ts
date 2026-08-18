@@ -151,6 +151,20 @@ export interface ScheduleSyncPreview {
   }>;
   summary: { ADD: number; UPDATE: number; DESELECT: number };
 }
+export interface ScheduleCopyPreview {
+  revision: number;
+  sourceDungeonVersionId: string;
+  targetDungeonVersionId: string;
+  waveCount: number;
+  migrationRequired: boolean;
+  migrationFingerprint: string;
+  changes: Array<{
+    code: string;
+    description: string;
+    before: unknown;
+    after: unknown;
+  }>;
+}
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api/v1${path}`, {

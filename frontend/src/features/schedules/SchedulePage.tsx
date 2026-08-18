@@ -28,11 +28,13 @@ import { useEffect, useMemo, useState } from "react";
 import {
   api,
   type Dungeon,
+  type ScheduleCopyPreview,
   type ScheduleDetail,
   type ScheduleParticipant,
   type SchedulePreference,
   type ScheduleSummary,
   type ScheduleSyncPreview,
+  type ValidationIssue,
   type ValidationReport,
 } from "../../api/client";
 
@@ -48,6 +50,10 @@ const ISSUE_LABELS: Record<string, string> = {
   BUFFER_BASE_SHORTAGE: "奶数量不足基础组成",
   TREASURE_SHORTAGE: "秘宝 C 数量不足",
   PLAYER_WAVE_CAPACITY_INSUFFICIENT: "玩家可用波次不足",
+  FALLBACK_COMPOSITION_FEASIBLE: "可使用备用组成补足完整队伍",
+  FULL_COMPOSITION_INFEASIBLE: "当前角色类型无法组成全部完整队伍",
+  UNUSABLE_ROLE_SURPLUS: "部分角色超出合法组成可容纳数量",
+  STRENGTH_ORDER_CHECK_ON_GENERATION: "强度顺序将在生成时校验",
 };
 
 export function SchedulePage({ onError, onSuccess }: Props) {
@@ -62,6 +68,10 @@ export function SchedulePage({ onError, onSuccess }: Props) {
   const [createOpen, setCreateOpen] = useState(false);
   const [copyOpen, setCopyOpen] = useState(false);
   const [copyName, setCopyName] = useState("");
+  const [copyTargetVersionId, setCopyTargetVersionId] = useState("");
+  const [copyWaveCount, setCopyWaveCount] = useState(1);
+  const [copyPreview, setCopyPreview] = useState<ScheduleCopyPreview | null>(null);
+  const [copyPending, setCopyPending] = useState(false);
   const [waveCount, setWaveCount] = useState(1);
   const [createForm] = Form.useForm();
 
@@ -78,6 +88,24 @@ export function SchedulePage({ onError, onSuccess }: Props) {
       ),
     [dungeons],
   );
+
+  const copyVersionOptions = useMemo(() => {
+    if (!detail) return [];
+    const sourceDungeon = dungeons.find((dungeon) =>
+      dungeon.versions.some((version) => version.id === detail.dungeonVersionId),
+    );
+    return (sourceDungeon?.versions ?? [])
+      .filter(
+        (version) =>
+          version.status === "PUBLISHED" || version.id === detail.dungeonVersionId,
+      )
+      .map((version) => ({
+        label: `${sourceDungeon?.name ?? "副本"} · v${version.versionNo}${
+          version.id === detail.dungeonVersionId ? "（当前）" : ""
+        }`,
+        value: version.id,
+      }));
+  }, [detail, dungeons]);
 
   const loadList = async () => {
     try {
@@ -210,19 +238,50 @@ export function SchedulePage({ onError, onSuccess }: Props) {
     }
   };
 
+  const previewCopy = async () => {
+    if (!detail || !copyTargetVersionId) return;
+    setCopyPending(true);
+    try {
+      setCopyPreview(
+        await api<ScheduleCopyPreview>(`/schedules/${detail.id}/copy/preview`, {
+          method: "POST",
+          body: JSON.stringify({
+            baseRevision: detail.revision,
+            targetDungeonVersionId: copyTargetVersionId,
+            waveCount: copyWaveCount,
+          }),
+        }),
+      );
+    } catch (error) {
+      onError(error);
+    } finally {
+      setCopyPending(false);
+    }
+  };
+
   const copySchedule = async () => {
-    if (!detail) return;
+    if (!detail || !copyPreview) return;
+    setCopyPending(true);
     try {
       const copied = await api<ScheduleDetail>(`/schedules/${detail.id}/copy`, {
         method: "POST",
-        body: JSON.stringify({ baseRevision: detail.revision, name: copyName }),
+        body: JSON.stringify({
+          baseRevision: detail.revision,
+          name: copyName,
+          targetDungeonVersionId: copyTargetVersionId,
+          waveCount: copyWaveCount,
+          migrationFingerprint: copyPreview.migrationFingerprint,
+        }),
       });
       setCopyOpen(false);
+      setCopyPreview(null);
       await loadList();
       applyDetail(copied);
       onSuccess("排表已复制，角色次数和队伍位置已重置");
     } catch (error) {
       onError(error);
+    } finally {
+      setCopyPending(false);
     }
   };
 
@@ -230,7 +289,10 @@ export function SchedulePage({ onError, onSuccess }: Props) {
     if (!detail) return;
     try {
       setValidation(
-        await api<ValidationReport>(`/schedules/${detail.id}/validate`, { method: "POST" }),
+        await api<ValidationReport>(`/schedules/${detail.id}/validate`, {
+          method: "POST",
+          body: JSON.stringify({ baseRevision: detail.revision }),
+        }),
       );
       await loadList();
     } catch (error) {
@@ -358,7 +420,15 @@ export function SchedulePage({ onError, onSuccess }: Props) {
   const participantsById = new Map(
     detail.participants.map((participant) => [participant.id, participant]),
   );
-  const selectedParticipants = detail.participants.filter((participant) => participant.isSelected);
+  const selectedIdSet = new Set(selectedIds);
+  const selectedParticipants = detail.participants.filter((participant) =>
+    selectedIdSet.has(participant.id),
+  );
+  const participantSelectionDirty = detail.participants.some(
+    (participant) => participant.isSelected !== selectedIdSet.has(participant.id),
+  );
+  const waveCountDirty = waveCount !== detail.waveCount;
+  const hasUnsavedChanges = participantSelectionDirty || waveCountDirty;
   const damageCount = selectedParticipants.filter(
     (participant) => participant.roleTypeSnapshot === "DAMAGE",
   ).length;
@@ -378,24 +448,47 @@ export function SchedulePage({ onError, onSuccess }: Props) {
         <Space wrap>
           <Button
             icon={<CopyOutlined />}
+            disabled={hasUnsavedChanges}
             onClick={() => {
               setCopyName(`${detail.name} - 副本`);
+              setCopyTargetVersionId(detail.dungeonVersionId);
+              setCopyWaveCount(detail.waveCount);
+              setCopyPreview(null);
               setCopyOpen(true);
             }}
           >
             复制排表
           </Button>
-          <Button icon={<SettingOutlined />} onClick={openPreferences}>
+          <Button icon={<SettingOutlined />} disabled={hasUnsavedChanges} onClick={openPreferences}>
             玩家偏好
           </Button>
-          <Button icon={<ReloadOutlined />} onClick={() => void previewSync()}>
+          <Button
+            icon={<ReloadOutlined />}
+            disabled={hasUnsavedChanges}
+            onClick={() => void previewSync()}
+          >
             同步角色
           </Button>
-          <Button type="primary" icon={<CheckCircleOutlined />} onClick={() => void validate()}>
+          <Button
+            type="primary"
+            icon={<CheckCircleOutlined />}
+            disabled={hasUnsavedChanges}
+            onClick={() => void validate()}
+          >
             运行预检查
           </Button>
         </Space>
       </div>
+
+      {hasUnsavedChanges ? (
+        <Alert
+          className="schedule-panel"
+          type="warning"
+          showIcon
+          title="当前有尚未保存的排表设置"
+          description="请先保存参团角色选择或更新波数，再进行复制、角色同步和预检查。"
+        />
+      ) : null}
 
       <Row gutter={[16, 16]} className="schedule-summary">
         <Col xs={12} md={6}>
@@ -432,7 +525,7 @@ export function SchedulePage({ onError, onSuccess }: Props) {
                   className="full-width"
                   type={issue.severity === "ERROR" ? "error" : issue.severity === "WARNING" ? "warning" : "info"}
                   title={ISSUE_LABELS[issue.code] ?? issue.code}
-                  description={JSON.stringify(issue.message_params)}
+                  description={describeIssue(issue)}
                   showIcon
                 />
               ))}
@@ -500,10 +593,14 @@ export function SchedulePage({ onError, onSuccess }: Props) {
       <Modal
         title="复制排表"
         open={copyOpen}
-        onCancel={() => setCopyOpen(false)}
-        onOk={() => void copySchedule()}
-        okText="创建副本"
-        okButtonProps={{ disabled: !copyName.trim() }}
+        onCancel={() => {
+          setCopyOpen(false);
+          setCopyPreview(null);
+        }}
+        onOk={() => void (copyPreview ? copySchedule() : previewCopy())}
+        okText={copyPreview ? "确认创建" : "预览迁移"}
+        confirmLoading={copyPending}
+        okButtonProps={{ disabled: !copyName.trim() || !copyTargetVersionId }}
       >
         <Typography.Paragraph type="secondary">
           将复制副本版本、波数、参团选择和玩家偏好；角色使用最新档案数据，队伍位置与锁定状态会清空。
@@ -511,9 +608,58 @@ export function SchedulePage({ onError, onSuccess }: Props) {
         <Input
           value={copyName}
           maxLength={160}
-          onChange={(event) => setCopyName(event.target.value)}
+          onChange={(event) => {
+            setCopyName(event.target.value);
+            setCopyPreview(null);
+          }}
           placeholder="新排表名称"
         />
+        <Row gutter={12} className="copy-fields">
+          <Col span={16}>
+            <Typography.Text type="secondary">目标副本版本</Typography.Text>
+            <Select
+              className="full-width"
+              value={copyTargetVersionId}
+              options={copyVersionOptions}
+              onChange={(value) => {
+                setCopyTargetVersionId(value);
+                setCopyPreview(null);
+              }}
+            />
+          </Col>
+          <Col span={8}>
+            <Typography.Text type="secondary">波数</Typography.Text>
+            <InputNumber
+              min={1}
+              max={50}
+              className="full-width"
+              value={copyWaveCount}
+              onChange={(value) => {
+                setCopyWaveCount(value ?? 1);
+                setCopyPreview(null);
+              }}
+            />
+          </Col>
+        </Row>
+        {copyPreview ? (
+          <div className="copy-preview">
+            <Alert
+              type={copyPreview.changes.length ? "warning" : "success"}
+              showIcon
+              title={
+                copyPreview.changes.length
+                  ? `确认以下 ${copyPreview.changes.length} 项变化`
+                  : "副本结构与当前排表一致"
+              }
+            />
+            {copyPreview.changes.map((change) => (
+              <div className="copy-change" key={change.code}>
+                <Tag>{change.code}</Tag>
+                <Typography.Text>{change.description}</Typography.Text>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </Modal>
 
       <Modal
@@ -670,6 +816,41 @@ function ParticipantLabel({
       </Tag>
       <span>{participant.playerNameSnapshot} · {participant.characterNameSnapshot}</span>
       {participant.isTreasureSnapshot ? <Tag color="gold">秘宝</Tag> : null}
+      {participant.unassignedReason ? (
+        <Tag color="warning">
+          {participant.unassignedReason.message === "角色或玩家已停用"
+            ? "档案已停用，待处理"
+            : "待处理"}
+        </Tag>
+      ) : null}
     </Space>
   );
+}
+
+function describeIssue(issue: ValidationIssue): string {
+  const params = issue.message_params;
+  switch (issue.code) {
+    case "CAPACITY_EXCEEDED":
+      return `容量 ${params.capacity}，当前 ${params.current}，请减少角色或增加波数。`;
+    case "PARTICIPANT_SHORTAGE":
+      return `容量 ${params.capacity}，当前 ${params.current}，还缺 ${params.shortage} 个角色。`;
+    case "DAMAGE_IDEAL_SHORTAGE":
+    case "BUFFER_BASE_SHORTAGE":
+    case "TREASURE_SHORTAGE":
+      return `需要 ${params.required}，当前 ${params.current}，缺少 ${params.shortage}。`;
+    case "PLAYER_WAVE_CAPACITY_INSUFFICIENT":
+      return `${params.playerName} 选择了 ${params.selected} 个角色，但最多只能安排 ${params.available} 波。`;
+    case "FALLBACK_COMPOSITION_FEASIBLE":
+      return `可用 ${params.damageUsed} 个 C 和 ${params.buffersUsed} 个奶组成全部完整队伍。`;
+    case "FULL_COMPOSITION_INFEASIBLE":
+      return `当前有 ${params.damage} 个 C、${params.buffers} 个奶；最接近的完整组成需要 ${params.requiredDamage} 个 C 和 ${params.requiredBuffers} 个奶，仍缺 ${params.damageShortage} 个 C、${params.bufferShortage} 个奶。`;
+    case "UNUSABLE_ROLE_SURPLUS":
+      return `${params.roleType === "DAMAGE" ? "C" : "奶"} 超出合法完整组成上限 ${params.surplus} 个。`;
+    case "STRENGTH_ORDER_CHECK_ON_GENERATION":
+      return String(params.reason);
+    default:
+      return Object.entries(params)
+        .map(([key, value]) => `${key}: ${String(value)}`)
+        .join("；");
+  }
 }

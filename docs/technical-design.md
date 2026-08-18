@@ -900,7 +900,7 @@ POST   /schedules/{scheduleId}/sync-characters/preview
 POST   /schedules/{scheduleId}/sync-characters/commit
 ```
 
-创建排表请求必须包含 `dungeonVersionId`；未传波数时使用副本版本的 `defaultWaveCount`。复制请求可以选择保留原版本或迁移到同副本的另一个 PUBLISHED 版本，迁移时先返回结构差异预览。
+创建排表请求必须包含 `dungeonVersionId`；未传波数时使用副本版本的 `defaultWaveCount`。复制请求可以选择保留原版本或迁移到同副本的另一个 PUBLISHED 版本，迁移时先返回结构差异预览。复制确认必须回传预览指纹和 `baseRevision`；服务端锁定源排表并重新计算指纹，避免使用过期结构创建副本。预检查同样携带 `baseRevision`，仅在 revision 未变化时保存该版本的摘要。
 
 ### 9.6 编辑命令
 
