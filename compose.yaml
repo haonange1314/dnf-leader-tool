@@ -1,0 +1,62 @@
+name: dnf-leader-tool
+
+services:
+  db:
+    image: postgres:17.6-alpine3.22
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-dnf_leader}
+      POSTGRES_USER: ${POSTGRES_USER:-dnf}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dnf-local-only}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: infra/api/Dockerfile
+    environment:
+      DATABASE_URL: ${CONTAINER_DATABASE_URL:-postgresql+psycopg://dnf:dnf-local-only@db:5432/dnf_leader}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      SOLVER_TIME_LIMIT_SECONDS: ${SOLVER_TIME_LIMIT_SECONDS:-10}
+      SOLVER_RANDOM_SEED: ${SOLVER_RANDOM_SEED:-42}
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-168}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      BOOTSTRAP_OWNER_USERNAME: ${BOOTSTRAP_OWNER_USERNAME:-admin}
+      BOOTSTRAP_OWNER_PASSWORD: ${BOOTSTRAP_OWNER_PASSWORD:-change-me-now}
+    command: ["sh", "-c", ".venv/bin/alembic upgrade head && .venv/bin/python -m app.cli seed && .venv/bin/python -m app.cli init-owner && .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health/ready')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build:
+      context: .
+      dockerfile: infra/web/Dockerfile
+    ports:
+      - "5173:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:

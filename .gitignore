@@ -11,6 +11,7 @@ __pycache__/
 *$py.class
 .Python
 .venv/
+.uv-cache/
 venv/
 ENV/
 __pypackages__/

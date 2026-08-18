@@ -1,0 +1,11 @@
+{
+  "name": "dnf-leader-tool",
+  "private": true,
+  "packageManager": "pnpm@11.19.0",
+  "scripts": {
+    "dev": "pnpm --filter @dnf-leader/frontend dev",
+    "build": "pnpm --filter @dnf-leader/frontend build",
+    "test": "pnpm --filter @dnf-leader/frontend test",
+    "typecheck": "pnpm --filter @dnf-leader/frontend typecheck"
+  }
+}
