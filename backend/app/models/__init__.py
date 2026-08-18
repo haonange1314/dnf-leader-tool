@@ -3,12 +3,14 @@ from app.models.identity import User, UserSession
 from app.models.imports import ImportBatch, ImportRow
 from app.models.personnel import Character, Player
 from app.models.schedule import (
+    GenerationRun,
     Schedule,
     ScheduleParticipant,
     SchedulePlayerPreference,
     Team,
     TeamSlot,
     Wave,
+    WaveSpecialAssignment,
 )
 
 __all__ = [
@@ -17,6 +19,7 @@ __all__ = [
     "DungeonTeamTemplate",
     "DungeonVersion",
     "FormulaVersion",
+    "GenerationRun",
     "ImportBatch",
     "ImportRow",
     "Player",
@@ -28,4 +31,5 @@ __all__ = [
     "User",
     "UserSession",
     "Wave",
+    "WaveSpecialAssignment",
 ]

@@ -134,9 +134,7 @@ assert all(
     for participant in schedule["participants"]
 )
 assert len(schedule["participants"]) == 2
-report = request(
-    f"/schedules/{schedule['id']}/validate", "POST", {"baseRevision": 1}
-)
+report = request(f"/schedules/{schedule['id']}/validate", "POST", {"baseRevision": 1})
 assert isinstance(report, dict) and report["revision"] == 1
 schedule = request(
     f"/schedules/{schedule['id']}",
@@ -210,13 +208,9 @@ schedule = request(
 )
 assert isinstance(schedule, dict) and schedule["revision"] == 7
 assert len(schedule["participants"]) == 3
-workflow_report = request(
-    f"/schedules/{schedule['id']}/validate", "POST", {"baseRevision": 7}
-)
+workflow_report = request(f"/schedules/{schedule['id']}/validate", "POST", {"baseRevision": 7})
 assert isinstance(workflow_report, dict)
-assert "PLAYER_WAVE_CAPACITY_INSUFFICIENT" in {
-    issue["code"] for issue in workflow_report["issues"]
-}
+assert "PLAYER_WAVE_CAPACITY_INSUFFICIENT" in {issue["code"] for issue in workflow_report["issues"]}
 stale_validation = request_error(
     f"/schedules/{schedule['id']}/validate",
     "POST",
@@ -256,6 +250,52 @@ assert all(
     for team in wave["teams"]
     for slot in team["slots"]
 )
+generation = request(
+    f"/schedules/{copied_schedule['id']}/generate",
+    "POST",
+    {
+        "baseRevision": 1,
+        "preserveLocks": True,
+        "randomSeed": 42,
+        "timeLimitSeconds": 2,
+    },
+)
+assert isinstance(generation, dict)
+assert generation["run"]["status"] == "PARTIAL"
+assert generation["run"]["resultRevision"] == 2
+generated_schedule = generation["schedule"]
+assert generated_schedule["revision"] == 2
+assert (
+    sum(
+        slot["participantId"] is not None
+        for wave in generated_schedule["waves"]
+        for team in wave["teams"]
+        for slot in team["slots"]
+    )
+    == 1
+)
+assert (
+    sum(
+        participant["unassignedReason"] is not None
+        for participant in generated_schedule["participants"]
+    )
+    == 2
+)
+regeneration = request(
+    f"/schedules/{copied_schedule['id']}/generate",
+    "POST",
+    {
+        "baseRevision": 2,
+        "preserveLocks": True,
+        "randomSeed": 43,
+        "timeLimitSeconds": 2,
+    },
+)
+assert isinstance(regeneration, dict)
+assert regeneration["schedule"]["revision"] == 3
+runs = request(f"/schedules/{copied_schedule['id']}/generation-runs")
+assert isinstance(runs, dict) and runs["total"] == 2
+assert runs["items"][0]["id"] == regeneration["run"]["id"]
 revision_error = request_error(
     f"/schedules/{schedule['id']}",
     "PATCH",
@@ -309,9 +349,7 @@ migration_preview = request(
     },
 )
 assert isinstance(migration_preview, dict) and migration_preview["migrationRequired"] is True
-assert "COMPOSITION_RULES_CHANGED" in {
-    change["code"] for change in migration_preview["changes"]
-}
+assert "COMPOSITION_RULES_CHANGED" in {change["code"] for change in migration_preview["changes"]}
 preview_required = request_error(
     f"/schedules/{schedule['id']}/copy",
     "POST",
@@ -385,13 +423,9 @@ oversized_payload = {
     "strengthOrderRules": {"schemaVersion": 1, "orders": []},
     "optimizationRules": {"schemaVersion": 1, "balanceAcrossWaves": []},
 }
-oversized_draft = request(
-    f"/dungeons/{dungeon['id']}/versions", "POST", oversized_payload
-)
+oversized_draft = request(f"/dungeons/{dungeon['id']}/versions", "POST", oversized_payload)
 assert isinstance(oversized_draft, dict)
-oversized_version = request(
-    f"/dungeon-versions/{oversized_draft['id']}/publish", "POST"
-)
+oversized_version = request(f"/dungeon-versions/{oversized_draft['id']}/publish", "POST")
 assert isinstance(oversized_version, dict)
 limit_error = request_error(
     "/schedules",
@@ -409,4 +443,4 @@ assert isinstance(player, dict) and player["displayName"] == "全栈验收玩家
 players = request("/players?search=%E5%85%A8%E6%A0%88")
 assert isinstance(players, dict) and players["total"] == 1
 request("/auth/logout", "POST")
-print("stage 2 schedule workflow smoke passed")
+print("stage 3 automatic scheduling workflow smoke passed")

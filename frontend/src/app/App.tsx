@@ -96,7 +96,7 @@ export function App() {
                   DNF 团长排表工具
                 </Typography.Text>
                 <Typography.Text className="app-subtitle">
-                  阶段 1 · 管理控制台
+                  阶段 3 · 智能排表
                 </Typography.Text>
               </div>
             </div>

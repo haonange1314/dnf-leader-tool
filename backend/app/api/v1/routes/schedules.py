@@ -54,6 +54,7 @@ def _load(db: DbSession, schedule_id: uuid.UUID, *, for_update: bool = False) ->
         .options(
             selectinload(Schedule.participants),
             selectinload(Schedule.preferences),
+            selectinload(Schedule.waves).selectinload(Wave.special_assignments),
             selectinload(Schedule.waves).selectinload(Wave.teams).selectinload(Team.slots),
         )
     )

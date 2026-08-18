@@ -44,6 +44,7 @@ const detail = {
       isLocked: false,
       damageTotal: "0",
       bufferTotal: "0",
+      specialAssignments: [],
       teams: [
         {
           id: "team-1",
@@ -79,6 +80,7 @@ describe("SchedulePage", () => {
       if (path === "/schedules") return { items: [summary], total: 1 };
       if (path === "/dungeons") return { items: [], total: 0 };
       if (path === "/schedules/schedule-1") return detail;
+      if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };
       throw new Error(`unexpected API path: ${path}`);
     });
 
@@ -89,7 +91,7 @@ describe("SchedulePage", () => {
     fireEvent.click(await screen.findByText("周六团"));
 
     expect(await screen.findByText("第 1 波")).toBeInTheDocument();
-    expect(screen.getByText("红队")).toBeInTheDocument();
+    expect(screen.getByText(/红队/)).toBeInTheDocument();
     expect(screen.getByText("位置 1 · 待排")).toBeInTheDocument();
   });
 
@@ -98,6 +100,7 @@ describe("SchedulePage", () => {
       if (path === "/schedules") return { items: [summary], total: 1 };
       if (path === "/dungeons") return { items: [], total: 0 };
       if (path === "/schedules/schedule-1") return detail;
+      if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };
       throw new Error(`unexpected API path: ${path}`);
     });
 
@@ -139,6 +142,7 @@ describe("SchedulePage", () => {
         };
       }
       if (path === "/schedules/schedule-1") return detail;
+      if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };
       if (path === "/schedules/schedule-1/copy/preview") {
         return {
           revision: 1,
@@ -175,5 +179,78 @@ describe("SchedulePage", () => {
       targetDungeonVersionId: "version-1",
       waveCount: 1,
     });
+  });
+
+  it("generates a schedule and displays the persisted solver summary", async () => {
+    vi.mocked(api).mockImplementation(async (path: string) => {
+      if (path === "/schedules") return { items: [summary], total: 1 };
+      if (path === "/dungeons") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1") return detail;
+      if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1/generate") {
+        return {
+          run: {
+            id: "run-1",
+            scheduleId: "schedule-1",
+            inputRevision: 1,
+            resultRevision: 2,
+            status: "SUCCEEDED",
+            inputHash: "a".repeat(64),
+            solverVersion: "cp-sat-v1",
+            formulaVersionId: "formula-1",
+            randomSeed: 42,
+            timeLimitSeconds: 10,
+            durationMs: 25,
+            objectiveSummary: {
+              assignedCount: 1,
+              participantCount: 1,
+              completeWaveCount: 1,
+              completeTeamCount: 1,
+              preferredCompositionCount: 1,
+              specialRuleSatisfiedCount: 1,
+              damageSpread: 0,
+              bufferSpread: 0,
+              strengthOrderViolationCount: 0,
+            },
+            diagnostics: { solverStatus: "OPTIMAL", unassigned: [], issues: [] },
+            createdAt: "2026-08-18T00:00:00Z",
+            finishedAt: "2026-08-18T00:00:01Z",
+          },
+          schedule: {
+            ...detail,
+            revision: 2,
+            waves: detail.waves.map((wave) => ({
+              ...wave,
+              specialAssignments: [
+                {
+                  id: "special-1",
+                  ruleCode: "TREASURE_DAMAGE_CORE",
+                  participantId: "participant-1",
+                  targetTeamKeySnapshot: "RED",
+                },
+              ],
+              teams: wave.teams.map((team) => ({
+                ...team,
+                compositionCode: "3D1B",
+                slots: team.slots.map((slot, index) => ({
+                  ...slot,
+                  participantId: index === 0 ? "participant-1" : null,
+                })),
+              })),
+            })),
+          },
+        };
+      }
+      throw new Error(`unexpected API path: ${path}`);
+    });
+
+    render(<SchedulePage onError={vi.fn()} onSuccess={vi.fn()} />);
+    fireEvent.click(await screen.findByText("周六团"));
+    fireEvent.click(await screen.findByRole("button", { name: /自动排表/ }));
+    fireEvent.click(screen.getByRole("button", { name: "开始生成" }));
+
+    expect(await screen.findByText("最近一次自动排表")).toBeInTheDocument();
+    expect(screen.getByText("已安排 1/1")).toBeInTheDocument();
+    expect(screen.getByText("本波核心")).toBeInTheDocument();
   });
 });

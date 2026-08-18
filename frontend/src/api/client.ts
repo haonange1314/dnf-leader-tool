@@ -115,6 +115,12 @@ export interface ScheduleWave {
   damageTotal: string;
   bufferTotal: string;
   teams: ScheduleTeam[];
+  specialAssignments: Array<{
+    id: string;
+    ruleCode: string;
+    participantId: string;
+    targetTeamKeySnapshot: string;
+  }>;
 }
 export interface SchedulePreference {
   playerId: string;
@@ -164,6 +170,49 @@ export interface ScheduleCopyPreview {
     before: unknown;
     after: unknown;
   }>;
+}
+export interface GenerationRun {
+  id: string;
+  scheduleId: string;
+  inputRevision: number;
+  resultRevision: number | null;
+  status: "RUNNING" | "SUCCEEDED" | "PARTIAL" | "FAILED" | "STALE";
+  inputHash: string;
+  solverVersion: string;
+  formulaVersionId: string;
+  randomSeed: number;
+  timeLimitSeconds: number;
+  durationMs: number | null;
+  objectiveSummary: {
+    assignedCount: number;
+    participantCount: number;
+    completeWaveCount: number;
+    completeTeamCount: number;
+    preferredCompositionCount: number;
+    specialRuleSatisfiedCount: number;
+    damageSpread: number;
+    bufferSpread: number;
+    strengthOrderViolationCount: number;
+  } | null;
+  diagnostics: {
+    solverStatus?: string;
+    unassigned?: Array<{
+      participantId: string;
+      code: string;
+      messageParams: Record<string, unknown>;
+    }>;
+    issues?: Array<{
+      severity: string;
+      code: string;
+      messageParams: Record<string, unknown>;
+    }>;
+  } | null;
+  createdAt: string;
+  finishedAt: string | null;
+}
+export interface GenerationResponse {
+  run: GenerationRun;
+  schedule: ScheduleDetail;
 }
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {

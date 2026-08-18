@@ -41,7 +41,7 @@ database_state="$(
         "'
 )"
 
-if [ "$database_state" != "20260818_0004|1|1|3|12" ]; then
+if [ "$database_state" != "20260818_0005|1|1|3|12" ]; then
     echo "unexpected database state: $database_state" >&2
     exit 1
 fi
@@ -64,4 +64,4 @@ if compose exec -T db psql -v ON_ERROR_STOP=1 -U dnf -d dnf_leader \
     exit 1
 fi
 
-echo "isolated stack check passed: migration, seed, auth, management APIs, health and proxy"
+echo "isolated stack check passed: migration, seed, auth, management and generation APIs, health and proxy"
