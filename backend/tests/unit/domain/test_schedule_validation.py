@@ -6,7 +6,13 @@ from pydantic import ValidationError
 from app.domain.dungeon import builtin_raid_12_definition
 from app.domain.schedule import composition_role_requirements
 from app.schemas.dungeon import CompositionRule, CompositionRules, RoleType
-from app.schemas.schedule import ScheduleCreate
+from app.schemas.schedule import (
+    PlayerPreferenceInput,
+    ScheduleCopy,
+    ScheduleCreate,
+    ScheduleParticipantsUpdate,
+    ScheduleUpdate,
+)
 
 
 def test_builtin_raid_role_requirements_follow_composition_priorities() -> None:
@@ -64,3 +70,33 @@ def test_schedule_name_is_trimmed_before_persistence() -> None:
     payload = ScheduleCreate(name="  周六团  ", dungeon_version_id=uuid.uuid4())
 
     assert payload.name == "周六团"
+
+
+def test_schedule_update_requires_a_business_change() -> None:
+    with pytest.raises(ValidationError, match="至少修改"):
+        ScheduleUpdate(base_revision=1)
+
+
+def test_schedule_copy_name_is_trimmed() -> None:
+    payload = ScheduleCopy(base_revision=1, name="  周六团 - 副本  ")
+
+    assert payload.name == "周六团 - 副本"
+
+
+def test_schedule_participant_selection_rejects_duplicate_ids() -> None:
+    participant_id = uuid.uuid4()
+
+    with pytest.raises(ValidationError, match="不能重复"):
+        ScheduleParticipantsUpdate(
+            base_revision=1,
+            selected_participant_ids=[participant_id, participant_id],
+        )
+
+
+def test_player_preference_sorts_allowed_waves() -> None:
+    preference = PlayerPreferenceInput(
+        player_id=uuid.uuid4(),
+        allowed_waves=[3, 1, 2],
+    )
+
+    assert preference.allowed_waves == [1, 2, 3]

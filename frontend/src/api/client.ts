@@ -63,6 +63,94 @@ export interface ImportBatch {
   total_rows: number;
   summary: { create: number; update: number; ignore: number; error: number };
 }
+export interface ScheduleSummary {
+  id: string;
+  name: string;
+  dungeonVersionId: string;
+  waveCount: number;
+  status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
+  revision: number;
+  validationSummary: Record<string, number> | null;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface ScheduleParticipant {
+  id: string;
+  characterId: string;
+  playerIdSnapshot: string;
+  playerNameSnapshot: string;
+  characterNameSnapshot: string;
+  professionSnapshot: string;
+  roleTypeSnapshot: "DAMAGE" | "BUFFER";
+  damageScoreSnapshot: string | null;
+  bufferScoreSnapshot: string | null;
+  isTreasureSnapshot: boolean;
+  isSelected: boolean;
+  isLocked: boolean;
+  unassignedReason: Record<string, unknown> | null;
+}
+export interface ScheduleSlot {
+  id: string;
+  slotNo: number;
+  participantId: string | null;
+  isLocked: boolean;
+}
+export interface ScheduleTeam {
+  id: string;
+  teamKey: string;
+  displayNameSnapshot: string;
+  displayColorSnapshot: string;
+  displayOrderSnapshot: number;
+  memberCountSnapshot: number;
+  strengthRankSnapshot: number | null;
+  damageTotal: string;
+  bufferTotal: string;
+  compositionCode: string;
+  slots: ScheduleSlot[];
+}
+export interface ScheduleWave {
+  id: string;
+  waveNo: number;
+  isLocked: boolean;
+  damageTotal: string;
+  bufferTotal: string;
+  teams: ScheduleTeam[];
+}
+export interface SchedulePreference {
+  playerId: string;
+  allowedWaves: number[] | null;
+  maxWaveCount: number | null;
+  preferEarly: boolean;
+  preferContiguous: boolean;
+}
+export interface ScheduleDetail extends ScheduleSummary {
+  note: string | null;
+  participants: ScheduleParticipant[];
+  preferences: SchedulePreference[];
+  waves: ScheduleWave[];
+}
+export interface ValidationIssue {
+  severity: "ERROR" | "WARNING" | "INFO";
+  code: string;
+  message_params: Record<string, unknown>;
+}
+export interface ValidationReport {
+  revision: number;
+  issues: ValidationIssue[];
+  summary: { error: number; warning: number; info: number };
+}
+export interface ScheduleSyncPreview {
+  revision: number;
+  sourceFingerprint: string;
+  changes: Array<{
+    action: "ADD" | "UPDATE" | "DESELECT";
+    characterId: string;
+    playerName: string;
+    characterName: string;
+    changedFields: string[];
+  }>;
+  summary: { ADD: number; UPDATE: number; DESELECT: number };
+}
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api/v1${path}`, {

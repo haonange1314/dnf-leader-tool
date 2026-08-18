@@ -154,6 +154,86 @@ body {
   background: #faf9f6;
   border-color: #ece8df;
 }
+.schedule-card-title {
+  align-items: baseline;
+  justify-content: space-between;
+  width: 100%;
+}
+.schedule-card-title h4 {
+  margin: 0;
+}
+.schedule-back {
+  height: auto;
+  margin: 0 0 4px -15px;
+  padding-block: 0;
+}
+.schedule-summary {
+  margin-bottom: 20px;
+}
+.schedule-summary .ant-card-body {
+  min-height: 86px;
+}
+.schedule-panel {
+  margin-bottom: 18px;
+  border-color: #e2ded5;
+}
+.validation-summary {
+  margin-bottom: 8px;
+}
+.issue-list,
+.sync-change-list {
+  display: grid;
+  gap: 10px;
+}
+.participant-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+  width: 100%;
+}
+.participant-option {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid #ece8df;
+  border-radius: 10px;
+  background: #faf9f6;
+}
+.wave-list {
+  display: grid;
+  gap: 4px;
+}
+.team-card {
+  height: 100%;
+  border-top-width: 4px;
+}
+.team-slot {
+  display: flex;
+  align-items: center;
+  min-height: 42px;
+  padding-inline: 4px;
+  border-bottom: 1px solid #f0ede7;
+}
+.team-slot:last-child {
+  border-bottom: 0;
+}
+.preference-list {
+  display: grid;
+  gap: 10px;
+  max-height: 58vh;
+  overflow: auto;
+}
+.preference-fields {
+  align-items: end;
+  margin-top: 10px;
+}
+.preference-fields .ant-typography {
+  display: block;
+  margin-bottom: 4px;
+}
+.preference-availability-heading {
+  justify-content: space-between;
+  width: 100%;
+}
 @media (max-width: 760px) {
   .app-header {
     padding: 0 16px;

@@ -1,7 +1,8 @@
 import uuid
+from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
 from app.domain.schedule import MAX_WAVE_COUNT
@@ -25,6 +26,122 @@ class ScheduleCreate(BaseModel):
         return normalized
 
 
+class ScheduleUpdate(BaseModel):
+    model_config = CFG
+
+    base_revision: int = Field(gt=0)
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+    note: str | None = Field(default=None, max_length=2000)
+    wave_count: int | None = Field(default=None, gt=0, le=MAX_WAVE_COUNT)
+    confirm_wave_reduction: bool = False
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("排表名称不能为空")
+        return normalized
+
+    @model_validator(mode="after")
+    def require_change(self) -> "ScheduleUpdate":
+        if not ({"name", "note", "wave_count"} & self.model_fields_set):
+            raise ValueError("至少修改名称、备注或波数之一")
+        return self
+
+
+class ScheduleCopy(BaseModel):
+    model_config = CFG
+
+    base_revision: int = Field(gt=0)
+    name: str = Field(min_length=1, max_length=160)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("排表名称不能为空")
+        return normalized
+
+
+class ScheduleParticipantsUpdate(BaseModel):
+    model_config = CFG
+
+    base_revision: int = Field(gt=0)
+    selected_participant_ids: list[uuid.UUID] = Field(max_length=5000)
+
+    @field_validator("selected_participant_ids")
+    @classmethod
+    def validate_unique_ids(cls, value: list[uuid.UUID]) -> list[uuid.UUID]:
+        if len(value) != len(set(value)):
+            raise ValueError("参团角色 ID 不能重复")
+        return value
+
+
+class PlayerPreferenceInput(BaseModel):
+    model_config = CFG
+
+    player_id: uuid.UUID
+    allowed_waves: list[int] | None = None
+    max_wave_count: int | None = Field(default=None, gt=0, le=MAX_WAVE_COUNT)
+    prefer_early: bool = False
+    prefer_contiguous: bool = False
+
+    @field_validator("allowed_waves")
+    @classmethod
+    def normalize_allowed_waves(cls, value: list[int] | None) -> list[int] | None:
+        if value is None:
+            return None
+        if any(wave_no <= 0 for wave_no in value):
+            raise ValueError("可用波次必须大于 0")
+        if len(value) != len(set(value)):
+            raise ValueError("可用波次不能重复")
+        return sorted(value)
+
+
+class SchedulePreferencesUpdate(BaseModel):
+    model_config = CFG
+
+    base_revision: int = Field(gt=0)
+    preferences: list[PlayerPreferenceInput] = Field(max_length=5000)
+
+    @model_validator(mode="after")
+    def validate_unique_players(self) -> "SchedulePreferencesUpdate":
+        player_ids = [preference.player_id for preference in self.preferences]
+        if len(player_ids) != len(set(player_ids)):
+            raise ValueError("玩家偏好不能重复")
+        return self
+
+
+class ScheduleSyncChange(BaseModel):
+    model_config = CFG
+
+    action: str
+    character_id: uuid.UUID
+    player_name: str
+    character_name: str
+    changed_fields: list[str]
+
+
+class ScheduleSyncPreview(BaseModel):
+    model_config = CFG
+
+    revision: int
+    source_fingerprint: str
+    changes: list[ScheduleSyncChange]
+    summary: dict[str, int]
+
+
+class ScheduleSyncCommit(BaseModel):
+    model_config = CFG
+
+    base_revision: int = Field(gt=0)
+    source_fingerprint: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]+$")
+
+
 class ScheduleSummary(BaseModel):
     model_config = CFG
     id: uuid.UUID
@@ -34,6 +151,8 @@ class ScheduleSummary(BaseModel):
     status: str
     revision: int
     validation_summary: dict[str, Any] | None
+    created_at: datetime
+    updated_at: datetime
 
 
 class SlotView(BaseModel):
@@ -50,7 +169,12 @@ class TeamView(BaseModel):
     team_key: str
     display_name_snapshot: str
     display_color_snapshot: str
+    display_order_snapshot: int
     member_count_snapshot: int
+    strength_rank_snapshot: int | None
+    damage_total: Any
+    buffer_total: Any
+    composition_code: str
     slots: list[SlotView]
 
 
@@ -59,6 +183,8 @@ class WaveView(BaseModel):
     id: uuid.UUID
     wave_no: int
     is_locked: bool
+    damage_total: Any
+    buffer_total: Any
     teams: list[TeamView]
 
 
@@ -75,10 +201,24 @@ class ParticipantView(BaseModel):
     buffer_score_snapshot: Any | None
     is_treasure_snapshot: bool
     is_selected: bool
+    is_locked: bool
+    unassigned_reason: dict[str, Any] | None
+
+
+class PlayerPreferenceView(BaseModel):
+    model_config = CFG
+
+    player_id: uuid.UUID
+    allowed_waves: list[int] | None
+    max_wave_count: int | None
+    prefer_early: bool
+    prefer_contiguous: bool
 
 
 class ScheduleDetail(ScheduleSummary):
+    note: str | None
     participants: list[ParticipantView]
+    preferences: list[PlayerPreferenceView]
     waves: list[WaveView]
 
 
