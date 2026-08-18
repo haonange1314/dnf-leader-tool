@@ -1,0 +1,1760 @@
+# DNF 团长排表工具技术设计文档
+
+> 文档版本：v0.2  
+> 状态：技术评审稿  
+> 依据文档：[DNF 团长排表工具设计文档](./design.md) v0.2  
+> 当前范围：MVP 副本管理和 12 人团本排表
+
+## 1. 文档目标
+
+本文把已确认的产品需求转化为可实施的技术方案，定义：
+
+- 系统架构和模块边界。
+- 前后端工程结构。
+- PostgreSQL 数据模型、约束和索引。
+- HTTP API 和并发控制协议。
+- OR-Tools 智能排表模型。
+- Excel、长图、版本和分享实现。
+- 测试、部署、备份和安全方案。
+
+本文不重复解释业务背景；业务规则以需求文档为准。出现冲突时，先修订需求文档，再同步修改本文。
+
+## 2. 设计原则
+
+1. **模块化单体优先**：MVP 使用一个 FastAPI 后端进程，不拆微服务。
+2. **排表聚合强一致**：一次移动、交换、生成、复制或发布必须在数据库事务中完整成功或完整失败。
+3. **服务端是规则真源**：前端可以即时提示，但最终校验由后端完成。
+4. **历史不可变**：发布版本保存完整快照，不受人员池后续修改影响。
+5. **求解器可替换**：OR-Tools 只依赖稳定的输入/输出模型，不直接操作数据库或 HTTP 对象。
+6. **可解释优先**：算法除了返回结果，还要返回未分配原因、未满足目标和求解摘要。
+7. **本地与公网同构**：本地和公网都通过容器运行，只替换环境变量、入口代理和安全配置。
+8. **参数可配置**：尚未最终确认的精度、求解时限和波数上限采用配置默认值，不写死在业务代码中。
+9. **副本驱动排表**：人数、队伍、合法组成、强度顺序和特殊角色规则来自版本化副本配置，不使用全局常量。
+
+## 3. 技术选型
+
+| 领域 | 选择 | 说明 |
+| --- | --- | --- |
+| 前端框架 | React + TypeScript + Vite | 适合高交互单页管理工具 |
+| UI 组件 | Ant Design | 人员表格、表单、上传、弹窗和状态提示 |
+| 拖拽 | dnd-kit | 跨队伍、跨波次移动和排序 |
+| 服务端状态 | TanStack Query | API 缓存、失效和请求状态 |
+| 编辑器状态 | Zustand | 排表草稿、选择状态、撤销恢复 |
+| 后端 | FastAPI + Pydantic | HTTP API、数据校验和 OpenAPI |
+| ORM | SQLAlchemy 2 + Alembic | PostgreSQL 访问和 Schema 迁移 |
+| 智能排表 | OR-Tools CP-SAT | 约束满足和多目标优化 |
+| 数据库 | PostgreSQL | 事务、JSONB、约束、版本和编辑锁 |
+| Excel | openpyxl | `.xlsx` 模板、预览、导入和导出 |
+| 长图 | Playwright for Python | 复用前端打印页生成长图 |
+| 容器 | Docker Compose | 本机和公网单机部署 |
+| 测试 | pytest、Vitest、Playwright | 单元、集成和端到端测试 |
+
+依赖版本策略：初始化工程时选择兼容的稳定版本，并通过 `pnpm-lock.yaml`、`uv.lock` 和 Docker 镜像标签锁定。业务代码不依赖未固定的 `latest` 镜像。
+
+## 4. 总体架构
+
+```mermaid
+flowchart LR
+    Browser["浏览器"] --> Web["React SPA"]
+    Web --> API["FastAPI 模块化单体"]
+    API --> DB[("PostgreSQL")]
+    API --> Solver["OR-Tools 排表领域模块"]
+    API --> Excel["openpyxl 导入导出"]
+    API --> Exporter["Playwright 长图生成"]
+    Exporter --> PrintPage["React 只读打印页"]
+```
+
+### 4.1 MVP 进程
+
+Docker Compose 包含三个常驻服务：
+
+1. `web`：构建并提供 React 静态资源。
+2. `api`：运行 FastAPI，同时包含 OR-Tools、openpyxl 和 Playwright Python 依赖。
+3. `db`：运行 PostgreSQL 并挂载持久化卷。
+
+MVP 不引入 Redis、消息队列和独立求解服务。默认 12 波求解采用同步请求并设置严格时间上限。若性能测试表明公网阶段需要异步化，可在不改变求解器接口的情况下增加 `worker` 服务。
+
+### 4.2 模块边界
+
+```text
+HTTP API
+  ↓
+Application Services
+  ├── Personnel Service
+  ├── Dungeon Service
+  ├── Import Service
+  ├── Schedule Service
+  ├── Validation Service
+  ├── Generation Service
+  ├── Version Service
+  ├── Export Service
+  └── Lock Service
+        ↓
+Domain
+  ├── Schedule Aggregate
+  ├── Dungeon Definition
+  ├── Scoring Formula
+  ├── Constraint Model
+  └── Issue Codes
+        ↓
+Repositories / PostgreSQL
+```
+
+领域模块不得依赖 FastAPI、SQLAlchemy Session 或浏览器数据结构。Application Service 负责 DTO、事务、权限和领域模块编排。
+
+## 5. 仓库结构
+
+推荐使用单仓库：
+
+```text
+dnf/
+├── frontend/
+│   ├── src/
+│   │   ├── app/                 # Router、Provider、全局配置
+│   │   ├── api/                 # 生成的 API 类型和请求封装
+│   │   ├── components/          # 通用组件
+│   │   ├── features/
+│   │   │   ├── auth/
+│   │   │   ├── dungeons/
+│   │   │   ├── personnel/
+│   │   │   ├── imports/
+│   │   │   ├── schedules/
+│   │   │   ├── schedule-editor/
+│   │   │   └── exports/
+│   │   ├── pages/
+│   │   ├── routes/
+│   │   ├── stores/
+│   │   ├── styles/
+│   │   └── test/
+│   ├── public/
+│   ├── package.json
+│   └── vite.config.ts
+├── backend/
+│   ├── app/
+│   │   ├── api/v1/              # FastAPI 路由
+│   │   ├── application/         # 用例服务和事务边界
+│   │   ├── core/                # 配置、安全、日志、异常
+│   │   ├── db/                  # Session、Base、迁移辅助
+│   │   ├── domain/
+│   │   │   ├── dungeon/
+│   │   │   ├── personnel/
+│   │   │   ├── schedule/
+│   │   │   ├── scoring/
+│   │   │   └── validation/
+│   │   ├── models/              # SQLAlchemy 持久化模型
+│   │   ├── repositories/
+│   │   ├── schemas/             # API Pydantic DTO
+│   │   ├── solver/              # OR-Tools 输入、模型和输出
+│   │   ├── imports/             # Excel 模板及解析
+│   │   ├── exports/             # Excel、文本、长图
+│   │   └── main.py
+│   ├── migrations/
+│   ├── tests/
+│   │   ├── unit/
+│   │   ├── integration/
+│   │   ├── solver/
+│   │   └── fixtures/
+│   ├── pyproject.toml
+│   └── uv.lock
+├── docs/
+│   ├── design.md
+│   └── technical-design.md
+├── infra/
+│   ├── web/
+│   ├── api/
+│   └── proxy/
+├── scripts/
+│   ├── backup.sh
+│   ├── restore.sh
+│   └── wait-for-db.sh
+├── compose.yaml
+├── compose.prod.yaml
+├── .env.example
+├── Makefile
+└── README.md
+```
+
+`main.py` 示例文件在工程初始化阶段移除，由 `backend/app/main.py` 替代。
+
+## 6. 前端设计
+
+### 6.0 副本管理页面
+
+副本管理采用“副本主体 + 版本”两层界面：
+
+- 副本列表维护名称、编码和启用状态。
+- 版本列表区分 DRAFT、PUBLISHED 和 RETIRED。
+- 版本编辑器用队伍表格配置名称、颜色、顺序和人数。
+- 合法组成使用结构化行编辑，不让用户直接修改 JSON。
+- 特殊角色和强度顺序通过规则表单配置。
+- 页面实时显示每波总人数、规则覆盖情况和发布错误。
+- PUBLISHED 版本只读；“编辑”操作实际复制出下一版 DRAFT。
+
+内置 12 人团本使用同一数据结构和页面展示，不在前端写特殊页面分支。
+
+### 6.1 路由
+
+```text
+/login
+/dungeons
+/dungeons/:dungeonId
+/dungeons/:dungeonId/versions/:versionId
+/players
+/imports/characters/:batchId
+/schedules
+/schedules/new
+/schedules/:scheduleId/setup
+/schedules/:scheduleId/editor
+/schedules/:scheduleId/waves/:waveNo
+/schedules/:scheduleId/versions
+/share/:token
+/print/schedules/:scheduleId/versions/:versionNo
+```
+
+`/share` 和 `/print` 使用同一套只读排表组件；打印路由隐藏导航、按钮和交互层。
+
+### 6.2 状态分层
+
+#### 服务端状态
+
+TanStack Query 管理：
+
+- 玩家和角色列表。
+- 排表列表、参团快照和历史版本。
+- 导入批次。
+- 校验报告和生成记录。
+
+#### 编辑器本地状态
+
+Zustand 管理：
+
+- 当前波次、筛选条件和选中角色。
+- 拖拽中的临时布局。
+- 未提交的命令批次。
+- 撤销/恢复命令栈。
+- 当前编辑锁和心跳状态。
+
+服务端保存成功后，以返回的 `revision` 和受影响波次覆盖本地确认态。
+
+### 6.3 编辑器数据结构
+
+前端使用一个聚合快照加载编辑器：
+
+```ts
+interface ScheduleEditorSnapshot {
+  schedule: ScheduleSummary;
+  participants: ScheduleParticipant[];
+  waves: WaveView[];
+  unassigned: UnassignedParticipant[];
+  issues: ValidationIssue[];
+  formula: FormulaSummary;
+  revision: number;
+  lock: EditLockView;
+}
+```
+
+角色卡片使用 `scheduleParticipantId` 作为拖拽 ID，不使用角色名，避免重名和历史快照变化造成标识不稳定。
+
+`WaveView.teams` 来自排表保存的副本队伍快照，并按 `displayOrder` 渲染为自适应 CSS Grid。前端不得假定永远只有红、黄、绿三队，也不得假定每队永远四个位置。
+
+### 6.4 编辑命令
+
+拖拽和按钮操作统一转换为命令：
+
+```text
+MOVE_PARTICIPANT
+SWAP_PARTICIPANTS
+UNASSIGN_PARTICIPANT
+SET_WAVE_CORE
+LOCK_PARTICIPANT
+LOCK_SLOT
+LOCK_WAVE
+UNLOCK_*
+```
+
+命令包含 `operationId`、`baseRevision` 和操作参数。前端可先乐观更新；服务器拒绝时回滚并显示原因。
+
+撤销操作不直接恢复整张旧快照，而是提交对应的逆命令。发布版本负责跨刷新和长期恢复，内存命令栈负责当前编辑会话的快速撤销。
+
+### 6.5 即时校验
+
+前端实现轻量、纯展示型校验：
+
+- 同玩家同波。
+- 角色类型和队伍人数。
+- 红黄绿分数。
+- 秘宝 C 是否位于红队。
+- 待补数量。
+
+后端返回的校验结果拥有最终权威。前端不得仅凭本地校验决定发布成功。
+
+### 6.6 大排表性能
+
+- 总览视图按波次拆分组件，角色卡片使用稳定 memo 边界。
+- 超过配置阈值后启用纵向虚拟化。
+- 拖拽期间只更新源队、目标队和强度摘要。
+- 强度计算使用派生选择器，不全量重建编辑器状态。
+- 长图导出使用独立打印页，不从虚拟化页面直接截图。
+
+## 7. 后端设计
+
+### 7.1 请求生命周期
+
+```text
+Router
+→ 身份和权限依赖
+→ 编辑锁/版本检查
+→ Pydantic 参数校验
+→ Application Service
+→ Domain Validation / Solver
+→ Repository
+→ Transaction Commit
+→ Response DTO
+```
+
+### 7.2 数据库访问
+
+MVP 使用 SQLAlchemy 2 的同步 Session：
+
+- 业务规模小，同步模型更容易控制事务。
+- OR-Tools 是 CPU 密集型，使用异步数据库不会改善求解性能。
+- FastAPI 通过工作线程执行同步依赖。
+
+每个 Application Service 明确开启事务。Repository 不自行提交事务。
+
+### 7.3 错误模型
+
+所有 API 错误采用统一结构：
+
+```json
+{
+  "error": {
+    "code": "SCHEDULE_REVISION_CONFLICT",
+    "message": "排表已被其他操作修改，请刷新后重试",
+    "path": "schedule.revision",
+    "details": {
+      "expected": 18,
+      "actual": 19
+    },
+    "traceId": "..."
+  }
+}
+```
+
+错误码稳定、消息可本地化。前端业务逻辑只判断 `code`，不解析中文消息。
+
+## 8. PostgreSQL 数据设计
+
+### 8.1 通用约定
+
+- 主键使用 UUID。
+- 时间使用 `timestamptz`，统一保存 UTC。
+- 金额式精确数据使用 `numeric`，不使用浮点数。
+- 业务枚举优先使用 `varchar + check constraint`，降低数据库枚举迁移成本。
+- 业务记录默认软停用；历史版本永不级联删除。
+- JSONB 只用于版本快照、公式配置、导入预览和诊断详情；核心关系仍采用结构化列。
+- 所有外键和高频筛选列建立明确索引。
+
+### 8.2 表关系
+
+```mermaid
+erDiagram
+    USERS ||--o{ USER_SESSIONS : owns
+    DUNGEONS ||--o{ DUNGEON_VERSIONS : versions
+    DUNGEON_VERSIONS ||--|{ DUNGEON_TEAM_TEMPLATES : defines
+    DUNGEON_VERSIONS ||--o{ SCHEDULES : configures
+    FORMULA_VERSIONS ||--o{ DUNGEON_VERSIONS : scores_with
+    PLAYERS ||--o{ CHARACTERS : owns
+    FORMULA_VERSIONS ||--o{ SCHEDULES : selected_by
+    SCHEDULES ||--o{ SCHEDULE_PARTICIPANTS : snapshots
+    CHARACTERS ||--o{ SCHEDULE_PARTICIPANTS : references
+    SCHEDULES ||--o{ SCHEDULE_PLAYER_PREFERENCES : configures
+    PLAYERS ||--o{ SCHEDULE_PLAYER_PREFERENCES : has
+    SCHEDULES ||--o{ WAVES : contains
+    WAVES ||--|{ TEAMS : contains
+    WAVES ||--o{ WAVE_SPECIAL_ASSIGNMENTS : assigns
+    TEAMS ||--|{ TEAM_SLOTS : contains
+    SCHEDULE_PARTICIPANTS ||--o| TEAM_SLOTS : assigned
+    SCHEDULES ||--o{ VALIDATION_ISSUES : reports
+    SCHEDULES ||--o{ GENERATION_RUNS : generates
+    SCHEDULES ||--o{ SCHEDULE_VERSIONS : publishes
+    SCHEDULE_VERSIONS ||--o{ SHARE_LINKS : shares
+    SCHEDULES ||--o| EDIT_LOCKS : locks
+    USERS ||--o{ EDIT_LOCKS : holds
+    IMPORT_BATCHES ||--o{ IMPORT_ROWS : contains
+```
+
+### 8.3 副本定义和版本
+
+#### `dungeons`
+
+| 列 | 类型 | 约束/说明 |
+| --- | --- | --- |
+| `id` | uuid | PK |
+| `code` | varchar(80) | unique, not null，稳定业务编码 |
+| `name` | varchar(120) | not null |
+| `description` | text | 可空 |
+| `is_active` | boolean | default true |
+| `created_at` | timestamptz | not null |
+| `updated_at` | timestamptz | not null |
+
+`code` 发布后不可修改。停用副本只阻止新建排表，已有排表仍然可读和复制。
+
+#### `dungeon_versions`
+
+| 列 | 类型 | 约束/说明 |
+| --- | --- | --- |
+| `id` | uuid | PK |
+| `dungeon_id` | uuid | FK dungeons |
+| `version_no` | integer | 同副本内递增 |
+| `status` | varchar(16) | `DRAFT/PUBLISHED/RETIRED` |
+| `default_wave_count` | smallint | 大于 0 |
+| `min_wave_count` | smallint | 大于 0 |
+| `max_wave_count` | smallint | 可空，且不小于 min |
+| `formula_version_id` | uuid | FK formula_versions |
+| `composition_rules` | jsonb | 允许构成及优先级 |
+| `special_role_rules` | jsonb | 秘宝 C 等特殊规则 |
+| `strength_order_rules` | jsonb | 队伍强度偏序及指标 |
+| `optimization_rules` | jsonb | 跨波平衡和偏好目标开关 |
+| `missing_slot_policy` | jsonb | 待补和波次填充策略 |
+| `created_by` | uuid | FK users |
+| `created_at` | timestamptz | not null |
+| `published_at` | timestamptz | 可空 |
+
+unique `(dungeon_id, version_no)`。PUBLISHED 版本不可更新；变更时复制为新 DRAFT 版本，发布后供新排表选择。
+
+规则 JSON 使用带版本的明确 Schema，而不是自由文本。下例是 Application DTO 和版本快照中的组合视图；持久化时各顶层字段分别进入对应 JSONB 列。内置 12 人团本示例：
+
+```json
+{
+  "compositionRules": {
+    "schemaVersion": 1,
+    "allowed": [
+      {
+        "code": "3D1B",
+        "applicableTeamKeys": ["RED", "YELLOW", "GREEN"],
+        "roles": {"DAMAGE": 3, "BUFFER": 1},
+        "priority": 1
+      },
+      {
+        "code": "2D2B",
+        "applicableTeamKeys": ["RED", "YELLOW", "GREEN"],
+        "roles": {"DAMAGE": 2, "BUFFER": 2},
+        "priority": 2
+      }
+    ]
+  },
+  "specialRoleRules": {
+    "schemaVersion": 1,
+    "rules": [
+      {
+        "code": "TREASURE_DAMAGE_CORE",
+        "characterFlag": "TREASURE_DAMAGE",
+        "countPerWave": 1,
+        "targetTeamKey": "RED",
+        "requiredForCompleteWave": true,
+        "companionPolicy": {
+          "roleType": "DAMAGE",
+          "objective": "MINIMIZE_OTHER_MEMBER_SCORE"
+        }
+      }
+    ]
+  },
+  "strengthOrderRules": {
+    "schemaVersion": 1,
+    "orders": [
+      {"metric": "DAMAGE", "teams": ["RED", "YELLOW", "GREEN"]},
+      {"metric": "BUFFER", "teams": ["RED", "YELLOW", "GREEN"]}
+    ]
+  },
+  "optimizationRules": {
+    "schemaVersion": 1,
+    "balanceAcrossWaves": ["DAMAGE", "BUFFER"],
+    "respectPlayerPreferences": true
+  },
+  "missingSlotPolicy": {
+    "schemaVersion": 1,
+    "mode": "FILL_EARLIER_WAVES"
+  }
+}
+```
+
+#### `dungeon_team_templates`
+
+| 列 | 类型 | 约束/说明 |
+| --- | --- | --- |
+| `id` | uuid | PK |
+| `dungeon_version_id` | uuid | FK dungeon_versions |
+| `team_key` | varchar(40) | 版本内稳定标识，如 RED |
+| `display_name` | varchar(80) | 如红队 |
+| `display_color` | varchar(20) | 设计令牌或颜色值 |
+| `display_order` | smallint | 页面顺序 |
+| `member_count` | smallint | 大于 0 |
+| `strength_rank` | smallint | 可空，越小越强 |
+
+unique `(dungeon_version_id, team_key)` 和 `(dungeon_version_id, display_order)`。
+
+每波人数始终由 `SUM(member_count)` 计算。发布副本版本时必须验证：
+
+- 至少一个队伍。
+- 队伍人数及总人数不超过系统安全上限。
+- 每个队伍至少有一条适用组成规则，且规则人数之和等于该队伍容量。
+- 特殊角色规则引用存在的 team_key 和角色标志。
+- 强度顺序引用存在且不重复的队伍。
+- 优化规则和待补策略使用当前支持的 schemaVersion 和枚举值。
+- 默认波数处于允许范围。
+
+该模型可以表达单队 4 人等结构，但 MVP 仍只交付通用副本配置和 12 人团本自动排表；军团本的人工互带页面和专用规则属于后续模块。
+
+### 8.4 用户与会话
+
+#### `users`
+
+| 列 | 类型 | 约束 |
+| --- | --- | --- |
+| `id` | uuid | PK |
+| `username` | varchar(80) | unique, not null |
+| `password_hash` | text | not null |
+| `role` | varchar(16) | `OWNER/EDITOR/VIEWER` |
+| `is_active` | boolean | default true |
+| `created_at` | timestamptz | not null |
+| `updated_at` | timestamptz | not null |
+
+#### `user_sessions`
+
+保存服务端会话令牌的哈希，不保存明文令牌。包含 `user_id`、`token_hash`、`expires_at`、`last_seen_at` 和撤销状态。
+
+本地首次启动通过初始化命令创建 Owner，不在镜像中硬编码默认密码。
+
+### 8.5 玩家与角色
+
+#### `players`
+
+| 列 | 类型 | 约束 |
+| --- | --- | --- |
+| `id` | uuid | PK |
+| `display_name` | varchar(120) | not null |
+| `display_name_key` | varchar(120) | unique, not null |
+| `is_active` | boolean | default true |
+| `created_at` | timestamptz | not null |
+| `updated_at` | timestamptz | not null |
+
+`display_name_key` 是去除首尾空格并统一大小写后的匹配键，供 Excel 导入使用；页面仍展示原始 `display_name`。
+
+#### `characters`
+
+| 列 | 类型 | 约束 |
+| --- | --- | --- |
+| `id` | uuid | PK |
+| `player_id` | uuid | FK players, not null |
+| `name` | varchar(120) | not null |
+| `name_key` | varchar(120) | not null |
+| `profession` | varchar(80) | not null |
+| `role_type` | varchar(16) | `DAMAGE/BUFFER` |
+| `damage_score` | numeric(14,2) | 可空，单位亿 |
+| `buffer_score` | numeric(8,1) | 可空 |
+| `is_treasure_damage` | boolean | default false |
+| `default_raid_participant` | boolean | default false |
+| `note` | text | 可空 |
+| `is_active` | boolean | default true |
+| `created_at` | timestamptz | not null |
+| `updated_at` | timestamptz | not null |
+
+约束：
+
+- unique `(player_id, name_key)`。
+- `DAMAGE` 必须有 `damage_score`，且 `buffer_score` 为空。
+- `BUFFER` 必须有 `buffer_score`，且 `damage_score` 为空。
+- 只有 `DAMAGE` 可以设置 `is_treasure_damage=true`。
+- 两类评分都必须大于等于 0。
+
+### 8.6 公式版本
+
+#### `formula_versions`
+
+| 列 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | uuid | PK |
+| `code` | varchar(40) | 例如 `TEAM_SCORE_V1` |
+| `version` | integer | 同 code 递增 |
+| `config` | jsonb | 精度、2C2奶策略等 |
+| `is_active` | boolean | 是否可供新排表选择 |
+| `created_at` | timestamptz | 创建时间 |
+
+`code + version` 唯一。已被排表引用的公式版本不可修改，只能创建新版本。
+
+首期配置示例：
+
+```json
+{
+  "damageUnit": "YI",
+  "damageScale": 100,
+  "bufferScale": 10,
+  "teamDamageMode": "SUM",
+  "twoBufferMode": "SUM"
+}
+```
+
+### 8.7 排表主体
+
+#### `schedules`
+
+| 列 | 类型 | 约束/说明 |
+| --- | --- | --- |
+| `id` | uuid | PK |
+| `name` | varchar(160) | not null |
+| `dungeon_version_id` | uuid | FK dungeon_versions，not null |
+| `wave_count` | smallint | 大于 0，受配置安全上限约束 |
+| `status` | varchar(16) | `DRAFT/PUBLISHED/ARCHIVED` |
+| `formula_version_id` | uuid | FK formula_versions |
+| `note` | text | 可空 |
+| `revision` | integer | 乐观并发版本，默认 1 |
+| `last_published_version` | integer | 可空 |
+| `validation_summary` | jsonb | 当前 revision 的摘要 |
+| `created_by` | uuid | FK users |
+| `updated_by` | uuid | FK users |
+| `created_at` | timestamptz | not null |
+| `updated_at` | timestamptz | not null |
+
+修改排表聚合内任何数据都必须递增 `revision`。
+
+状态转换约定：
+
+```text
+新建/复制 → DRAFT
+DRAFT 发布 → PUBLISHED
+PUBLISHED 继续编辑/恢复版本 → DRAFT（已发布版本仍保留）
+DRAFT 或 PUBLISHED 归档 → ARCHIVED
+```
+
+`PUBLISHED` 表示当前草稿已与最近发布版本一致；继续编辑只改变当前状态，不修改任何历史版本。
+
+新建排表只能引用 PUBLISHED 副本版本。创建事务根据该版本一次性生成全部 wave、team 和 slot，并把队伍展示及容量字段写入快照。副本版本后来退休不影响已有排表。
+
+`schedules.formula_version_id` 在创建时复制自 `dungeon_versions.formula_version_id`，作为排表快照的一部分；首期不允许排表绕过副本版本单独切换公式。
+
+#### `schedule_participants`
+
+排表使用角色快照，而不是实时读取人员池：
+
+| 列 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | uuid | PK |
+| `schedule_id` | uuid | FK schedules |
+| `character_id` | uuid | FK characters |
+| `player_id_snapshot` | uuid | 玩家引用快照 |
+| `player_name_snapshot` | varchar(120) | 展示快照 |
+| `character_name_snapshot` | varchar(120) | 展示快照 |
+| `profession_snapshot` | varchar(80) | 职业快照 |
+| `role_type_snapshot` | varchar(16) | 类型快照 |
+| `damage_score_snapshot` | numeric(14,2) | C 评分快照 |
+| `buffer_score_snapshot` | numeric(8,1) | 奶评分快照 |
+| `is_treasure_snapshot` | boolean | 秘宝 C 快照 |
+| `is_selected` | boolean | 当前是否参加该排表 |
+| `is_locked` | boolean | 重新生成时锁定角色 |
+| `unassigned_reason` | jsonb | 最近一次未分配诊断 |
+
+unique `(schedule_id, character_id)`。复制排表时重新从 `characters` 获取快照值。
+
+#### `schedule_player_preferences`
+
+| 列 | 类型 | 说明 |
+| --- | --- | --- |
+| `schedule_id` | uuid | 复合 PK |
+| `player_id` | uuid | 复合 PK |
+| `allowed_waves` | smallint[] | NULL 表示全波次，空数组表示没有可用波次 |
+| `max_wave_count` | smallint | 可空表示不额外限制 |
+| `prefer_early` | boolean | 软偏好 |
+| `prefer_contiguous` | boolean | 软偏好 |
+
+保存前校验数组去重、升序且所有波次位于 `1..wave_count`。使用 NULL 和空数组区分“全程可用”与“全程不可用”，避免语义歧义。
+
+### 8.8 波次、队伍与位置
+
+#### `waves`
+
+- `id`
+- `schedule_id`
+- `wave_no`
+- `is_locked`
+- `damage_total`
+- `buffer_total`
+
+unique `(schedule_id, wave_no)`。
+
+#### `teams`
+
+- `id`
+- `schedule_id`
+- `wave_id`
+- `team_key`：来自副本版本，如 `RED/YELLOW/GREEN`。
+- `display_name_snapshot`。
+- `display_color_snapshot`。
+- `display_order_snapshot`。
+- `member_count_snapshot`。
+- `strength_rank_snapshot`。
+- `damage_total`
+- `buffer_total`
+- `composition_code`：命中的副本组成规则 code，或 `INCOMPLETE/INVALID`。
+
+unique `(wave_id, team_key)`。队伍名称、颜色、人数和顺序保存快照，页面和导出不实时读取后来发布的新副本版本。
+
+#### `wave_special_assignments`
+
+- `id`
+- `schedule_id`
+- `wave_id`
+- `rule_code`：来自 `special_role_rules`。
+- `participant_id`：被选中的特殊角色。
+- `target_team_key_snapshot`。
+
+unique `(wave_id, rule_code, participant_id)`。内置 12 人团本通过 `TREASURE_DAMAGE_CORE` 规则表达每波核心秘宝 C，不在通用 wave 表中硬编码秘宝字段。
+
+#### `team_slots`
+
+- `id`
+- `schedule_id`
+- `wave_id`
+- `team_id`
+- `slot_no`：1..当前队伍的 `member_count_snapshot`。
+- `participant_id`：可空，空即“待补”。
+- `is_locked`
+
+约束和索引：
+
+- unique `(team_id, slot_no)`。
+- unique `participant_id`；PostgreSQL 允许多个 NULL，因此同一参团角色最多出现在一个位置。
+- index `(schedule_id, wave_id)`。
+- Application Service 校验 participant、wave、team 都属于同一 schedule。
+
+降低波数时，如果被删除波次含已分配或锁定角色，API 必须要求二次确认；角色移回未分配池，不删除参团快照。
+
+### 8.9 校验与求解记录
+
+#### `validation_issues`
+
+- `id`
+- `schedule_id`
+- `revision`
+- `severity`：`INFO/WARNING/ERROR`。
+- `code`：稳定错误码。
+- `scope_type`：`SCHEDULE/WAVE/TEAM/PARTICIPANT/PLAYER/SLOT`。
+- `scope_id`
+- `message_params`：jsonb。
+- `details`：jsonb。
+
+每次服务端校验后替换当前 revision 的 issue 集合。历史发布版本在快照中保存当时 issues，不依赖此表。
+
+#### `generation_runs`
+
+- `id`
+- `schedule_id`
+- `input_revision`
+- `result_revision`
+- `status`：`RUNNING/SUCCEEDED/PARTIAL/FAILED/STALE`。
+- `input_hash`
+- `solver_version`
+- `formula_version_id`
+- `random_seed`
+- `time_limit_seconds`
+- `duration_ms`
+- `objective_summary`：jsonb。
+- `diagnostics`：jsonb。
+- `created_by`
+- `created_at`
+- `finished_at`
+
+### 8.10 发布版本和分享
+
+#### `schedule_versions`
+
+- `id`
+- `schedule_id`
+- `version_no`
+- `source_revision`
+- `snapshot_schema_version`
+- `snapshot`：jsonb，完整不可变排表。
+- `snapshot_hash`
+- `formula_version_id`
+- `published_by`
+- `published_at`
+
+unique `(schedule_id, version_no)`。发布后禁止 UPDATE 和 DELETE，归档只改变 schedule 状态。
+
+除应用层限制外，生产迁移应创建数据库触发器拒绝对 `schedule_versions` 的 UPDATE 和 DELETE，确保历史快照不可变。
+
+#### `share_links`
+
+- `id`
+- `schedule_version_id`
+- `token_hash`
+- `expires_at`：可空。
+- `revoked_at`：可空。
+- `created_by`
+- `created_at`
+
+数据库只保存分享令牌哈希。令牌只在创建响应中返回一次。
+
+### 8.11 编辑锁
+
+#### `edit_locks`
+
+- `schedule_id`：PK/FK。
+- `user_id`。
+- `lock_token_hash`。
+- `acquired_at`。
+- `heartbeat_at`。
+- `expires_at`。
+
+获取锁使用单条事务：
+
+1. 对目标行加行锁。
+2. 无锁或已过期时写入新持有者和令牌。
+3. 未过期且持有者不同则返回 `423 Locked`。
+
+修改排表同时要求：有效锁令牌 + 正确 `baseRevision`。
+
+### 8.12 Excel 导入暂存
+
+#### `import_batches`
+
+保存文件名、创建者、状态、总行数、摘要和过期时间。
+
+#### `import_rows`
+
+保存行号、规范化 payload、匹配到的玩家/角色、动作 `CREATE/UPDATE/IGNORE/ERROR` 和错误列表。
+
+导入确认后在一个事务中写入人员数据，并把批次标记为 `COMMITTED`。过期未确认批次可以安全清理。
+
+## 9. API 设计
+
+API 前缀为 `/api/v1`，请求和响应使用 JSON；文件接口除外。
+
+### 9.1 副本管理
+
+```text
+GET    /dungeons
+POST   /dungeons
+GET    /dungeons/{dungeonId}
+PATCH  /dungeons/{dungeonId}
+POST   /dungeons/{dungeonId}/versions
+GET    /dungeons/{dungeonId}/versions
+GET    /dungeon-versions/{versionId}
+PATCH  /dungeon-versions/{versionId}
+POST   /dungeon-versions/{versionId}/validate
+POST   /dungeon-versions/{versionId}/publish
+POST   /dungeon-versions/{versionId}/retire
+```
+
+只有 DRAFT 副本版本允许修改。`publish` 在事务中完成完整规则校验并将版本设为不可变。
+
+### 9.2 身份
+
+```text
+POST   /auth/login
+POST   /auth/logout
+GET    /auth/me
+```
+
+### 9.3 人员和角色
+
+```text
+GET    /players
+POST   /players
+GET    /players/{playerId}
+PATCH  /players/{playerId}
+POST   /players/{playerId}/characters
+PATCH  /characters/{characterId}
+POST   /characters/{characterId}/deactivate
+POST   /characters/batch-update
+```
+
+列表接口支持分页、搜索和 `roleType/isTreasure/defaultParticipant/isActive` 筛选。
+
+### 9.4 Excel 导入
+
+```text
+GET    /imports/characters/template
+POST   /imports/characters/preview
+GET    /imports/characters/{batchId}
+POST   /imports/characters/{batchId}/commit
+GET    /imports/characters/{batchId}/errors.xlsx
+```
+
+`preview` 返回批次 ID 和摘要，不直接修改人员池。
+
+### 9.5 排表主体
+
+```text
+GET    /schedules
+POST   /schedules
+GET    /schedules/{scheduleId}
+PATCH  /schedules/{scheduleId}
+POST   /schedules/{scheduleId}/copy/preview
+POST   /schedules/{scheduleId}/copy
+POST   /schedules/{scheduleId}/archive
+GET    /schedules/{scheduleId}/editor
+PUT    /schedules/{scheduleId}/participants
+PUT    /schedules/{scheduleId}/player-preferences
+POST   /schedules/{scheduleId}/sync-characters/preview
+POST   /schedules/{scheduleId}/sync-characters/commit
+```
+
+创建排表请求必须包含 `dungeonVersionId`；未传波数时使用副本版本的 `defaultWaveCount`。复制请求可以选择保留原版本或迁移到同副本的另一个 PUBLISHED 版本，迁移时先返回结构差异预览。
+
+### 9.6 编辑命令
+
+```text
+POST   /schedules/{scheduleId}/commands
+```
+
+示例：
+
+```json
+{
+  "operationId": "uuid",
+  "baseRevision": 18,
+  "operations": [
+    {
+      "type": "MOVE_PARTICIPANT",
+      "participantId": "uuid",
+      "toSlotId": "uuid"
+    }
+  ]
+}
+```
+
+响应返回：
+
+- 新 `revision`。
+- 被修改的波次。
+- 未分配池变化。
+- 最新 issues。
+- 每个操作的逆命令，供前端撤销。
+
+相同 `operationId` 重试时返回第一次的结果，避免网络重试造成重复移动。
+
+### 9.7 校验和自动生成
+
+```text
+POST   /schedules/{scheduleId}/validate
+POST   /schedules/{scheduleId}/generate
+GET    /schedules/{scheduleId}/generation-runs
+GET    /generation-runs/{runId}
+```
+
+生成请求：
+
+```json
+{
+  "baseRevision": 18,
+  "preserveLocks": true,
+  "randomSeed": 42,
+  "timeLimitSeconds": 10
+}
+```
+
+`timeLimitSeconds` 的默认值来自服务端配置；客户端只能在允许范围内选择。
+
+### 9.8 发布、历史和分享
+
+```text
+POST   /schedules/{scheduleId}/publish
+GET    /schedules/{scheduleId}/versions
+GET    /schedules/{scheduleId}/versions/{versionNo}
+POST   /schedules/{scheduleId}/versions/{versionNo}/restore-as-draft
+POST   /schedule-versions/{versionId}/share-links
+DELETE /share-links/{shareLinkId}
+GET    /share/{token}
+```
+
+发布请求携带已确认的 issue IDs。结构完整但存在业务警告时，团长确认后仍可发布；数据库结构性冲突始终禁止发布。
+
+### 9.9 导出
+
+```text
+GET    /schedule-versions/{versionId}/exports/image
+GET    /schedule-versions/{versionId}/exports/excel
+GET    /schedule-versions/{versionId}/exports/text
+```
+
+草稿导出使用单独接口并强制“草稿”水印。
+
+### 9.10 编辑锁
+
+```text
+POST   /schedules/{scheduleId}/lock
+POST   /schedules/{scheduleId}/lock/heartbeat
+DELETE /schedules/{scheduleId}/lock
+POST   /schedules/{scheduleId}/lock/takeover
+```
+
+写请求通过 `X-Edit-Lock-Token` 传递锁令牌，并在请求体中带 `baseRevision`。
+
+## 10. 排表并发与事务
+
+### 10.1 乐观版本
+
+所有排表写操作执行：
+
+```sql
+UPDATE schedules
+SET revision = revision + 1, updated_at = now()
+WHERE id = :id AND revision = :base_revision;
+```
+
+受影响行数为 0 时返回 `409 SCHEDULE_REVISION_CONFLICT`。
+
+### 10.2 生成期间的竞争
+
+求解过程不长时间持有数据库事务：
+
+```mermaid
+sequenceDiagram
+    participant UI as 前端
+    participant API as FastAPI
+    participant DB as PostgreSQL
+    participant Solver as OR-Tools
+
+    UI->>API: generate(baseRevision, lockToken)
+    API->>DB: 读取并校验锁、revision、快照
+    API->>DB: 写入 RUNNING generation_run
+    API->>Solver: 传入不可变 SolverInput
+    Solver-->>API: SolverResult
+    API->>DB: 新事务再次检查 revision
+    alt revision 未变化
+        API->>DB: 应用结果、递增 revision、保存 issues
+        API-->>UI: 返回新快照摘要
+    else revision 已变化
+        API->>DB: generation_run 标记 STALE
+        API-->>UI: 409，请重新生成
+    end
+```
+
+### 10.3 发布事务
+
+发布必须在一个事务中：
+
+1. 验证锁、权限和 revision。
+2. 执行完整服务端校验。
+3. 检查未确认问题。
+4. 构建规范化快照并计算哈希。
+5. 插入 `schedule_versions`。
+6. 更新 schedule 状态、发布版本号和 revision。
+
+## 11. 服务端校验设计
+
+### 11.1 校验层级
+
+1. **Schema 校验**：类型、范围、必填字段。
+2. **数据库约束**：唯一、外键和检查约束。
+3. **排表硬规则**：角色唯一、同玩家同波唯一、波次可用、位置归属。
+4. **副本完整队伍规则**：命中当前副本版本允许的组成；内置团本为 3C1奶 或 2C2奶。
+5. **优化目标检查**：当前副本定义的特殊角色、队伍强度顺序和跨波平衡。
+
+### 11.2 稳定 issue code
+
+首批错误码：
+
+```text
+DUNGEON_VERSION_NOT_PUBLISHED
+DUNGEON_TEAM_TEMPLATE_INVALID
+DUNGEON_COMPOSITION_CAPACITY_MISMATCH
+DUNGEON_SPECIAL_RULE_TARGET_MISSING
+CAPACITY_EXCEEDED
+PARTICIPANT_SHORTAGE
+DAMAGE_IDEAL_SHORTAGE
+BUFFER_BASE_SHORTAGE
+TREASURE_SHORTAGE
+PLAYER_WAVE_CAPACITY_INSUFFICIENT
+PLAYER_DUPLICATED_IN_WAVE
+PARTICIPANT_DUPLICATED
+PARTICIPANT_OUTSIDE_AVAILABILITY
+INVALID_TEAM_COMPOSITION
+MISSING_WAVE_CORE
+CORE_NOT_IN_RED_TEAM
+DAMAGE_ORDER_VIOLATION
+BUFFER_ORDER_VIOLATION
+UNASSIGNED_NO_AVAILABLE_WAVE
+UNASSIGNED_PLAYER_CONFLICT
+UNASSIGNED_ROLE_COMPOSITION
+UNASSIGNED_CAPACITY
+```
+
+issue 使用结构化参数，由前端渲染中文。例如 `DAMAGE_IDEAL_SHORTAGE` 携带 `required/current/shortage`。
+
+### 11.3 发布策略
+
+- 数据库结构性错误和角色重复永远阻止保存或发布。
+- `CAPACITY_EXCEEDED`、越界波次和互相冲突的锁定安排会阻止自动生成，团长需要先修正输入。
+- 草稿允许待补、缺秘宝 C、非法完整队伍和红黄绿顺序问题，但必须显示。
+- 发布时，团长可确认业务警告；确认记录进入发布快照。
+
+## 12. 评分公式设计
+
+### 12.1 接口
+
+```python
+class ScoringFormula(Protocol):
+    code: str
+    version: int
+
+    def damage_value(self, participant: ParticipantInput) -> int: ...
+    def buffer_value(self, participant: ParticipantInput) -> int: ...
+    def team_damage(self, members: Sequence[ParticipantInput]) -> int: ...
+    def team_buffer(self, members: Sequence[ParticipantInput]) -> int: ...
+```
+
+### 12.2 V1
+
+- C 伤害：亿单位数值乘 100 转换为整数。
+- 奶评分：数值乘 10 转换为整数。
+- 队伍 C 强度：所有 C 整数分之和。
+- 队伍奶强度：所有奶整数分之和。
+- 展示时按公式配置还原小数和单位。
+
+公式代码、版本和配置一起写入生成记录和发布快照，保证历史可重现。
+
+进入 CP-SAT 前必须检查评分缩放后的上界，确保所有变量、加权目标和中间和不会超过有符号 64 位整数范围。角色评分的业务输入上限由配置控制，超出时在保存角色阶段直接拒绝。
+
+## 13. OR-Tools 求解器设计
+
+### 13.1 输入模型
+
+```python
+@dataclass(frozen=True)
+class SolverDungeonDefinition:
+    dungeon_version_id: UUID
+    teams: tuple[SolverTeamDefinition, ...]
+    composition_rules: tuple[SolverCompositionRule, ...]
+    special_role_rules: tuple[SolverSpecialRoleRule, ...]
+    strength_order_rules: tuple[SolverStrengthOrderRule, ...]
+    optimization_rules: SolverOptimizationRules
+    missing_slot_policy: SolverMissingSlotPolicy
+    participants_per_wave: int
+
+@dataclass(frozen=True)
+class SolverInput:
+    schedule_id: UUID
+    revision: int
+    wave_count: int
+    dungeon: SolverDungeonDefinition
+    participants: tuple[SolverParticipant, ...]
+    player_preferences: tuple[SolverPlayerPreference, ...]
+    locked_assignments: tuple[LockedAssignment, ...]
+    locked_empty_slots: tuple[LockedEmptySlot, ...]
+    formula: SolverFormula
+    random_seed: int
+    time_limit_seconds: int
+```
+
+输入由 Application Service 从排表快照构建。求解器不读取数据库。
+
+### 13.2 变量降维
+
+不为每个具体位置创建主要二元变量，而使用：
+
+```text
+x[r,w,t] = 角色 r 是否进入波次 w 的队伍 t
+```
+
+其中 `t ∈ dungeon.teams`。求解完成后再把队伍成员稳定地映射到该队伍配置的具体位置；已锁定位置预先占用。
+
+相比 `角色 × 波次 × 队伍 × 位置`，该方案显著减少变量数量，同时仍能表达业务约束。
+
+变量规模为 `参团角色数 × 波数 × 队伍数`。以内置 12 人团本和建议 50 波安全上限计算，最多 600 个参团角色，主要分配变量上限约为 `600 × 50 × 3 = 90,000`。副本发布和排表创建还需受“单波最大人数、最大队伍数、单排表最大位置数”三项系统安全配置限制。
+
+辅助变量包括：
+
+- `assigned[r]`：角色是否被安排。
+- `wave_full[w]`：波次是否达到副本配置的总人数。
+- `team_full[w,t]`：队伍是否达到其配置人数。
+- `composition_selected[w,t,c]`：完整队伍命中了哪条合法组成规则。
+- `special_assignment[r,w,s]`：角色是否满足特殊规则 s。
+- `damage_total[w,t]`、`buffer_total[w,t]`。
+- 副本强度顺序规则对应的松弛量。
+- 跨波最大值、最小值和差值。
+- 玩家出场跨度及中间空档数。
+
+### 13.3 硬约束
+
+#### 角色和玩家
+
+```text
+每个角色：Σ(w,t) x[r,w,t] ≤ 1
+每个玩家每波：Σ(该玩家角色,t) x[r,w,t] ≤ 1
+```
+
+- 不允许的波次对应变量固定为 0。
+- 玩家总出场次数不得超过 `max_wave_count`。
+- 已锁定角色固定到原波次和队伍。
+- 被锁定为空的位置会降低对应队伍可用容量。
+
+#### 队伍容量和组成
+
+```text
+每队总人数 ≤ team.member_count
+完整队伍时：
+  角色类型计数必须命中副本版本的一条 allowed composition
+```
+
+不完整队伍不强制满足完整构成，但会产生缺口诊断。对于内置 12 人团本，合法规则为 3C1奶 和 2C2奶，完整的 4C、1C3奶 等组合不允许作为求解结果。
+
+#### 特殊角色规则
+
+- `special_assignment[r,w,s]` 只能对满足规则 s 的角色标志成立。
+- 特殊角色必须进入规则配置的 `targetTeamKey`。
+- 每波数量由 `countPerWave` 控制。
+- 完整波次有足够候选时，目标函数优先满足 `requiredForCompleteWave` 规则。
+- 未被选为特殊角色的候选仍可作为普通角色分配。
+- 内置 12 人团本把该通用规则实例化为“每波一个秘宝 C，进入红队”。
+
+### 13.4 分层目标
+
+采用多阶段求解而不是一个难以解释的超大权重公式。每一阶段保存已达到的最优值或当前最好值，并在下一阶段中保持不变或限定容差。
+
+#### 阶段 A：可用性与完整度
+
+1. 最大化已安排参团角色数。
+2. 最大化完整波次数和完整队伍数。
+3. 按副本的 `missingSlotPolicy` 处理空位；内置团本对较早波次施加更高空位惩罚，使缺口集中到最后几波。
+
+#### 阶段 B：构成和核心
+
+1. 最小化合法组成规则的优先级惩罚；内置 12 人团本由此优先 3C1奶、其次 2C2奶。
+2. 最大化满足必需特殊角色规则的完整波次数；内置 12 人团本由此优先安排红队核心秘宝 C。
+
+#### 阶段 C：跨波平衡
+
+仅对副本 `balanceAcrossWaves` 启用的指标进行优化。内置 12 人团本对完整波次分别最小化：
+
+```text
+max(波次C总强度) - min(波次C总强度)
+max(波次奶总强度) - min(波次奶总强度)
+```
+
+不完整波次不参与强度差优化，避免“待补”错误拉低目标。
+
+#### 阶段 D：单波队伍关系
+
+根据副本版本的 `strengthOrderRules` 最小化相邻队伍的顺序松弛量。内置 12 人团本等价于：
+
+```text
+max(0, 黄队C - 红队C)
+max(0, 绿队C - 黄队C)
+max(0, 黄队奶 - 红队奶)
+max(0, 绿队奶 - 黄队奶)
+```
+
+若特殊规则定义了同队搭配策略，则在满足顺序后继续优化。内置 12 人团本最小化红队核心秘宝 C 以外的 C 强度占用，使大 C 搭配相对较弱的 C。
+
+#### 阶段 E：玩家偏好和稳定排序
+
+- `prefer_early`：最小化波次编号加权和。
+- `prefer_contiguous`：最小化玩家最早和最晚出场之间的空档数。
+- 最后按稳定 ID 顺序进行轻量 tie-break，减少无意义抖动。
+
+如果副本版本关闭 `respectPlayerPreferences`，则只保留稳定 tie-break，不应用前两项偏好目标。
+
+### 13.5 连续上号偏好
+
+对于启用 `prefer_contiguous` 且安排了多个角色的玩家：
+
+```text
+gap_count = latest_wave - earliest_wave + 1 - assigned_count
+```
+
+最小化 `gap_count`。这是软目标，不得覆盖角色唯一、同玩家同波和可用波次等硬约束。
+
+### 13.6 待补集中策略
+
+当副本使用 `FILL_EARLIER_WAVES` 策略时，在已安排总人数相同的前提下，对空位使用递减权重：
+
+```text
+empty_penalty(w) = (wave_count - w + 1) × empty_count(w)
+```
+
+越早的波次空位惩罚越高，因此求解器倾向先填满前面的波次。
+
+### 13.7 结果映射
+
+求解器返回队伍成员关系后：
+
+1. 保留锁定位置。
+2. 按角色类型和副本展示顺序映射常规位置。
+3. 将特殊角色放到目标队伍的稳定视觉位置；内置 12 人团本优先展示红队核心秘宝 C。
+4. 其余角色按角色类型、评分和稳定 ID 映射到空位。
+5. 未分配角色附带预检查和求解后诊断原因。
+
+位置顺序不参与战斗力计算，仅影响展示和拖拽。
+
+### 13.8 求解结果
+
+```python
+@dataclass(frozen=True)
+class SolverResult:
+    status: SolverStatus
+    assignments: tuple[SolverAssignment, ...]
+    special_assignments: tuple[SpecialRoleAssignment, ...]
+    unassigned: tuple[UnassignedReason, ...]
+    issues: tuple[SolverIssue, ...]
+    objective_summary: ObjectiveSummary
+    duration_ms: int
+```
+
+状态：
+
+- `OPTIMAL`：在时间内证明最优。
+- `FEASIBLE`：时间内得到可行结果，未证明最优。
+- `PARTIAL`：放宽软目标后得到部分排表。
+- `INFEASIBLE`：硬约束冲突，无法生成任何有效安排。
+- `ERROR`：求解器或输入异常。
+
+### 13.9 可重现性
+
+每次生成记录：
+
+- 输入快照哈希。
+- 公式版本。
+- 求解器版本。
+- 随机种子。
+- 时间上限。
+- 目标摘要和最终结果。
+
+“重新生成”可以改变随机种子以获得另一套可行方案。历史结果以实际保存的分配为准，不依赖重新执行求解器复现。
+
+## 14. Excel 设计
+
+### 14.1 模板
+
+工作表名：`角色数据`。
+
+```text
+玩家称呼 | 角色名 | 职业 | 类型 | 伤害/增益量 | 秘宝C | 默认参团 | 备注
+```
+
+模板包含：
+
+- 冻结首行和筛选。
+- 类型、秘宝 C、默认参团的数据验证下拉。
+- 示例行和说明工作表。
+- C 使用亿为单位；奶使用一位小数。
+
+### 14.2 解析规则
+
+- 首期只接受 `.xlsx`。
+- 字符串统一去除首尾空格。
+- C 数值接受 `120`、`120.5`、`120亿`，统一存为亿单位 Decimal。
+- 奶数值接受 `4.1`、`5.2` 等 Decimal。
+- 布尔值兼容 `是/否`、`Y/N`、`1/0`。
+- 不执行 Excel 公式；公式单元格必须有可读取的缓存值，否则报错。
+- 文件大小、行数和单元格文本长度使用配置限制。
+
+### 14.3 预览和确认
+
+上传后只写入导入暂存表。前端展示：
+
+- 新增玩家。
+- 新增角色。
+- 更新字段前后值。
+- 无变化行。
+- 错误行和错误码。
+
+确认时重新检查人员数据版本，防止预览后人员池已被修改。发现竞争变更时要求重新预览。
+
+## 15. 排表版本快照
+
+### 15.1 快照结构
+
+发布快照至少包含：
+
+```json
+{
+  "schemaVersion": 1,
+  "schedule": {},
+  "dungeon": {},
+  "formula": {},
+  "participants": [],
+  "playerPreferences": [],
+  "waves": [],
+  "issues": [],
+  "publishedAt": "..."
+}
+```
+
+数组按波次、队伍、位置和稳定 ID 规范化排序后计算 SHA-256 哈希。
+
+### 15.2 恢复
+
+“恢复为草稿”不是覆盖旧版本，而是：
+
+1. 从指定版本创建新的草稿状态。
+2. 保留现有发布版本。
+3. 递增 schedule revision。
+4. 新草稿继续使用快照中的角色数据，团长可再主动同步人员池。
+
+## 16. 导出设计
+
+### 16.1 长图
+
+1. 后端生成短期内部导出令牌。
+2. Playwright 打开 `web` 容器中的打印路由。
+3. 打印页读取指定不可变版本。
+4. 等待字体、布局和图片加载完成。
+5. 对排表根节点进行完整截图。
+6. 返回 PNG，并设置安全文件名。
+
+打印页不使用虚拟化，分页只用于 Excel 和打印 PDF；长图保持连续纵向布局。
+
+### 16.2 Excel 导出
+
+建议工作簿包含：
+
+- `排表总览`：按波次、队伍和位置展开。
+- `未分配`：角色和原因。
+- `强度统计`：队伍及波次 C/奶评分。
+- `问题清单`：发布时确认的问题。
+
+### 16.3 纯文本
+
+固定模板示例：
+
+```text
+第1波
+红队：玩家A-角色A / 玩家B-角色B / ...
+黄队：...
+绿队：...
+```
+
+## 17. 身份、安全和权限
+
+### 17.1 本地阶段
+
+- 初始化命令创建 Owner。
+- 使用用户名和密码登录。
+- 密码采用 Argon2id 等现代密码哈希。
+- 会话令牌存入 HttpOnly、SameSite Cookie。
+
+### 17.2 公网阶段
+
+- 强制 HTTPS 和 Secure Cookie。
+- 写接口启用 CSRF 防护。
+- 登录接口限流并记录失败日志。
+- CORS 限制为实际站点域名。
+- 分享链接使用高熵随机令牌，可撤销和可设置过期时间。
+- PostgreSQL 只存在于内部网络，不映射公网端口。
+- `.env` 不提交仓库，提供 `.env.example`。
+
+### 17.3 权限矩阵
+
+| 能力 | Owner | Editor | Viewer |
+| --- | --- | --- | --- |
+| 查看人员和排表 | 是 | 是 | 是 |
+| 编辑人员 | 是 | 是 | 否 |
+| 编辑和生成排表 | 是 | 是 | 否 |
+| 发布和导出 | 是 | 是 | 仅下载已有导出 |
+| 管理用户 | 是 | 否 | 否 |
+| 归档/删除分享链接 | 是 | 可撤销自己创建的链接 | 否 |
+
+首期可以只创建 Owner 账号，但表结构和权限依赖按此设计实现，避免公网化时重构核心表。
+
+## 18. 可观测性
+
+### 18.1 日志
+
+后端输出结构化日志：
+
+- `trace_id`。
+- 用户和排表 ID。
+- API 路径和耗时。
+- 数据库错误码。
+- 求解器状态、耗时、变量规模和目标摘要。
+- 导入批次摘要。
+- 导出耗时和失败阶段。
+
+不得记录密码、会话令牌、分享明文令牌或完整上传文件内容。
+
+### 18.2 关键指标
+
+MVP 先通过数据库和日志记录：
+
+- 自动排表耗时分布。
+- `OPTIMAL/FEASIBLE/PARTIAL/INFEASIBLE` 数量。
+- 未分配角色数和常见原因。
+- 导入错误率。
+- 排表 revision 冲突次数。
+- 编辑锁超时和接管次数。
+
+公网阶段再接入正式监控系统。
+
+## 19. 测试策略
+
+### 19.1 后端单元测试
+
+- 玩家和角色规范化。
+- C/奶字段交叉约束。
+- Excel 单元格解析。
+- 队伍评分公式。
+- Issue 生成。
+- 快照规范化和哈希。
+- 编辑命令及逆命令。
+
+### 19.2 求解器测试
+
+固定场景：
+
+1. 内置 12 人团本 12 波，人数和类型恰好完整。
+2. 秘宝 C 多于波数。
+3. 同一玩家有多个参团角色。
+4. 玩家只允许部分波次。
+5. C 不足但奶富余，触发 2C2奶。
+6. 总人数不足，空位集中到最后几波。
+7. 秘宝 C 不足。
+8. 已锁定角色、位置和整波。
+9. 无法满足红黄绿顺序但仍返回方案。
+10. 玩家偏好连续和靠前。
+11. 自定义单队 4 人副本，不含秘宝 C 和强度顺序。
+12. 自定义多队、不同队伍人数和不同合法组成。
+13. 副本规则引用不存在的队伍时拒绝发布。
+
+属性测试需要验证：
+
+- 任意结果中角色不重复。
+- 任意波中玩家不重复。
+- 完整队伍只能命中当前副本版本允许的组成。
+- 特殊角色一定满足标志、数量和目标队伍规则。
+- 所有安排都满足可用波次。
+
+### 19.3 集成测试
+
+- PostgreSQL 真实事务和约束。
+- Alembic 从空库升级到最新版本。
+- 副本版本发布后不可变，旧排表不受新版本影响。
+- 根据副本版本正确生成队伍和位置快照。
+- Excel 预览后确认。
+- 生成期间 revision 变化导致结果标记 STALE。
+- 编辑锁获取、续期、超时和接管。
+- 发布快照不可变。
+
+### 19.4 前端测试
+
+- 人员筛选和表单。
+- 导入预览。
+- 总览/单波切换。
+- 拖拽、交换、锁定和撤销。
+- 409 冲突回滚。
+- 编辑锁丢失后切换只读。
+- issue 定位和确认发布。
+
+### 19.5 端到端测试
+
+核心闭环：
+
+```text
+登录
+→ 检查/创建副本版本
+→ 导入角色 Excel
+→ 新建 12 波排表
+→ 设置玩家波次
+→ 自动生成
+→ 拖拽微调
+→ 发布版本
+→ 导出长图和 Excel
+→ 复制为新排表
+```
+
+### 19.6 性能基线
+
+使用内置 12 人团本建立 1、12、30、50 波模拟数据集，并增加若干自定义队伍数和人数的副本数据集，记录：
+
+- 预检查耗时。
+- 变量和约束数量。
+- 首个可行解时间。
+- 最终解时间。
+- 前端首次渲染和拖拽响应。
+- 长图尺寸和导出耗时。
+
+性能结果用于确定最终求解时限和波数安全上限。
+
+## 20. Docker 和部署
+
+### 20.1 本地 Compose
+
+```text
+web:
+  浏览器端口 5173/80
+api:
+  端口 8000
+db:
+  PostgreSQL 数据卷
+```
+
+开发模式可将 PostgreSQL 绑定到 `127.0.0.1` 便于调试；生产 Compose 不映射数据库端口。
+
+启动流程：
+
+1. 复制 `.env.example` 为本地环境文件。
+2. 启动 PostgreSQL。
+3. 执行 Alembic 迁移。
+4. 创建初始 Owner。
+5. 写入内置 12 人团本副本及首个 PUBLISHED 版本。
+6. 启动 API 和 Web。
+
+### 20.2 公网单机
+
+```mermaid
+flowchart TD
+    Internet["Internet"] --> Proxy["HTTPS Reverse Proxy"]
+    Proxy --> Web["Web Container"]
+    Proxy --> API["API Container"]
+    API --> DB[("PostgreSQL Internal Network")]
+```
+
+- 只开放 80/443。
+- 反向代理负责 TLS 和请求大小限制。
+- PostgreSQL 使用持久化卷或明确宿主机数据目录。
+- 容器使用非 root 用户运行应用。
+- 发布前自动执行数据库备份和迁移检查。
+
+## 21. 备份与恢复
+
+### 21.1 备份
+
+- 每日执行 `pg_dump` 自定义格式备份。
+- 保留最近若干日、周和月备份，具体策略公网化前确定。
+- 备份文件保存到数据库卷以外的位置。
+- 人员 Excel 和排表导出不能替代数据库备份。
+
+### 21.2 恢复演练
+
+至少在首次公网部署前完成：
+
+1. 新建空 PostgreSQL 实例。
+2. 恢复最近备份。
+3. 运行 Alembic 校验。
+4. 检查人员数量、排表版本和分享链接。
+5. 完成一次登录、查看和导出。
+
+## 22. 迁移和兼容策略
+
+- 所有 Schema 变化通过 Alembic。
+- 每个发布版本快照带 `snapshot_schema_version`。
+- 读取旧快照时通过纯函数逐级升级为当前读取模型，不原地重写历史 JSON。
+- API 使用 `/api/v1`；破坏性变更进入新版本或提供迁移期。
+- 公式版本不可修改，新增规则必须创建新版本。
+- 求解结果保存 solver version，升级 OR-Tools 后先运行固定基准集。
+
+## 23. 分阶段实施
+
+### 阶段 0：工程和技术验证
+
+- 初始化 Git、前后端目录、依赖锁和 Docker Compose。
+- 建立 PostgreSQL、Alembic 和健康检查。
+- 建立副本定义、版本和通用队伍配置 Schema。
+- 创建 OR-Tools 独立 PoC，验证内置 12 人团本和至少一个自定义副本。
+- 建立模拟数据生成器。
+
+### 阶段 1：副本和人员管理
+
+- 用户登录和 Owner 初始化。
+- 副本 CRUD、版本草稿、规则校验和发布。
+- 玩家、角色 CRUD、筛选和批量操作。
+- Excel 模板、预览、确认和错误下载。
+
+### 阶段 2：排表基础
+
+- 排表、参团快照、偏好、波次、队伍和位置。
+- 创建、复制、调整波数和同步角色数据。
+- 预检查和编辑器只读布局。
+
+### 阶段 3：自动排表
+
+- SolverInput/Result 契约。
+- 分层目标、诊断和 generation_runs。
+- 自动生成、锁定保留和重新生成。
+- 标准、短缺和冲突测试集。
+
+### 阶段 4：完整编辑器
+
+- dnd-kit 拖拽、交换、锁定和未分配角色池。
+- 命令接口、revision、撤销恢复和单编辑锁。
+- 总览、单波视图和实时 issue。
+
+### 阶段 5：版本和分享
+
+- 发布快照、恢复草稿和归档。
+- 只读分享链接。
+- 长图、Excel 和纯文本导出。
+
+### 阶段 6：公网化
+
+- HTTPS、权限、限流、备份和恢复演练。
+- 完整端到端及性能测试。
+- 部署和运维文档。
+
+## 24. 技术验收条件
+
+1. 空库能够通过一条命令启动并完成迁移。
+2. 副本人数、队伍、合法组成和特殊角色规则可以配置并发布版本。
+3. 修改副本新版本不影响引用旧版本的排表。
+4. 关键写操作具备事务测试和 revision 冲突测试。
+5. 数据库约束能阻止角色被安排到两个位置。
+6. 求解器核心不依赖 FastAPI 和 SQLAlchemy，可独立运行测试。
+7. 求解器不硬编码三队和四人，能处理测试范围内的自定义副本。
+8. 标准 12 波数据能在配置时限内返回可用结果。
+9. 任意求解结果都通过角色唯一、玩家同波唯一和当前副本完整队伍属性测试。
+10. 人员池变化不影响已发布版本。
+11. 编辑锁超时后可以安全接管，旧锁令牌不能继续写入。
+12. 发布版本的长图、Excel 和文本内容一致。
+13. PostgreSQL 备份能够在全新实例中恢复。
+
+## 25. 配置默认值与待确认项
+
+以下默认值用于启动开发，不视为永久业务规则：
+
+| 参数 | 建议默认值 | 调整方式 |
+| --- | --- | --- |
+| C 伤害精度 | 2 位小数 | 配置和公式版本 |
+| 奶评分精度 | 1 位小数 | 公式版本 |
+| 2C2奶 奶评分 | 两奶求和 | 公式版本 |
+| 内置 12 人团本默认波数 | 12 | 副本版本 |
+| 波数安全上限 | 50 | 服务端配置 |
+| 单副本队伍数上限 | 8 | 服务端安全配置 |
+| 单队人数上限 | 12 | 服务端安全配置 |
+| 单波人数上限 | 64 | 服务端安全配置 |
+| 单排表总位置上限 | 1,200 | 服务端安全配置 |
+| 求解时限 | 10 秒 | 服务端配置/生成参数 |
+| 编辑锁租期 | 90 秒 | 服务端配置 |
+| 心跳间隔 | 30 秒 | 前后端配置 |
+| 导入文件上限 | 10 MB | 服务端配置 |
+| 导入行数上限 | 10,000 | 服务端配置 |
+
+性能 PoC 完成后，应优先复核波数安全上限和求解时限。
+
+## 26. 关键技术决策记录
+
+| 决策 | 选择 | 原因 |
+| --- | --- | --- |
+| 系统形态 | 模块化单体 | MVP 部署简单，模块边界仍清晰 |
+| 数据库 | PostgreSQL | 事务、JSONB、约束和版本能力适合排表系统 |
+| 副本规则 | 版本化配置 | 扩展人数和队伍时不修改历史排表，也不改求解器接口 |
+| 求解语言 | Python | OR-Tools 官方生态成熟，直接接入 FastAPI |
+| 求解方式 | 同步 + 时间上限 | 当前单编辑、低并发，避免过早引入队列 |
+| 并发控制 | 编辑锁 + revision | 防止覆盖，同时为后续协作保留演进路径 |
+| 历史模型 | 不可变 JSONB 快照 | 保证导出和历史展示稳定 |
+| 草稿模型 | 关系表 | 支持高频拖拽、校验和局部更新 |
+| 排表变量 | 角色×波次×配置队伍 | 比角色×位置更少，且不硬编码三支队伍 |
+| 数据删除 | 软停用 | 保留历史引用和导入匹配稳定性 |
+
+## 27. 技术参考
+
+- [React TypeScript](https://react.dev/learn/typescript)
+- [Vite](https://vite.dev/guide/)
+- [Ant Design](https://ant.design/components/overview/)
+- [dnd-kit](https://dndkit.com/react/quickstart/)
+- [FastAPI](https://fastapi.tiangolo.com/features/)
+- [OR-Tools Constraint Optimization](https://developers.google.com/optimization/cp)
+- [PostgreSQL Documentation](https://www.postgresql.org/docs/current/)
+- [SQLAlchemy 2 Documentation](https://docs.sqlalchemy.org/en/20/)
+- [Docker Compose](https://docs.docker.com/compose)
+- [Playwright Python Screenshots](https://playwright.dev/python/docs/screenshots)
