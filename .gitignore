@@ -1,0 +1,77 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+ENV/
+__pypackages__/
+.tox/
+.nox/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyright/
+.pytype/
+.ipynb_checkpoints/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+.eggs/
+*.egg-info/
+pip-wheel-metadata/
+build/
+dist/
+# Node.js and frontend tooling
+node_modules/
+.pnpm-store/
+.vite/
+dist-ssr/
+coverage/
+*.tsbuildinfo
+.eslintcache
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+# Tests and browser automation
+playwright-report/
+test-results/
+blob-report/
+.playwright/
+# Runtime and generated files
+*.log
+*.pid
+*.pid.lock
+*.sqlite
+*.sqlite3
+/tmp/
+/uploads/
+/exports/
+/backups/
+/postgres-data/
+*.dump
+*.backup
+~$*.xlsx
+# IDEs and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+# Operating systems
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
+
+.chatcode
