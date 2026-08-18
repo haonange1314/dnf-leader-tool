@@ -38,6 +38,12 @@ body {
   box-shadow: 0 28px 70px rgb(0 0 0 / 28%);
   border: 0;
 }
+.dev-login-hint {
+  margin: 4px 0 20px;
+}
+.dev-login-hint code {
+  white-space: nowrap;
+}
 .eyebrow {
   color: #d44a3a;
   font-size: 12px;

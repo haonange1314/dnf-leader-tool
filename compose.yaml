@@ -47,6 +47,10 @@ services:
     build:
       context: .
       dockerfile: infra/web/Dockerfile
+      args:
+        VITE_SHOW_DEV_LOGIN: ${VITE_SHOW_DEV_LOGIN:-true}
+        VITE_DEV_LOGIN_ACCOUNT: ${BOOTSTRAP_OWNER_USERNAME:-admin}
+        VITE_DEV_LOGIN_CODE: ${BOOTSTRAP_OWNER_PASSWORD:-change-me-now}
     ports:
       - "5173:80"
     depends_on:
