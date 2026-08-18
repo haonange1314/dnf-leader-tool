@@ -81,7 +81,9 @@ def _get_or_create_formula(
         formula = FormulaVersion(
             code=formula_definition.code,
             version=formula_definition.version,
-            config=formula_definition.model_dump(mode="json"),
+            config=formula_definition.model_dump(
+                mode="json", by_alias=True, exclude={"code", "version"}
+            ),
             is_active=True,
         )
         session.add(formula)
@@ -122,7 +124,9 @@ def _validate_existing_builtin(dungeon: Dungeon, definition: DungeonVersionDefin
             drift.append(field_name)
 
     formula = version.formula_version
-    expected_formula_config = definition.formula.model_dump(mode="json")
+    expected_formula_config = definition.formula.model_dump(
+        mode="json", by_alias=True, exclude={"code", "version"}
+    )
     if (
         formula.code != definition.formula.code
         or formula.version != definition.formula.version

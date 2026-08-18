@@ -27,7 +27,11 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
       SOLVER_TIME_LIMIT_SECONDS: ${SOLVER_TIME_LIMIT_SECONDS:-10}
       SOLVER_RANDOM_SEED: ${SOLVER_RANDOM_SEED:-42}
-    command: ["sh", "-c", ".venv/bin/alembic upgrade head && .venv/bin/python -m app.cli seed && .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-168}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      BOOTSTRAP_OWNER_USERNAME: ${BOOTSTRAP_OWNER_USERNAME:-admin}
+      BOOTSTRAP_OWNER_PASSWORD: ${BOOTSTRAP_OWNER_PASSWORD:-change-me-now}
+    command: ["sh", "-c", ".venv/bin/alembic upgrade head && .venv/bin/python -m app.cli seed && .venv/bin/python -m app.cli init-owner && .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000"]
     ports:
       - "8000:8000"
     depends_on:

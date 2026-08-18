@@ -2,7 +2,7 @@
 
 面向 DNF 国服 PC 端团长的人员管理与智能排表网站。项目通过版本化副本配置定义人数、队伍和分队规则，再结合玩家可用波次、角色强度及特殊角色标签自动生成多波排表。
 
-> 当前状态：阶段 0 工程和技术验证已完成。前后端工程、PostgreSQL 首迁移、内置副本种子和 OR-Tools PoC 均已建立。
+> 当前状态：阶段 1 管理闭环已建立。支持 Owner 登录、副本与不可变版本、玩家角色维护，以及 Excel 模板、预览和事务确认导入。
 
 ## 核心能力
 
@@ -100,6 +100,9 @@ make up
 - 存活探针：<http://localhost:8000/api/v1/health/live>
 - 就绪探针（检查 PostgreSQL）：<http://localhost:8000/api/v1/health/ready>
 
+本地示例账号由 `.env` 中的 `BOOTSTRAP_OWNER_USERNAME` 和
+`BOOTSTRAP_OWNER_PASSWORD` 幂等初始化。示例值为 `admin / change-me-now`，首次用于实际数据前请修改密码；公网环境不得使用示例凭据。
+
 常用命令：
 
 ```bash
@@ -109,6 +112,7 @@ make test-stack    # 用独立临时数据卷验证迁移、种子、健康检�
 make solver-poc    # 运行默认 12 波团本和自定义单队 4 人 CP-SAT PoC
 make migrate       # 本机对 DATABASE_URL 执行数据库迁移
 make seed          # 幂等写入内置 12 人团本及评分公式
+make init-owner    # 交互式创建首个 Owner（未使用环境变量时提示输入）
 make logs          # 跟踪三个容器日志
 make down          # 停止容器，保留 PostgreSQL 数据卷
 ```
@@ -130,7 +134,8 @@ cd backend && uv run uvicorn app.main:app --reload
 - [x] 初始化 React、FastAPI 和 Docker Compose 工程
 - [x] 建立首批副本 PostgreSQL Schema、迁移和种子
 - [x] 完成 OR-Tools 阶段 0 算法 PoC
-- [ ] 开发副本及人员管理
+- [x] 建立 Owner 登录和服务端会话
+- [x] 开发副本版本、人员管理及 Excel 导入基础闭环
 - [ ] 开发排表创建、校验和自动生成
 - [ ] 开发拖拽编辑器、版本和导出
 - [ ] 完成公网部署与备份方案

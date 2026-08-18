@@ -1,11 +1,18 @@
-import { render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
-import { App } from './App'
+import { render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { App } from "./App";
 
-describe('App', () => {
-  it('renders the engineering baseline', () => {
-    render(<App />)
-    expect(screen.getByRole('heading', { name: '工程基线已就绪' })).toBeInTheDocument()
-    expect(screen.getByText('/api/v1/health/live', { exact: false })).toBeInTheDocument()
-  })
-})
+describe("App", () => {
+  it("renders the login entry when there is no session", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("{}", { status: 401 }),
+    );
+    render(<App />);
+    expect(
+      await screen.findByRole("heading", { name: "团长工作台" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "进入工作台" }),
+    ).toBeInTheDocument();
+  });
+});

@@ -12,7 +12,9 @@ def _existing_builtin() -> tuple[Dungeon, DungeonVersion]:
     formula = FormulaVersion(
         code=definition.formula.code,
         version=definition.formula.version,
-        config=definition.formula.model_dump(mode="json"),
+        config=definition.formula.model_dump(
+            mode="json", by_alias=True, exclude={"code", "version"}
+        ),
         is_active=True,
     )
     version = DungeonVersion(

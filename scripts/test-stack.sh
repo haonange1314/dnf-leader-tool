@@ -41,7 +41,7 @@ database_state="$(
         "'
 )"
 
-if [ "$database_state" != "20260818_0001|1|1|3|12" ]; then
+if [ "$database_state" != "20260818_0002|1|1|3|12" ]; then
     echo "unexpected database state: $database_state" >&2
     exit 1
 fi
@@ -55,4 +55,13 @@ case "$proxy_response" in
         ;;
 esac
 
-echo "isolated stack check passed: migration, seed, database schema, health and proxy"
+compose exec -T api .venv/bin/python tests/stack_smoke.py
+
+if compose exec -T db psql -v ON_ERROR_STOP=1 -U dnf -d dnf_leader \
+    -c "UPDATE dungeon_versions SET default_wave_count = 11 WHERE status = 'PUBLISHED'" \
+    >/dev/null 2>&1; then
+    echo "published dungeon version unexpectedly allowed mutation" >&2
+    exit 1
+fi
+
+echo "isolated stack check passed: migration, seed, auth, management APIs, health and proxy"

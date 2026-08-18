@@ -1,4 +1,4 @@
-.PHONY: bootstrap dev up down logs migrate seed solver-poc test test-backend test-frontend test-stack check
+.PHONY: bootstrap dev up down logs migrate seed init-owner solver-poc test test-backend test-frontend test-stack check
 
 export UV_CACHE_DIR ?= $(CURDIR)/.uv-cache
 
@@ -24,6 +24,9 @@ migrate:
 
 seed:
 	cd backend && uv run python -m app.cli seed
+
+init-owner:
+	cd backend && uv run python -m app.cli init-owner
 
 solver-poc:
 	cd backend && uv run python -m app.solver.poc
