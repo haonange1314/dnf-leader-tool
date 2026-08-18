@@ -2,6 +2,14 @@ from app.models.dungeon import Dungeon, DungeonTeamTemplate, DungeonVersion, For
 from app.models.identity import User, UserSession
 from app.models.imports import ImportBatch, ImportRow
 from app.models.personnel import Character, Player
+from app.models.schedule import (
+    Schedule,
+    ScheduleParticipant,
+    SchedulePlayerPreference,
+    Team,
+    TeamSlot,
+    Wave,
+)
 
 __all__ = [
     "Character",
@@ -12,6 +20,12 @@ __all__ = [
     "ImportBatch",
     "ImportRow",
     "Player",
+    "Schedule",
+    "ScheduleParticipant",
+    "SchedulePlayerPreference",
+    "Team",
+    "TeamSlot",
     "User",
     "UserSession",
+    "Wave",
 ]
