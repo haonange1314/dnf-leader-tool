@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    DateTime,
     ForeignKey,
     Index,
     Integer,
@@ -15,6 +17,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    func,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -61,6 +64,9 @@ class Schedule(TimestampMixin, Base):
     )
     waves: Mapped[list[Wave]] = relationship(
         back_populates="schedule", cascade="all, delete-orphan", order_by="Wave.wave_no"
+    )
+    generation_runs: Mapped[list[GenerationRun]] = relationship(
+        back_populates="schedule", cascade="all, delete-orphan"
     )
 
 
@@ -127,6 +133,11 @@ class Wave(Base):
     teams: Mapped[list[Team]] = relationship(
         back_populates="wave", cascade="all, delete-orphan", order_by="Team.display_order_snapshot"
     )
+    special_assignments: Mapped[list[WaveSpecialAssignment]] = relationship(
+        back_populates="wave",
+        cascade="all, delete-orphan",
+        order_by="WaveSpecialAssignment.rule_code",
+    )
 
 
 class Team(Base):
@@ -183,3 +194,67 @@ class TeamSlot(Base):
     )
     is_locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     team: Mapped[Team] = relationship(back_populates="slots")
+
+
+class WaveSpecialAssignment(Base):
+    __tablename__ = "wave_special_assignments"
+    __table_args__ = (
+        UniqueConstraint(
+            "wave_id",
+            "rule_code",
+            "participant_id",
+            name="uq_wave_special_assignments_wave_rule_participant",
+        ),
+        Index("ix_wave_special_assignments_schedule_id_wave_id", "schedule_id", "wave_id"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    schedule_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("schedules.id", ondelete="CASCADE"), nullable=False
+    )
+    wave_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("waves.id", ondelete="CASCADE"), nullable=False
+    )
+    rule_code: Mapped[str] = mapped_column(String(40), nullable=False)
+    participant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("schedule_participants.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    target_team_key_snapshot: Mapped[str] = mapped_column(String(40), nullable=False)
+    wave: Mapped[Wave] = relationship(back_populates="special_assignments")
+
+
+class GenerationRun(Base):
+    __tablename__ = "generation_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('RUNNING','SUCCEEDED','PARTIAL','FAILED','STALE')",
+            name="valid_status",
+        ),
+        Index("ix_generation_runs_schedule_id_created_at", "schedule_id", "created_at"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    schedule_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("schedules.id", ondelete="CASCADE"), nullable=False
+    )
+    input_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    result_revision: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    solver_version: Mapped[str] = mapped_column(String(40), nullable=False)
+    formula_version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("formula_versions.id", ondelete="RESTRICT"), nullable=False
+    )
+    random_seed: Mapped[int] = mapped_column(Integer, nullable=False)
+    time_limit_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    objective_summary: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    diagnostics: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    created_by: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    schedule: Mapped[Schedule] = relationship(back_populates="generation_runs")

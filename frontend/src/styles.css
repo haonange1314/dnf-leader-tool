@@ -251,6 +251,14 @@ body {
   align-items: center;
   gap: 8px;
 }
+.generation-summary-tags {
+  margin-bottom: 12px;
+}
+.generation-diagnostics {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
 @media (max-width: 760px) {
   .app-header {
     padding: 0 16px;

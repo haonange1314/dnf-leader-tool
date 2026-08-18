@@ -192,6 +192,15 @@ class SlotView(BaseModel):
     is_locked: bool
 
 
+class SpecialAssignmentView(BaseModel):
+    model_config = CFG
+
+    id: uuid.UUID
+    rule_code: str
+    participant_id: uuid.UUID
+    target_team_key_snapshot: str
+
+
 class TeamView(BaseModel):
     model_config = CFG
     id: uuid.UUID
@@ -215,6 +224,7 @@ class WaveView(BaseModel):
     damage_total: Any
     buffer_total: Any
     teams: list[TeamView]
+    special_assignments: list[SpecialAssignmentView]
 
 
 class ParticipantView(BaseModel):
@@ -272,3 +282,44 @@ class ValidationRequest(BaseModel):
     model_config = CFG
 
     base_revision: int = Field(gt=0)
+
+
+class GenerationRequest(BaseModel):
+    model_config = CFG
+
+    base_revision: int = Field(gt=0)
+    preserve_locks: bool = True
+    random_seed: int | None = Field(default=None, ge=0, le=2_147_483_647)
+    time_limit_seconds: int | None = Field(default=None, ge=1, le=60)
+
+
+class GenerationRunView(BaseModel):
+    model_config = CFG
+
+    id: uuid.UUID
+    schedule_id: uuid.UUID
+    input_revision: int
+    result_revision: int | None
+    status: str
+    input_hash: str
+    solver_version: str
+    formula_version_id: uuid.UUID
+    random_seed: int
+    time_limit_seconds: int
+    duration_ms: int | None
+    objective_summary: dict[str, Any] | None
+    diagnostics: dict[str, Any] | None
+    created_at: datetime
+    finished_at: datetime | None
+
+
+class GenerationRunList(BaseModel):
+    items: list[GenerationRunView]
+    total: int
+
+
+class GenerationResponse(BaseModel):
+    model_config = CFG
+
+    run: GenerationRunView
+    schedule: ScheduleDetail

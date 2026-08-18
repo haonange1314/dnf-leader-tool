@@ -1,6 +1,7 @@
 import {
   CheckCircleOutlined,
   CopyOutlined,
+  PlayCircleOutlined,
   PlusOutlined,
   ReloadOutlined,
   SettingOutlined,
@@ -28,6 +29,8 @@ import { useEffect, useMemo, useState } from "react";
 import {
   api,
   type Dungeon,
+  type GenerationResponse,
+  type GenerationRun,
   type ScheduleCopyPreview,
   type ScheduleDetail,
   type ScheduleParticipant,
@@ -54,6 +57,9 @@ const ISSUE_LABELS: Record<string, string> = {
   FULL_COMPOSITION_INFEASIBLE: "当前角色类型无法组成全部完整队伍",
   UNUSABLE_ROLE_SURPLUS: "部分角色超出合法组成可容纳数量",
   STRENGTH_ORDER_CHECK_ON_GENERATION: "强度顺序将在生成时校验",
+  MISSING_WAVE_CORE: "完整波次缺少核心角色",
+  DAMAGE_ORDER_VIOLATION: "C 强度顺序未满足",
+  BUFFER_ORDER_VIOLATION: "奶强度顺序未满足",
 };
 
 export function SchedulePage({ onError, onSuccess }: Props) {
@@ -72,6 +78,12 @@ export function SchedulePage({ onError, onSuccess }: Props) {
   const [copyWaveCount, setCopyWaveCount] = useState(1);
   const [copyPreview, setCopyPreview] = useState<ScheduleCopyPreview | null>(null);
   const [copyPending, setCopyPending] = useState(false);
+  const [generationOpen, setGenerationOpen] = useState(false);
+  const [generationPending, setGenerationPending] = useState(false);
+  const [generationPreserveLocks, setGenerationPreserveLocks] = useState(true);
+  const [generationTimeLimit, setGenerationTimeLimit] = useState(10);
+  const [generationSeed, setGenerationSeed] = useState(42);
+  const [latestGeneration, setLatestGeneration] = useState<GenerationRun | null>(null);
   const [waveCount, setWaveCount] = useState(1);
   const [createForm] = Form.useForm();
 
@@ -127,11 +139,17 @@ export function SchedulePage({ onError, onSuccess }: Props) {
       next.participants.filter((participant) => participant.isSelected).map((item) => item.id),
     );
     setValidation(null);
+    setLatestGeneration(null);
   };
 
   const openSchedule = async (scheduleId: string) => {
     try {
-      applyDetail(await api<ScheduleDetail>(`/schedules/${scheduleId}`));
+      const [schedule, runs] = await Promise.all([
+        api<ScheduleDetail>(`/schedules/${scheduleId}`),
+        api<{ items: GenerationRun[] }>(`/schedules/${scheduleId}/generation-runs`),
+      ]);
+      applyDetail(schedule);
+      setLatestGeneration(runs.items[0] ?? null);
     } catch (error) {
       onError(error);
     }
@@ -300,6 +318,35 @@ export function SchedulePage({ onError, onSuccess }: Props) {
     }
   };
 
+  const generate = async () => {
+    if (!detail) return;
+    setGenerationPending(true);
+    try {
+      const response = await api<GenerationResponse>(`/schedules/${detail.id}/generate`, {
+        method: "POST",
+        body: JSON.stringify({
+          baseRevision: detail.revision,
+          preserveLocks: generationPreserveLocks,
+          randomSeed: generationSeed,
+          timeLimitSeconds: generationTimeLimit,
+        }),
+      });
+      applyDetail(response.schedule);
+      setLatestGeneration(response.run);
+      setGenerationOpen(false);
+      await loadList();
+      onSuccess(
+        response.run.status === "PARTIAL"
+          ? "已生成部分排表，请查看未分配原因"
+          : "自动排表已生成",
+      );
+    } catch (error) {
+      onError(error);
+    } finally {
+      setGenerationPending(false);
+    }
+  };
+
   const previewSync = async () => {
     if (!detail) return;
     try {
@@ -437,7 +484,14 @@ export function SchedulePage({ onError, onSuccess }: Props) {
     <section>
       <div className="section-heading">
         <div>
-          <Button type="link" className="schedule-back" onClick={() => setDetail(null)}>
+          <Button
+            type="link"
+            className="schedule-back"
+            onClick={() => {
+              setDetail(null);
+              setLatestGeneration(null);
+            }}
+          >
             ← 返回排表列表
           </Button>
           <Typography.Title level={2}>{detail.name}</Typography.Title>
@@ -476,6 +530,18 @@ export function SchedulePage({ onError, onSuccess }: Props) {
             onClick={() => void validate()}
           >
             运行预检查
+          </Button>
+          <Button
+            type="primary"
+            icon={<PlayCircleOutlined />}
+            disabled={hasUnsavedChanges || detail.status === "ARCHIVED"}
+            onClick={() => setGenerationOpen(true)}
+          >
+            {detail.waves.some((wave) =>
+              wave.teams.some((team) => team.slots.some((slot) => slot.participantId)),
+            )
+              ? "重新生成"
+              : "自动排表"}
           </Button>
         </Space>
       </div>
@@ -536,6 +602,10 @@ export function SchedulePage({ onError, onSuccess }: Props) {
         </Card>
       ) : null}
 
+      {latestGeneration ? (
+        <GenerationSummary run={latestGeneration} participants={detail.participants} />
+      ) : null}
+
       <Card
         title="参团角色"
         className="schedule-panel"
@@ -554,13 +624,19 @@ export function SchedulePage({ onError, onSuccess }: Props) {
 
       <div className="wave-list">
         {detail.waves.map((wave) => (
-          <Card title={`第 ${wave.waveNo} 波`} key={wave.id} className="schedule-panel wave-card">
+          <Card
+            title={`第 ${wave.waveNo} 波`}
+            extra={`C ${wave.damageTotal} 亿 · 奶 ${wave.bufferTotal}`}
+            key={wave.id}
+            className="schedule-panel wave-card"
+          >
             <Row gutter={[12, 12]}>
               {wave.teams.map((team) => (
                 <Col xs={24} xl={Math.max(6, Math.floor(24 / wave.teams.length))} key={team.id}>
                   <Card
                     size="small"
-                    title={team.displayNameSnapshot}
+                    title={`${team.displayNameSnapshot} · ${team.compositionCode}`}
+                    extra={`C ${team.damageTotal} · 奶 ${team.bufferTotal}`}
                     className="team-card"
                     style={{ borderTopColor: team.displayColorSnapshot }}
                   >
@@ -573,7 +649,14 @@ export function SchedulePage({ onError, onSuccess }: Props) {
                           <div className="team-slot" key={slot.id}>
                             <Typography.Text type={participant ? undefined : "secondary"}>
                               {participant ? (
-                                <ParticipantLabel participant={participant} compact />
+                                <ParticipantLabel
+                                  participant={participant}
+                                  compact
+                                  core={wave.specialAssignments.some(
+                                    (assignment) =>
+                                      assignment.participantId === participant.id,
+                                  )}
+                                />
                               ) : (
                                 `位置 ${slot.slotNo} · 待排`
                               )}
@@ -589,6 +672,50 @@ export function SchedulePage({ onError, onSuccess }: Props) {
           </Card>
         ))}
       </div>
+
+      <Modal
+        title="自动排表"
+        open={generationOpen}
+        onCancel={() => setGenerationOpen(false)}
+        onOk={() => void generate()}
+        okText="开始生成"
+        confirmLoading={generationPending}
+      >
+        <Typography.Paragraph type="secondary">
+          求解器会优先安排更多角色、填满前面波次并优化队伍组成、核心秘宝、跨波平衡和强度顺序。
+        </Typography.Paragraph>
+        <Space orientation="vertical" className="full-width" size="middle">
+          <Space>
+            <Switch
+              checked={generationPreserveLocks}
+              onChange={setGenerationPreserveLocks}
+            />
+            保留当前锁定安排
+          </Space>
+          <Row gutter={12} className="full-width">
+            <Col span={12}>
+              <Typography.Text type="secondary">求解时限（秒）</Typography.Text>
+              <InputNumber
+                min={1}
+                max={60}
+                className="full-width"
+                value={generationTimeLimit}
+                onChange={(value) => setGenerationTimeLimit(value ?? 10)}
+              />
+            </Col>
+            <Col span={12}>
+              <Typography.Text type="secondary">随机种子</Typography.Text>
+              <InputNumber
+                min={0}
+                max={2_147_483_647}
+                className="full-width"
+                value={generationSeed}
+                onChange={(value) => setGenerationSeed(value ?? 42)}
+              />
+            </Col>
+          </Row>
+        </Space>
+      </Modal>
 
       <Modal
         title="复制排表"
@@ -805,9 +932,11 @@ export function SchedulePage({ onError, onSuccess }: Props) {
 function ParticipantLabel({
   participant,
   compact = false,
+  core = false,
 }: {
   participant: ScheduleParticipant;
   compact?: boolean;
+  core?: boolean;
 }) {
   return (
     <Space size={4} wrap={!compact}>
@@ -816,15 +945,124 @@ function ParticipantLabel({
       </Tag>
       <span>{participant.playerNameSnapshot} · {participant.characterNameSnapshot}</span>
       {participant.isTreasureSnapshot ? <Tag color="gold">秘宝</Tag> : null}
+      {core ? <Tag color="gold">本波核心</Tag> : null}
       {participant.unassignedReason ? (
         <Tag color="warning">
-          {participant.unassignedReason.message === "角色或玩家已停用"
-            ? "档案已停用，待处理"
-            : "待处理"}
+          {describeUnassignedReason(participant.unassignedReason)}
         </Tag>
       ) : null}
     </Space>
   );
+}
+
+function GenerationSummary({
+  run,
+  participants,
+}: {
+  run: GenerationRun;
+  participants: ScheduleParticipant[];
+}) {
+  const summary = run.objectiveSummary;
+  const participantById = new Map(participants.map((participant) => [participant.id, participant]));
+  const unassigned = run.diagnostics?.unassigned ?? [];
+  const issues = run.diagnostics?.issues ?? [];
+  return (
+    <Card title="最近一次自动排表" className="schedule-panel">
+      <Space wrap className="generation-summary-tags">
+        <Tag color={run.status === "SUCCEEDED" ? "green" : "orange"}>{run.status}</Tag>
+        <Tag>耗时 {run.durationMs ?? 0} ms</Tag>
+        <Tag>种子 {run.randomSeed}</Tag>
+        {summary ? (
+          <>
+            <Tag color="blue">
+              已安排 {summary.assignedCount}/{summary.participantCount}
+            </Tag>
+            <Tag color="cyan">完整波次 {summary.completeWaveCount}</Tag>
+            <Tag color="purple">完整队伍 {summary.completeTeamCount}</Tag>
+            <Tag color="gold">核心满足 {summary.specialRuleSatisfiedCount}</Tag>
+            <Tag color={summary.strengthOrderViolationCount ? "orange" : "green"}>
+              强度顺序冲突 {summary.strengthOrderViolationCount}
+            </Tag>
+          </>
+        ) : null}
+      </Space>
+      {unassigned.length ? (
+        <div className="generation-diagnostics">
+          <Typography.Text strong>未分配角色</Typography.Text>
+          {unassigned.map((item) => {
+            const participant = participantById.get(item.participantId);
+            return (
+              <Alert
+                key={item.participantId}
+                type="warning"
+                showIcon
+                title={
+                  participant
+                    ? `${participant.playerNameSnapshot} · ${participant.characterNameSnapshot}`
+                    : item.participantId
+                }
+                description={describeGenerationDiagnostic(item.code, item.messageParams)}
+              />
+            );
+          })}
+        </div>
+      ) : null}
+      {issues.length ? (
+        <div className="generation-diagnostics">
+          <Typography.Text strong>优化冲突</Typography.Text>
+          {issues.map((issue, index) => (
+            <Alert
+              key={`${issue.code}-${index}`}
+              type={issue.severity === "ERROR" ? "error" : "warning"}
+              showIcon
+              title={ISSUE_LABELS[issue.code] ?? issue.code}
+              description={describeGenerationDiagnostic(issue.code, issue.messageParams)}
+            />
+          ))}
+        </div>
+      ) : null}
+    </Card>
+  );
+}
+
+function describeUnassignedReason(reason: Record<string, unknown>): string {
+  if (reason.message === "角色或玩家已停用" || reason.code === "SOURCE_INACTIVE") {
+    return "档案已停用，待处理";
+  }
+  const labels: Record<string, string> = {
+    UNASSIGNED_NO_AVAILABLE_WAVE: "无可用波次",
+    UNASSIGNED_PLAYER_CONFLICT: "玩家波次冲突",
+    UNASSIGNED_ROLE_COMPOSITION: "角色类型无法组成合法队伍",
+    UNASSIGNED_CAPACITY: "排表容量不足",
+  };
+  return labels[String(reason.code)] ?? "待处理";
+}
+
+function describeGenerationDiagnostic(
+  code: string,
+  params: Record<string, unknown>,
+): string {
+  switch (code) {
+    case "UNASSIGNED_NO_AVAILABLE_WAVE":
+      return "该玩家没有允许参加的波次。";
+    case "UNASSIGNED_PLAYER_CONFLICT":
+      return params.maxWaveCount
+        ? `该玩家已达到最多 ${params.maxWaveCount} 波的限制。`
+        : "该玩家在所有可用波次都已有其他角色。";
+    case "UNASSIGNED_CAPACITY":
+      return `排表容量 ${params.capacity} 已用完。`;
+    case "UNASSIGNED_ROLE_COMPOSITION":
+      return `剩余 ${params.roleType === "DAMAGE" ? "C" : "奶"} 无法组成合法完整队伍。`;
+    case "MISSING_WAVE_CORE":
+      return `第 ${params.waveNo} 波缺少规则 ${params.ruleCode} 要求的核心角色。`;
+    case "DAMAGE_ORDER_VIOLATION":
+    case "BUFFER_ORDER_VIOLATION":
+      return `第 ${params.waveNo} 波 ${params.strongerTeamKey} 弱于 ${params.weakerTeamKey}。`;
+    default:
+      return Object.entries(params)
+        .map(([key, value]) => `${key}: ${String(value)}`)
+        .join("；");
+  }
 }
 
 function describeIssue(issue: ValidationIssue): string {
