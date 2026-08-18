@@ -52,11 +52,19 @@ class ScheduleUpdate(BaseModel):
         return self
 
 
-class ScheduleCopy(BaseModel):
+class ScheduleCopyPreviewRequest(BaseModel):
     model_config = CFG
 
     base_revision: int = Field(gt=0)
+    target_dungeon_version_id: uuid.UUID | None = None
+    wave_count: int | None = Field(default=None, gt=0, le=MAX_WAVE_COUNT)
+
+
+class ScheduleCopy(ScheduleCopyPreviewRequest):
     name: str = Field(min_length=1, max_length=160)
+    migration_fingerprint: str | None = Field(
+        default=None, min_length=64, max_length=64, pattern=r"^[0-9a-f]+$"
+    )
 
     @field_validator("name")
     @classmethod
@@ -65,6 +73,27 @@ class ScheduleCopy(BaseModel):
         if not normalized:
             raise ValueError("排表名称不能为空")
         return normalized
+
+
+class ScheduleCopyChange(BaseModel):
+    model_config = CFG
+
+    code: str
+    description: str
+    before: Any | None = None
+    after: Any | None = None
+
+
+class ScheduleCopyPreview(BaseModel):
+    model_config = CFG
+
+    revision: int
+    source_dungeon_version_id: uuid.UUID
+    target_dungeon_version_id: uuid.UUID
+    wave_count: int
+    migration_required: bool
+    migration_fingerprint: str
+    changes: list[ScheduleCopyChange]
 
 
 class ScheduleParticipantsUpdate(BaseModel):
@@ -237,3 +266,9 @@ class ValidationReport(BaseModel):
     revision: int
     issues: list[IssueView]
     summary: dict[str, int]
+
+
+class ValidationRequest(BaseModel):
+    model_config = CFG
+
+    base_revision: int = Field(gt=0)

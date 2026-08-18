@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.domain.dungeon import builtin_raid_12_definition
-from app.domain.schedule import composition_role_requirements
+from app.domain.schedule import composition_feasibility, composition_role_requirements
 from app.schemas.dungeon import CompositionRule, CompositionRules, RoleType
 from app.schemas.schedule import (
     PlayerPreferenceInput,
@@ -59,6 +59,36 @@ def test_custom_two_damage_two_buffer_composition_uses_two_buffer_baseline() -> 
 
     assert requirements.ideal_damage == 2
     assert requirements.base_buffers == 2
+
+
+def test_builtin_fallback_composition_can_fill_with_six_damage_and_six_buffers() -> None:
+    definition = builtin_raid_12_definition()
+
+    result = composition_feasibility(
+        definition.composition_rules,
+        (team.team_key for team in definition.teams),
+        available_damage=6,
+        available_buffers=6,
+    )
+
+    assert result.can_fill_all_teams is True
+    assert result.best_damage_usage == 6
+    assert result.best_buffer_usage == 6
+    assert result.maximum_damage == 9
+
+
+def test_builtin_full_composition_reports_role_infeasibility() -> None:
+    definition = builtin_raid_12_definition()
+
+    result = composition_feasibility(
+        definition.composition_rules,
+        (team.team_key for team in definition.teams),
+        available_damage=5,
+        available_buffers=7,
+    )
+
+    assert result.can_fill_all_teams is False
+    assert result.minimum_damage == 6
 
 
 def test_schedule_name_rejects_whitespace_only_input() -> None:

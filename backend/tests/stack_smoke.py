@@ -134,8 +134,10 @@ assert all(
     for participant in schedule["participants"]
 )
 assert len(schedule["participants"]) == 2
-report = request(f"/schedules/{schedule['id']}/validate", "POST")
-assert isinstance(report, dict) and report["summary"]["info"] == 1
+report = request(
+    f"/schedules/{schedule['id']}/validate", "POST", {"baseRevision": 1}
+)
+assert isinstance(report, dict) and report["revision"] == 1
 schedule = request(
     f"/schedules/{schedule['id']}",
     "PATCH",
@@ -208,15 +210,40 @@ schedule = request(
 )
 assert isinstance(schedule, dict) and schedule["revision"] == 7
 assert len(schedule["participants"]) == 3
-workflow_report = request(f"/schedules/{schedule['id']}/validate", "POST")
+workflow_report = request(
+    f"/schedules/{schedule['id']}/validate", "POST", {"baseRevision": 7}
+)
 assert isinstance(workflow_report, dict)
 assert "PLAYER_WAVE_CAPACITY_INSUFFICIENT" in {
     issue["code"] for issue in workflow_report["issues"]
 }
+stale_validation = request_error(
+    f"/schedules/{schedule['id']}/validate",
+    "POST",
+    {"baseRevision": 6},
+    expected_status=409,
+)
+assert stale_validation["error"]["code"] == "SCHEDULE_REVISION_CONFLICT"
+copy_preview = request(
+    f"/schedules/{schedule['id']}/copy/preview",
+    "POST",
+    {
+        "baseRevision": 7,
+        "targetDungeonVersionId": source_version["id"],
+        "waveCount": 2,
+    },
+)
+assert isinstance(copy_preview, dict) and copy_preview["changes"] == []
 copied_schedule = request(
     f"/schedules/{schedule['id']}/copy",
     "POST",
-    {"baseRevision": 7, "name": "阶段2复制验收"},
+    {
+        "baseRevision": 7,
+        "name": "阶段2复制验收",
+        "targetDungeonVersionId": source_version["id"],
+        "waveCount": 2,
+        "migrationFingerprint": copy_preview["migrationFingerprint"],
+    },
 )
 assert isinstance(copied_schedule, dict)
 assert copied_schedule["revision"] == 1 and copied_schedule["status"] == "DRAFT"
@@ -272,13 +299,56 @@ draft = request(f"/dungeons/{dungeon['id']}/versions", "POST", damage_only_paylo
 assert isinstance(draft, dict) and draft["status"] == "DRAFT"
 published = request(f"/dungeon-versions/{draft['id']}/publish", "POST")
 assert isinstance(published, dict) and published["status"] == "PUBLISHED"
+migration_preview = request(
+    f"/schedules/{schedule['id']}/copy/preview",
+    "POST",
+    {
+        "baseRevision": 7,
+        "targetDungeonVersionId": published["id"],
+        "waveCount": 2,
+    },
+)
+assert isinstance(migration_preview, dict) and migration_preview["migrationRequired"] is True
+assert "COMPOSITION_RULES_CHANGED" in {
+    change["code"] for change in migration_preview["changes"]
+}
+preview_required = request_error(
+    f"/schedules/{schedule['id']}/copy",
+    "POST",
+    {
+        "baseRevision": 7,
+        "name": "不应创建的迁移副本",
+        "targetDungeonVersionId": published["id"],
+        "waveCount": 2,
+    },
+    expected_status=409,
+)
+assert preview_required["error"]["code"] == "COPY_PREVIEW_REQUIRED"
+migrated_schedule = request(
+    f"/schedules/{schedule['id']}/copy",
+    "POST",
+    {
+        "baseRevision": 7,
+        "name": "阶段2迁移复制验收",
+        "targetDungeonVersionId": published["id"],
+        "waveCount": 2,
+        "migrationFingerprint": migration_preview["migrationFingerprint"],
+    },
+)
+assert isinstance(migrated_schedule, dict)
+assert migrated_schedule["dungeonVersionId"] == published["id"]
+assert len(migrated_schedule["waves"]) == 2
 damage_only_schedule = request(
     "/schedules",
     "POST",
     {"name": "纯 C 规则验收", "dungeonVersionId": published["id"], "waveCount": 1},
 )
 assert isinstance(damage_only_schedule, dict)
-damage_only_report = request(f"/schedules/{damage_only_schedule['id']}/validate", "POST")
+damage_only_report = request(
+    f"/schedules/{damage_only_schedule['id']}/validate",
+    "POST",
+    {"baseRevision": 1},
+)
 assert isinstance(damage_only_report, dict)
 damage_only_issues = {
     issue["code"]: issue["message_params"] for issue in damage_only_report["issues"]

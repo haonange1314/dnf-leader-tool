@@ -8,7 +8,11 @@ from sqlalchemy.orm import selectinload
 
 from app.api.dependencies import CurrentUser, DbSession
 from app.core.errors import AppError
-from app.domain.schedule import MAX_SCHEDULE_POSITIONS, composition_role_requirements
+from app.domain.schedule import (
+    MAX_SCHEDULE_POSITIONS,
+    composition_feasibility,
+    composition_role_requirements,
+)
 from app.models.dungeon import DungeonVersion
 from app.models.personnel import Character, Player
 from app.models.schedule import (
@@ -19,10 +23,13 @@ from app.models.schedule import (
     TeamSlot,
     Wave,
 )
-from app.schemas.dungeon import CompositionRules, SpecialRoleRules
+from app.schemas.dungeon import CompositionRules, SpecialRoleRules, StrengthOrderRules
 from app.schemas.schedule import (
     IssueView,
     ScheduleCopy,
+    ScheduleCopyChange,
+    ScheduleCopyPreview,
+    ScheduleCopyPreviewRequest,
     ScheduleCreate,
     ScheduleDetail,
     ScheduleList,
@@ -34,13 +41,14 @@ from app.schemas.schedule import (
     ScheduleSyncPreview,
     ScheduleUpdate,
     ValidationReport,
+    ValidationRequest,
 )
 
 router = APIRouter()
 
 
-def _load(db: DbSession, schedule_id: uuid.UUID) -> Schedule:
-    item = db.scalar(
+def _load(db: DbSession, schedule_id: uuid.UUID, *, for_update: bool = False) -> Schedule:
+    statement = (
         select(Schedule)
         .where(Schedule.id == schedule_id)
         .options(
@@ -49,9 +57,154 @@ def _load(db: DbSession, schedule_id: uuid.UUID) -> Schedule:
             selectinload(Schedule.waves).selectinload(Wave.teams).selectinload(Team.slots),
         )
     )
+    if for_update:
+        statement = statement.with_for_update()
+    item = db.scalar(statement)
     if item is None:
         raise AppError(404, "SCHEDULE_NOT_FOUND", "排表不存在")
     return item
+
+
+def _copy_preview(
+    db: DbSession,
+    source: Schedule,
+    payload: ScheduleCopyPreviewRequest,
+) -> tuple[DungeonVersion, ScheduleCopyPreview]:
+    source_version = db.scalar(
+        select(DungeonVersion)
+        .where(DungeonVersion.id == source.dungeon_version_id)
+        .options(selectinload(DungeonVersion.teams))
+    )
+    if source_version is None:
+        raise AppError(409, "DUNGEON_VERSION_MISSING", "源排表引用的副本版本不存在")
+    target_id = payload.target_dungeon_version_id or source.dungeon_version_id
+    target_version = db.scalar(
+        select(DungeonVersion)
+        .where(DungeonVersion.id == target_id)
+        .options(selectinload(DungeonVersion.teams))
+    )
+    if target_version is None:
+        raise AppError(422, "COPY_TARGET_VERSION_NOT_FOUND", "目标副本版本不存在")
+    if target_version.dungeon_id != source_version.dungeon_id:
+        raise AppError(422, "COPY_TARGET_DUNGEON_MISMATCH", "只能迁移到同一副本的版本")
+    if target_version.id != source_version.id and target_version.status != "PUBLISHED":
+        raise AppError(422, "COPY_TARGET_VERSION_NOT_PUBLISHED", "目标副本版本必须已发布")
+
+    wave_count = payload.wave_count or source.wave_count
+    if wave_count < target_version.min_wave_count or (
+        target_version.max_wave_count is not None
+        and wave_count > target_version.max_wave_count
+    ):
+        raise AppError(422, "WAVE_COUNT_OUT_OF_RANGE", "波数超出目标副本版本允许范围")
+    target_positions_per_wave = sum(team.member_count for team in target_version.teams)
+    if wave_count * target_positions_per_wave > MAX_SCHEDULE_POSITIONS:
+        raise AppError(
+            422,
+            "SCHEDULE_POSITION_LIMIT_EXCEEDED",
+            f"排表总位置数不能超过 {MAX_SCHEDULE_POSITIONS}",
+        )
+
+    source_teams = source.waves[0].teams
+    source_shape = [
+        {
+            "teamKey": team.team_key,
+            "displayName": team.display_name_snapshot,
+            "displayColor": team.display_color_snapshot,
+            "displayOrder": team.display_order_snapshot,
+            "memberCount": team.member_count_snapshot,
+            "strengthRank": team.strength_rank_snapshot,
+        }
+        for team in source_teams
+    ]
+    target_shape = [
+        {
+            "teamKey": team.team_key,
+            "displayName": team.display_name,
+            "displayColor": team.display_color,
+            "displayOrder": team.display_order,
+            "memberCount": team.member_count,
+            "strengthRank": team.strength_rank,
+        }
+        for team in target_version.teams
+    ]
+    changes: list[ScheduleCopyChange] = []
+    if target_version.id != source_version.id:
+        changes.append(
+            ScheduleCopyChange(
+                code="DUNGEON_VERSION_CHANGED",
+                description="副本版本将发生变化",
+                before=source_version.version_no,
+                after=target_version.version_no,
+            )
+        )
+    if source.wave_count != wave_count:
+        changes.append(
+            ScheduleCopyChange(
+                code="WAVE_COUNT_CHANGED",
+                description="排表波数将发生变化",
+                before=source.wave_count,
+                after=wave_count,
+            )
+        )
+    if source_shape != target_shape:
+        changes.append(
+            ScheduleCopyChange(
+                code="TEAM_STRUCTURE_CHANGED",
+                description="队伍数量、容量或展示配置将按目标版本重建",
+                before=source_shape,
+                after=target_shape,
+            )
+        )
+    rule_fields = {
+        "COMPOSITION_RULES_CHANGED": ("组成规则将发生变化", "composition_rules"),
+        "SPECIAL_ROLE_RULES_CHANGED": ("特殊角色规则将发生变化", "special_role_rules"),
+        "STRENGTH_ORDER_RULES_CHANGED": ("队伍强度顺序将发生变化", "strength_order_rules"),
+        "OPTIMIZATION_RULES_CHANGED": ("跨波优化规则将发生变化", "optimization_rules"),
+        "MISSING_SLOT_POLICY_CHANGED": ("空位策略将发生变化", "missing_slot_policy"),
+    }
+    for code, (description, field) in rule_fields.items():
+        before = getattr(source_version, field)
+        after = getattr(target_version, field)
+        if before != after:
+            changes.append(
+                ScheduleCopyChange(
+                    code=code,
+                    description=description,
+                    before=before,
+                    after=after,
+                )
+            )
+    if source.formula_version_id != target_version.formula_version_id:
+        changes.append(
+            ScheduleCopyChange(
+                code="FORMULA_VERSION_CHANGED",
+                description="评分公式版本将发生变化",
+                before=str(source.formula_version_id),
+                after=str(target_version.formula_version_id),
+            )
+        )
+    fingerprint_state = {
+        "sourceScheduleId": str(source.id),
+        "sourceRevision": source.revision,
+        "sourceDungeonVersionId": str(source_version.id),
+        "targetDungeonVersionId": str(target_version.id),
+        "waveCount": wave_count,
+        "changes": [change.model_dump(mode="json", by_alias=True) for change in changes],
+    }
+    fingerprint = hashlib.sha256(
+        json.dumps(
+            fingerprint_state, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+    return target_version, ScheduleCopyPreview(
+        revision=source.revision,
+        source_dungeon_version_id=source_version.id,
+        target_dungeon_version_id=target_version.id,
+        wave_count=wave_count,
+        migration_required=target_version.id != source_version.id,
+        migration_fingerprint=fingerprint,
+        changes=changes,
+    )
 
 
 def _claim_revision(
@@ -375,13 +528,14 @@ def create_schedule(payload: ScheduleCreate, db: DbSession, current_user: Curren
     return _load(db, schedule.id)
 
 
-@router.post("/{schedule_id}/copy", response_model=ScheduleDetail, status_code=201)
-def copy_schedule(
+@router.post("/{schedule_id}/copy/preview", response_model=ScheduleCopyPreview)
+def preview_schedule_copy(
     schedule_id: uuid.UUID,
-    payload: ScheduleCopy,
+    payload: ScheduleCopyPreviewRequest,
     db: DbSession,
     current_user: CurrentUser,
-) -> Schedule:
+) -> ScheduleCopyPreview:
+    del current_user
     source = _load(db, schedule_id)
     if source.revision != payload.base_revision:
         raise AppError(
@@ -389,6 +543,33 @@ def copy_schedule(
             "SCHEDULE_REVISION_CONFLICT",
             "排表已被其他操作修改，请刷新后重试",
             details={"expected": payload.base_revision, "current": source.revision},
+        )
+    _target_version, preview = _copy_preview(db, source, payload)
+    db.commit()
+    return preview
+
+
+@router.post("/{schedule_id}/copy", response_model=ScheduleDetail, status_code=201)
+def copy_schedule(
+    schedule_id: uuid.UUID,
+    payload: ScheduleCopy,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> Schedule:
+    source = _load(db, schedule_id, for_update=True)
+    if source.revision != payload.base_revision:
+        raise AppError(
+            409,
+            "SCHEDULE_REVISION_CONFLICT",
+            "排表已被其他操作修改，请刷新后重试",
+            details={"expected": payload.base_revision, "current": source.revision},
+        )
+    target_version, preview = _copy_preview(db, source, payload)
+    if preview.changes and payload.migration_fingerprint != preview.migration_fingerprint:
+        raise AppError(
+            409,
+            "COPY_PREVIEW_REQUIRED",
+            "复制配置已经变化，请重新预览后确认",
         )
 
     character_ids = {participant.character_id for participant in source.participants}
@@ -407,9 +588,9 @@ def copy_schedule(
     copied = Schedule(
         id=uuid.uuid4(),
         name=payload.name,
-        dungeon_version_id=source.dungeon_version_id,
-        formula_version_id=source.formula_version_id,
-        wave_count=source.wave_count,
+        dungeon_version_id=target_version.id,
+        formula_version_id=target_version.formula_version_id,
+        wave_count=preview.wave_count,
         status="DRAFT",
         note=source.note,
         revision=1,
@@ -449,36 +630,78 @@ def copy_schedule(
             SchedulePlayerPreference(
                 player_id=player_id,
                 allowed_waves=(
-                    list(preference.allowed_waves)
+                    [
+                        wave_no
+                        for wave_no in preference.allowed_waves
+                        if wave_no <= preview.wave_count
+                    ]
                     if preference is not None and preference.allowed_waves is not None
                     else None
                 ),
-                max_wave_count=(preference.max_wave_count if preference is not None else None),
+                max_wave_count=(
+                    min(preference.max_wave_count, preview.wave_count)
+                    if preference is not None and preference.max_wave_count is not None
+                    else None
+                ),
                 prefer_early=preference.prefer_early if preference is not None else False,
                 prefer_contiguous=(
                     preference.prefer_contiguous if preference is not None else False
                 ),
             )
         )
-    for source_wave in source.waves:
+    migrate_structure = target_version.id != source.dungeon_version_id
+    source_team_templates = source.waves[0].teams
+    team_configs: list[tuple[str, str, str, int, int, int | None]]
+    if migrate_structure:
+        team_configs = [
+            (
+                template.team_key,
+                template.display_name,
+                template.display_color,
+                template.display_order,
+                template.member_count,
+                template.strength_rank,
+            )
+            for template in target_version.teams
+        ]
+    else:
+        team_configs = [
+            (
+                template.team_key,
+                template.display_name_snapshot,
+                template.display_color_snapshot,
+                template.display_order_snapshot,
+                template.member_count_snapshot,
+                template.strength_rank_snapshot,
+            )
+            for template in source_team_templates
+        ]
+    for wave_no in range(1, preview.wave_count + 1):
         copied_wave = Wave(
             id=uuid.uuid4(),
             schedule_id=copied.id,
-            wave_no=source_wave.wave_no,
+            wave_no=wave_no,
             is_locked=False,
             damage_total=0,
             buffer_total=0,
         )
-        for source_team in source_wave.teams:
+        for (
+            team_key,
+            display_name,
+            display_color,
+            display_order,
+            member_count,
+            rank,
+        ) in team_configs:
             copied_team = Team(
                 id=uuid.uuid4(),
                 schedule_id=copied.id,
-                team_key=source_team.team_key,
-                display_name_snapshot=source_team.display_name_snapshot,
-                display_color_snapshot=source_team.display_color_snapshot,
-                display_order_snapshot=source_team.display_order_snapshot,
-                member_count_snapshot=source_team.member_count_snapshot,
-                strength_rank_snapshot=source_team.strength_rank_snapshot,
+                team_key=team_key,
+                display_name_snapshot=display_name,
+                display_color_snapshot=display_color,
+                display_order_snapshot=display_order,
+                member_count_snapshot=member_count,
+                strength_rank_snapshot=rank,
                 damage_total=0,
                 buffer_total=0,
                 composition_code="INCOMPLETE",
@@ -489,10 +712,13 @@ def copy_schedule(
                     schedule_id=copied.id,
                     wave_id=copied_wave.id,
                     team_id=copied_team.id,
-                    slot_no=source_slot.slot_no,
+                    slot_no=slot_no,
                     is_locked=False,
                 )
-                for source_slot in source_team.slots
+                for slot_no in range(
+                    1,
+                    member_count + 1,
+                )
             )
             copied_wave.teams.append(copied_team)
         copied.waves.append(copied_wave)
@@ -787,15 +1013,26 @@ def commit_schedule_character_sync(
 
 @router.post("/{schedule_id}/validate", response_model=ValidationReport)
 def validate_schedule(
-    schedule_id: uuid.UUID, db: DbSession, current_user: CurrentUser
+    schedule_id: uuid.UUID,
+    payload: ValidationRequest,
+    db: DbSession,
+    current_user: CurrentUser,
 ) -> ValidationReport:
     del current_user
     item = _load(db, schedule_id)
+    if item.revision != payload.base_revision:
+        raise AppError(
+            409,
+            "SCHEDULE_REVISION_CONFLICT",
+            "排表已被其他操作修改，请刷新后重试",
+            details={"expected": payload.base_revision, "current": item.revision},
+        )
     version = db.get(DungeonVersion, item.dungeon_version_id)
     if version is None:
         raise AppError(409, "DUNGEON_VERSION_MISSING", "排表引用的副本版本不存在")
     composition_rules = CompositionRules.model_validate(version.composition_rules)
     special_role_rules = SpecialRoleRules.model_validate(version.special_role_rules)
+    strength_order_rules = StrengthOrderRules.model_validate(version.strength_order_rules)
     teams = [team for wave in item.waves for team in wave.teams]
     capacity = sum(team.member_count_snapshot for team in teams)
     selected = [participant for participant in item.participants if participant.is_selected]
@@ -825,6 +1062,12 @@ def validate_schedule(
     requirements = composition_role_requirements(
         composition_rules, (team.team_key for team in teams)
     )
+    feasibility = composition_feasibility(
+        composition_rules,
+        (team.team_key for team in teams),
+        available_damage=damage,
+        available_buffers=buffers,
+    )
     if damage < requirements.ideal_damage:
         issues.append(
             IssueView(
@@ -849,6 +1092,52 @@ def validate_schedule(
                 },
             )
         )
+    if feasibility.can_fill_all_teams and damage < requirements.ideal_damage:
+        issues.append(
+            IssueView(
+                severity="INFO",
+                code="FALLBACK_COMPOSITION_FEASIBLE",
+                message_params={
+                    "damageUsed": feasibility.best_damage_usage,
+                    "buffersUsed": feasibility.best_buffer_usage,
+                    "strategy": "使用低优先级合法组成补足完整队伍",
+                },
+            )
+        )
+    elif not feasibility.can_fill_all_teams:
+        issues.append(
+            IssueView(
+                severity="WARNING",
+                code="FULL_COMPOSITION_INFEASIBLE",
+                message_params={
+                    "damage": damage,
+                    "buffers": buffers,
+                    "requiredDamage": feasibility.closest_damage_required,
+                    "requiredBuffers": feasibility.closest_buffers_required,
+                    "damageShortage": feasibility.damage_shortage,
+                    "bufferShortage": feasibility.buffer_shortage,
+                },
+            )
+        )
+    role_surpluses = (
+        ("DAMAGE", damage, feasibility.maximum_damage),
+        ("BUFFER", buffers, feasibility.maximum_buffers),
+    )
+    for role_type, current, maximum in role_surpluses:
+        if current > maximum:
+            issues.append(
+                IssueView(
+                    severity="WARNING",
+                    code="UNUSABLE_ROLE_SURPLUS",
+                    message_params={
+                        "roleType": role_type,
+                        "current": current,
+                        "maximumForFullTeams": maximum,
+                        "surplus": current - maximum,
+                        "reason": "超过全部完整队伍合法组成可容纳的数量",
+                    },
+                )
+            )
     treasure_required = item.wave_count * sum(
         rule.count_per_wave
         for rule in special_role_rules.rules
@@ -867,6 +1156,17 @@ def validate_schedule(
                     "required": treasure_required,
                     "current": treasures,
                     "shortage": treasure_required - treasures,
+                },
+            )
+        )
+    if strength_order_rules.orders:
+        issues.append(
+            IssueView(
+                severity="INFO",
+                code="STRENGTH_ORDER_CHECK_ON_GENERATION",
+                message_params={
+                    "ruleCount": len(strength_order_rules.orders),
+                    "reason": "空排表尚无队伍分配，生成方案时将校验并报告强度顺序冲突",
                 },
             )
         )
@@ -902,6 +1202,20 @@ def validate_schedule(
         "warning": sum(issue.severity == "WARNING" for issue in issues),
         "info": sum(issue.severity == "INFO" for issue in issues),
     }
-    item.validation_summary = summary
+    validated_revision = db.scalar(
+        update(Schedule)
+        .where(Schedule.id == item.id, Schedule.revision == payload.base_revision)
+        .values(validation_summary=summary, updated_at=Schedule.updated_at)
+        .returning(Schedule.revision)
+    )
+    if validated_revision is None:
+        db.rollback()
+        current_revision = db.scalar(select(Schedule.revision).where(Schedule.id == item.id))
+        raise AppError(
+            409,
+            "SCHEDULE_REVISION_CONFLICT",
+            "排表已被其他操作修改，请重新运行预检查",
+            details={"expected": payload.base_revision, "current": current_revision},
+        )
     db.commit()
-    return ValidationReport(revision=item.revision, issues=issues, summary=summary)
+    return ValidationReport(revision=validated_revision, issues=issues, summary=summary)
