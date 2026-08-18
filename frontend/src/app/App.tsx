@@ -8,7 +8,6 @@ import {
   ConfigProvider,
   Layout,
   Menu,
-  Result,
   Skeleton,
   Typography,
   message,
@@ -25,6 +24,11 @@ const DungeonPage = lazy(() =>
 const PersonnelPage = lazy(() =>
   import("../features/personnel/PersonnelPage").then((module) => ({
     default: module.PersonnelPage,
+  })),
+);
+const SchedulePage = lazy(() =>
+  import("../features/schedules/SchedulePage").then((module) => ({
+    default: module.SchedulePage,
   })),
 );
 
@@ -127,7 +131,11 @@ export function App() {
                     icon: <TeamOutlined />,
                     label: "人员管理",
                   },
-                  { key: "schedules", disabled: true, label: "排表（阶段 2）" },
+                  {
+                    key: "schedules",
+                    icon: <TeamOutlined />,
+                    label: "排表管理",
+                  },
                 ]}
               />
             </Sider>
@@ -144,7 +152,10 @@ export function App() {
                     onSuccess={messageApi.success}
                   />
                 ) : (
-                  <Result status="info" title="阶段 2 即将开始" />
+                  <SchedulePage
+                    onError={onError}
+                    onSuccess={messageApi.success}
+                  />
                 )}
               </Suspense>
             </Content>

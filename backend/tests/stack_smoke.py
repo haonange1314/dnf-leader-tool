@@ -94,6 +94,33 @@ inactive_player = request(
     },
 )
 assert isinstance(inactive_player, dict)
+workflow_player = request(
+    "/players",
+    "POST",
+    {
+        "displayName": "排表工作流玩家",
+        "characters": [
+            {
+                "name": "工作流主 C",
+                "profession": "测试职业",
+                "roleType": "DAMAGE",
+                "damageScore": 500,
+                "isTreasureDamage": True,
+                "defaultRaidParticipant": True,
+                "isActive": True,
+            },
+            {
+                "name": "工作流奶",
+                "profession": "测试奶系",
+                "roleType": "BUFFER",
+                "bufferScore": 50,
+                "defaultRaidParticipant": True,
+                "isActive": True,
+            },
+        ],
+    },
+)
+assert isinstance(workflow_player, dict)
 schedule = request(
     "/schedules",
     "POST",
@@ -106,8 +133,109 @@ assert all(
     participant["playerIdSnapshot"] != inactive_player["id"]
     for participant in schedule["participants"]
 )
+assert len(schedule["participants"]) == 2
 report = request(f"/schedules/{schedule['id']}/validate", "POST")
 assert isinstance(report, dict) and report["summary"]["info"] == 1
+schedule = request(
+    f"/schedules/{schedule['id']}",
+    "PATCH",
+    {"baseRevision": 1, "waveCount": 2},
+)
+assert isinstance(schedule, dict) and schedule["revision"] == 2
+assert len(schedule["waves"]) == 2
+schedule = request(
+    f"/schedules/{schedule['id']}",
+    "PATCH",
+    {"baseRevision": 2, "waveCount": 3},
+)
+assert isinstance(schedule, dict) and schedule["revision"] == 3
+assert len(schedule["waves"]) == 3
+participant_ids = [participant["id"] for participant in schedule["participants"]]
+schedule = request(
+    f"/schedules/{schedule['id']}/participants",
+    "PUT",
+    {"baseRevision": 3, "selectedParticipantIds": participant_ids},
+)
+assert isinstance(schedule, dict) and schedule["revision"] == 4
+schedule = request(
+    f"/schedules/{schedule['id']}/player-preferences",
+    "PUT",
+    {
+        "baseRevision": 4,
+        "preferences": [
+            {
+                "playerId": workflow_player["id"],
+                "allowedWaves": [1, 3],
+                "maxWaveCount": 3,
+                "preferEarly": True,
+                "preferContiguous": True,
+            }
+        ],
+    },
+)
+assert isinstance(schedule, dict) and schedule["revision"] == 5
+schedule = request(
+    f"/schedules/{schedule['id']}",
+    "PATCH",
+    {"baseRevision": 5, "waveCount": 2},
+)
+assert isinstance(schedule, dict) and schedule["revision"] == 6
+assert schedule["preferences"][0]["allowedWaves"] == [1]
+assert schedule["preferences"][0]["maxWaveCount"] == 2
+new_character = request(
+    f"/players/{workflow_player['id']}/characters",
+    "POST",
+    {
+        "name": "同步新增 C",
+        "profession": "测试职业",
+        "roleType": "DAMAGE",
+        "damageScore": 450,
+        "isTreasureDamage": False,
+        "defaultRaidParticipant": True,
+        "isActive": True,
+    },
+)
+assert isinstance(new_character, dict)
+sync_preview = request(f"/schedules/{schedule['id']}/sync-characters/preview", "POST")
+assert isinstance(sync_preview, dict) and sync_preview["summary"]["ADD"] == 1
+schedule = request(
+    f"/schedules/{schedule['id']}/sync-characters/commit",
+    "POST",
+    {
+        "baseRevision": 6,
+        "sourceFingerprint": sync_preview["sourceFingerprint"],
+    },
+)
+assert isinstance(schedule, dict) and schedule["revision"] == 7
+assert len(schedule["participants"]) == 3
+workflow_report = request(f"/schedules/{schedule['id']}/validate", "POST")
+assert isinstance(workflow_report, dict)
+assert "PLAYER_WAVE_CAPACITY_INSUFFICIENT" in {
+    issue["code"] for issue in workflow_report["issues"]
+}
+copied_schedule = request(
+    f"/schedules/{schedule['id']}/copy",
+    "POST",
+    {"baseRevision": 7, "name": "阶段2复制验收"},
+)
+assert isinstance(copied_schedule, dict)
+assert copied_schedule["revision"] == 1 and copied_schedule["status"] == "DRAFT"
+assert copied_schedule["waveCount"] == 2 and len(copied_schedule["waves"]) == 2
+assert len(copied_schedule["participants"]) == 3
+assert copied_schedule["preferences"][0]["allowedWaves"] == [1]
+assert all(
+    slot["participantId"] is None and slot["isLocked"] is False
+    for wave in copied_schedule["waves"]
+    for team in wave["teams"]
+    for slot in team["slots"]
+)
+revision_error = request_error(
+    f"/schedules/{schedule['id']}",
+    "PATCH",
+    {"baseRevision": 1, "name": "过期写入"},
+    expected_status=409,
+)
+assert revision_error["error"]["code"] == "SCHEDULE_REVISION_CONFLICT"
 version_payload = {
     "defaultWaveCount": source_version["defaultWaveCount"],
     "minWaveCount": source_version["minWaveCount"],
@@ -211,4 +339,4 @@ assert isinstance(player, dict) and player["displayName"] == "全栈验收玩家
 players = request("/players?search=%E5%85%A8%E6%A0%88")
 assert isinstance(players, dict) and players["total"] == 1
 request("/auth/logout", "POST")
-print("stage 2 schedule foundation smoke passed")
+print("stage 2 schedule workflow smoke passed")
