@@ -2,6 +2,7 @@ from collections import defaultdict
 
 from ortools.sat.python import cp_model
 
+from app.domain.schedule import MAX_SCHEDULE_POSITIONS, MAX_WAVE_COUNT
 from app.schemas.dungeon import RoleType
 from app.solver.models import (
     SolverAssignment,
@@ -13,8 +14,6 @@ from app.solver.models import (
 )
 
 INT64_MAX = (1 << 63) - 1
-MAX_WAVE_COUNT = 50
-MAX_SCHEDULE_POSITIONS = 1_200
 
 
 def solve(solver_input: SolverInput) -> SolverResult:

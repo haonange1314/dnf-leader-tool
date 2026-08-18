@@ -6,8 +6,9 @@ from sqlalchemy.orm import selectinload
 
 from app.api.dependencies import CurrentUser, DbSession
 from app.core.errors import AppError
+from app.domain.schedule import MAX_SCHEDULE_POSITIONS, composition_role_requirements
 from app.models.dungeon import DungeonVersion
-from app.models.personnel import Character
+from app.models.personnel import Character, Player
 from app.models.schedule import (
     Schedule,
     ScheduleParticipant,
@@ -16,6 +17,7 @@ from app.models.schedule import (
     TeamSlot,
     Wave,
 )
+from app.schemas.dungeon import CompositionRules
 from app.schemas.schedule import (
     IssueView,
     ScheduleCreate,
@@ -57,18 +59,31 @@ def create_schedule(payload: ScheduleCreate, db: DbSession, current_user: Curren
     version = db.scalar(
         select(DungeonVersion)
         .where(DungeonVersion.id == payload.dungeon_version_id)
-        .options(selectinload(DungeonVersion.teams))
+        .options(
+            selectinload(DungeonVersion.teams),
+            selectinload(DungeonVersion.dungeon),
+        )
     )
     if version is None or version.status != "PUBLISHED":
         raise AppError(422, "DUNGEON_VERSION_NOT_PUBLISHED", "只能使用已发布副本版本")
+    if not version.dungeon.is_active:
+        raise AppError(422, "DUNGEON_INACTIVE", "已停用副本不能创建新排表")
     wave_count = payload.wave_count or version.default_wave_count
     if wave_count < version.min_wave_count or (
         version.max_wave_count is not None and wave_count > version.max_wave_count
     ):
         raise AppError(422, "WAVE_COUNT_OUT_OF_RANGE", "波数超出副本允许范围")
+    position_count = wave_count * sum(team.member_count for team in version.teams)
+    if position_count > MAX_SCHEDULE_POSITIONS:
+        raise AppError(
+            422,
+            "SCHEDULE_POSITION_LIMIT_EXCEEDED",
+            f"排表总位置数不能超过 {MAX_SCHEDULE_POSITIONS}",
+            details={"limit": MAX_SCHEDULE_POSITIONS, "current": position_count},
+        )
     schedule = Schedule(
         id=uuid.uuid4(),
-        name=payload.name.strip(),
+        name=payload.name,
         dungeon_version_id=version.id,
         formula_version_id=version.formula_version_id,
         wave_count=wave_count,
@@ -81,7 +96,12 @@ def create_schedule(payload: ScheduleCreate, db: DbSession, current_user: Curren
     characters = list(
         db.scalars(
             select(Character)
-            .where(Character.is_active.is_(True), Character.default_raid_participant.is_(True))
+            .join(Player, Character.player_id == Player.id)
+            .where(
+                Character.is_active.is_(True),
+                Character.default_raid_participant.is_(True),
+                Player.is_active.is_(True),
+            )
             .options(selectinload(Character.player))
         )
     )
@@ -168,7 +188,12 @@ def validate_schedule(
 ) -> ValidationReport:
     del current_user
     item = _load(db, schedule_id)
-    capacity = sum(team.member_count_snapshot for team in item.waves[0].teams) * item.wave_count
+    version = db.get(DungeonVersion, item.dungeon_version_id)
+    if version is None:
+        raise AppError(409, "DUNGEON_VERSION_MISSING", "排表引用的副本版本不存在")
+    composition_rules = CompositionRules.model_validate(version.composition_rules)
+    teams = [team for wave in item.waves for team in wave.teams]
+    capacity = sum(team.member_count_snapshot for team in teams)
     selected = [participant for participant in item.participants if participant.is_selected]
     damage = sum(participant.role_type_snapshot == "DAMAGE" for participant in selected)
     buffers = len(selected) - damage
@@ -193,31 +218,30 @@ def validate_schedule(
                 },
             )
         )
-    ideal_damage = item.wave_count * sum(
-        max(team.member_count_snapshot - 1, 0) for team in item.waves[0].teams
+    requirements = composition_role_requirements(
+        composition_rules, (team.team_key for team in teams)
     )
-    base_buffers = item.wave_count * len(item.waves[0].teams)
-    if damage < ideal_damage:
+    if damage < requirements.ideal_damage:
         issues.append(
             IssueView(
                 severity="WARNING",
                 code="DAMAGE_IDEAL_SHORTAGE",
                 message_params={
-                    "required": ideal_damage,
+                    "required": requirements.ideal_damage,
                     "current": damage,
-                    "shortage": ideal_damage - damage,
+                    "shortage": requirements.ideal_damage - damage,
                 },
             )
         )
-    if buffers < base_buffers:
+    if buffers < requirements.base_buffers:
         issues.append(
             IssueView(
                 severity="WARNING",
                 code="BUFFER_BASE_SHORTAGE",
                 message_params={
-                    "required": base_buffers,
+                    "required": requirements.base_buffers,
                     "current": buffers,
-                    "shortage": base_buffers - buffers,
+                    "shortage": requirements.base_buffers - buffers,
                 },
             )
         )

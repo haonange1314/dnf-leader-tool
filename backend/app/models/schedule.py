@@ -8,6 +8,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     SmallInteger,
@@ -139,7 +140,7 @@ class Team(Base):
         index=True,
     )
     wave_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("waves.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True), ForeignKey("waves.id", ondelete="CASCADE"), nullable=False, index=True
     )
     team_key: Mapped[str] = mapped_column(String(40), nullable=False)
     display_name_snapshot: Mapped[str] = mapped_column(String(80), nullable=False)
@@ -161,6 +162,7 @@ class TeamSlot(Base):
     __table_args__ = (
         UniqueConstraint("team_id", "slot_no"),
         CheckConstraint("slot_no > 0", name="positive_slot_no"),
+        Index("ix_team_slots_schedule_id_wave_id", "schedule_id", "wave_id"),
     )
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     schedule_id: Mapped[uuid.UUID] = mapped_column(
@@ -173,7 +175,7 @@ class TeamSlot(Base):
         UUID(as_uuid=True), ForeignKey("waves.id", ondelete="CASCADE"), nullable=False
     )
     team_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("teams.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True), ForeignKey("teams.id", ondelete="CASCADE"), nullable=False, index=True
     )
     slot_no: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     participant_id: Mapped[uuid.UUID | None] = mapped_column(

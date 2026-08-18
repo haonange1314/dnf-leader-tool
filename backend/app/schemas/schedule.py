@@ -1,8 +1,10 @@
 import uuid
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
+
+from app.domain.schedule import MAX_WAVE_COUNT
 
 CFG = ConfigDict(from_attributes=True, alias_generator=to_camel, populate_by_name=True)
 
@@ -11,8 +13,16 @@ class ScheduleCreate(BaseModel):
     model_config = CFG
     name: str = Field(min_length=1, max_length=160)
     dungeon_version_id: uuid.UUID
-    wave_count: int | None = Field(default=None, gt=0, le=50)
+    wave_count: int | None = Field(default=None, gt=0, le=MAX_WAVE_COUNT)
     note: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("排表名称不能为空")
+        return normalized
 
 
 class ScheduleSummary(BaseModel):
