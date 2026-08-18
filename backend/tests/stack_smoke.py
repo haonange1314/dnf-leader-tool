@@ -26,6 +26,16 @@ dungeons = request("/dungeons")
 assert isinstance(dungeons, dict) and dungeons["total"] == 1
 dungeon = dungeons["items"][0]
 source_version = dungeon["versions"][0]
+schedule = request(
+    "/schedules",
+    "POST",
+    {"name": "阶段2全栈验收", "dungeonVersionId": source_version["id"]},
+)
+assert isinstance(schedule, dict) and len(schedule["waves"]) == 12
+assert all(len(wave["teams"]) == 3 for wave in schedule["waves"])
+assert sum(len(team["slots"]) for team in schedule["waves"][0]["teams"]) == 12
+report = request(f"/schedules/{schedule['id']}/validate", "POST")
+assert isinstance(report, dict) and report["summary"]["info"] == 1
 version_payload = {
     "defaultWaveCount": source_version["defaultWaveCount"],
     "minWaveCount": source_version["minWaveCount"],
@@ -50,4 +60,4 @@ assert isinstance(player, dict) and player["displayName"] == "全栈验收玩家
 players = request("/players?search=%E5%85%A8%E6%A0%88")
 assert isinstance(players, dict) and players["total"] == 1
 request("/auth/logout", "POST")
-print("stage 1 auth, dungeon version and personnel API smoke passed")
+print("stage 2 schedule foundation smoke passed")
