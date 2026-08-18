@@ -102,6 +102,8 @@ make up
 
 本地示例账号由 `.env` 中的 `BOOTSTRAP_OWNER_USERNAME` 和
 `BOOTSTRAP_OWNER_PASSWORD` 幂等初始化。示例值为 `admin / change-me-now`，首次用于实际数据前请修改密码；公网环境不得使用示例凭据。
+本地 Compose 默认会在登录页展示并预填这组账号；设置
+`VITE_SHOW_DEV_LOGIN=false` 后重新构建 Web 即可关闭，公网环境必须关闭。
 
 常用命令：
 
