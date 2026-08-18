@@ -1,4 +1,4 @@
-.PHONY: bootstrap dev up down logs migrate seed solver-poc test test-backend test-frontend check
+.PHONY: bootstrap dev up down logs migrate seed solver-poc test test-backend test-frontend test-stack check
 
 export UV_CACHE_DIR ?= $(CURDIR)/.uv-cache
 
@@ -36,6 +36,9 @@ test-backend:
 test-frontend:
 	pnpm test
 
+test-stack:
+	sh scripts/test-stack.sh
+
 check:
 	cd backend && uv run ruff check app tests migrations
 	cd backend && uv run mypy app
@@ -44,3 +47,4 @@ check:
 	pnpm test
 	cd backend && uv run pytest
 	docker compose config --quiet
+	$(MAKE) test-stack

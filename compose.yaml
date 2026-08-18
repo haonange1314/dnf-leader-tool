@@ -22,7 +22,7 @@ services:
       context: .
       dockerfile: infra/api/Dockerfile
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://dnf:dnf-local-only@db:5432/dnf_leader}
+      DATABASE_URL: ${CONTAINER_DATABASE_URL:-postgresql+psycopg://dnf:dnf-local-only@db:5432/dnf_leader}
       ENVIRONMENT: ${ENVIRONMENT:-development}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
       SOLVER_TIME_LIMIT_SECONDS: ${SOLVER_TIME_LIMIT_SECONDS:-10}

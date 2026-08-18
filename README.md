@@ -104,7 +104,8 @@ make up
 
 ```bash
 make test          # 后端 pytest + 前端 Vitest
-make check         # 静态检查、前端构建、前后端测试和 Compose 配置校验
+make check         # 静态检查、前后端测试及隔离 PostgreSQL 全栈验收
+make test-stack    # 用独立临时数据卷验证迁移、种子、健康检查和反向代理
 make solver-poc    # 运行默认 12 波团本和自定义单队 4 人 CP-SAT PoC
 make migrate       # 本机对 DATABASE_URL 执行数据库迁移
 make seed          # 幂等写入内置 12 人团本及评分公式
@@ -112,7 +113,7 @@ make logs          # 跟踪三个容器日志
 make down          # 停止容器，保留 PostgreSQL 数据卷
 ```
 
-本地 `.env` 中的 `POSTGRES_PASSWORD` 和 `DATABASE_URL` 密码必须保持一致；用于公网环境前必须替换示例密码。数据库端口只绑定到 `127.0.0.1`。
+本地 `.env` 中的 `DATABASE_URL` 供宿主机命令使用，连接 `localhost`；`CONTAINER_DATABASE_URL` 供 API 容器使用，连接 Compose 服务名 `db`。两者的用户名、密码和数据库名必须与 PostgreSQL 配置保持一致；用于公网环境前必须替换示例密码。数据库端口只绑定到 `127.0.0.1`。
 
 不使用 Docker 时，可以分别启动开发服务：
 
