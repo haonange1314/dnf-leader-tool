@@ -214,6 +214,60 @@ export interface GenerationResponse {
   run: GenerationRun;
   schedule: ScheduleDetail;
 }
+export interface ScheduleOperation {
+  type:
+    | "MOVE_PARTICIPANT"
+    | "SWAP_PARTICIPANTS"
+    | "UNASSIGN_PARTICIPANT"
+    | "SET_WAVE_CORE"
+    | "CLEAR_WAVE_CORE"
+    | "LOCK_PARTICIPANT"
+    | "LOCK_SLOT"
+    | "LOCK_WAVE";
+  participantId?: string | null;
+  otherParticipantId?: string | null;
+  toSlotId?: string | null;
+  slotId?: string | null;
+  waveId?: string | null;
+  ruleCode?: string | null;
+  locked?: boolean | null;
+}
+export interface ScheduleCommandResponse {
+  operationId: string;
+  revision: number;
+  schedule: ScheduleDetail;
+  inverseOperations: ScheduleOperation[];
+}
+export interface ScheduleVersionSummary {
+  id: string;
+  scheduleId: string;
+  versionNo: number;
+  sourceRevision: number;
+  snapshotSchemaVersion: number;
+  snapshotHash: string;
+  formulaVersionId: string;
+  publishedAt: string;
+}
+export interface ScheduleVersionView extends ScheduleVersionSummary {
+  snapshot: ScheduleDetail;
+}
+export interface SchedulePublishResponse {
+  version: ScheduleVersionView;
+  schedule: ScheduleDetail;
+  issues: ValidationIssue[];
+}
+export interface ShareLinkCreated {
+  id: string;
+  scheduleVersionId: string;
+  token: string;
+  expiresAt: string | null;
+}
+export interface PublicScheduleVersion {
+  versionId: string;
+  versionNo: number;
+  publishedAt: string;
+  snapshot: ScheduleDetail;
+}
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api/v1${path}`, {

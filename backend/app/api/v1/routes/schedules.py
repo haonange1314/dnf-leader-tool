@@ -225,6 +225,7 @@ def _claim_revision(
         .where(Schedule.id == item.id, Schedule.revision == base_revision)
         .values(
             revision=Schedule.revision + 1,
+            status="DRAFT",
             updated_by=current_user.id,
             updated_at=func.now(),
         )

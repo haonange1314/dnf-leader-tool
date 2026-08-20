@@ -48,6 +48,7 @@ class Schedule(TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="DRAFT")
     note: Mapped[str | None] = mapped_column(Text)
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    last_published_version: Mapped[int | None] = mapped_column(Integer)
     validation_summary: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     created_by: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
@@ -66,6 +67,14 @@ class Schedule(TimestampMixin, Base):
         back_populates="schedule", cascade="all, delete-orphan", order_by="Wave.wave_no"
     )
     generation_runs: Mapped[list[GenerationRun]] = relationship(
+        back_populates="schedule", cascade="all, delete-orphan"
+    )
+    versions: Mapped[list[ScheduleVersion]] = relationship(
+        back_populates="schedule",
+        cascade="all, delete-orphan",
+        order_by="ScheduleVersion.version_no",
+    )
+    edit_operations: Mapped[list[ScheduleEditOperation]] = relationship(
         back_populates="schedule", cascade="all, delete-orphan"
     )
 
@@ -258,3 +267,77 @@ class GenerationRun(Base):
     )
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     schedule: Mapped[Schedule] = relationship(back_populates="generation_runs")
+
+
+class ScheduleEditOperation(Base):
+    __tablename__ = "schedule_edit_operations"
+    __table_args__ = (
+        Index("ix_schedule_edit_operations_schedule_id_created_at", "schedule_id", "created_at"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    schedule_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("schedules.id", ondelete="CASCADE"), nullable=False
+    )
+    input_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    result_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    response: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_by: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    schedule: Mapped[Schedule] = relationship(back_populates="edit_operations")
+
+
+class ScheduleVersion(Base):
+    __tablename__ = "schedule_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "schedule_id", "version_no", name="uq_schedule_versions_schedule_version"
+        ),
+        Index("ix_schedule_versions_schedule_id_published_at", "schedule_id", "published_at"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    schedule_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("schedules.id", ondelete="RESTRICT"), nullable=False
+    )
+    version_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    snapshot_schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    snapshot_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    formula_version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("formula_versions.id", ondelete="RESTRICT"), nullable=False
+    )
+    published_by: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    published_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    schedule: Mapped[Schedule] = relationship(back_populates="versions")
+    share_links: Mapped[list[ShareLink]] = relationship(
+        back_populates="schedule_version", cascade="all, delete-orphan"
+    )
+
+
+class ShareLink(Base):
+    __tablename__ = "share_links"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    schedule_version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("schedule_versions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    schedule_version: Mapped[ScheduleVersion] = relationship(back_populates="share_links")

@@ -2,6 +2,7 @@ import http.cookiejar
 import json
 import urllib.error
 import urllib.request
+import uuid
 
 BASE_URL = "http://127.0.0.1:8000/api/v1"
 jar = http.cookiejar.CookieJar()
@@ -393,6 +394,131 @@ damage_only_issues = {
 }
 assert damage_only_issues["DAMAGE_IDEAL_SHORTAGE"]["required"] == 12
 assert "BUFFER_BASE_SHORTAGE" not in damage_only_issues
+
+for index in range(11):
+    created_player = request(
+        "/players",
+        "POST",
+        {
+            "displayName": f"发布验收玩家 {index + 1}",
+            "characters": [
+                {
+                    "name": f"发布验收 C {index + 1}",
+                    "profession": "测试职业",
+                    "roleType": "DAMAGE",
+                    "damageScore": 400 + index,
+                    "isTreasureDamage": False,
+                    "defaultRaidParticipant": True,
+                    "isActive": True,
+                }
+            ],
+        },
+    )
+    assert isinstance(created_player, dict)
+
+publishable_schedule = request(
+    "/schedules",
+    "POST",
+    {"name": "阶段4发布验收", "dungeonVersionId": published["id"], "waveCount": 1},
+)
+assert isinstance(publishable_schedule, dict)
+damage_participant_ids = []
+selected_damage_players = set()
+for participant in publishable_schedule["participants"]:
+    if (
+        participant["roleTypeSnapshot"] == "DAMAGE"
+        and participant["playerIdSnapshot"] not in selected_damage_players
+    ):
+        damage_participant_ids.append(participant["id"])
+        selected_damage_players.add(participant["playerIdSnapshot"])
+assert len(damage_participant_ids) == 12
+publishable_schedule = request(
+    f"/schedules/{publishable_schedule['id']}/participants",
+    "PUT",
+    {"baseRevision": 1, "selectedParticipantIds": damage_participant_ids},
+)
+assert isinstance(publishable_schedule, dict) and publishable_schedule["revision"] == 2
+publishable_generation = request(
+    f"/schedules/{publishable_schedule['id']}/generate",
+    "POST",
+    {
+        "baseRevision": 2,
+        "preserveLocks": True,
+        "randomSeed": 44,
+        "timeLimitSeconds": 2,
+    },
+)
+assert isinstance(publishable_generation, dict)
+assert publishable_generation["run"]["status"] in {"OPTIMAL", "FEASIBLE", "SUCCEEDED"}
+publishable_schedule = publishable_generation["schedule"]
+assert publishable_schedule["revision"] == 3
+first_slot = publishable_schedule["waves"][0]["teams"][0]["slots"][0]
+operation_id = str(uuid.uuid4())
+lock_response = request(
+    f"/schedules/{publishable_schedule['id']}/commands",
+    "POST",
+    {
+        "operationId": operation_id,
+        "baseRevision": 3,
+        "operations": [{"type": "LOCK_SLOT", "slotId": first_slot["id"], "locked": True}],
+    },
+)
+assert isinstance(lock_response, dict) and lock_response["revision"] == 4
+assert lock_response["inverseOperations"][0]["type"] == "LOCK_SLOT"
+assert lock_response["inverseOperations"][0]["slotId"] == first_slot["id"]
+assert lock_response["inverseOperations"][0]["locked"] is False
+lock_retry = request(
+    f"/schedules/{publishable_schedule['id']}/commands",
+    "POST",
+    {
+        "operationId": operation_id,
+        "baseRevision": 3,
+        "operations": [{"type": "LOCK_SLOT", "slotId": first_slot["id"], "locked": True}],
+    },
+)
+assert lock_retry == lock_response
+unlock_response = request(
+    f"/schedules/{publishable_schedule['id']}/commands",
+    "POST",
+    {
+        "operationId": str(uuid.uuid4()),
+        "baseRevision": 4,
+        "operations": lock_response["inverseOperations"],
+    },
+)
+assert isinstance(unlock_response, dict) and unlock_response["revision"] == 5
+published_schedule = request(
+    f"/schedules/{publishable_schedule['id']}/publish",
+    "POST",
+    {"baseRevision": 5, "confirmWarnings": False},
+)
+assert isinstance(published_schedule, dict)
+assert published_schedule["schedule"]["status"] == "PUBLISHED"
+assert published_schedule["schedule"]["revision"] == 6
+assert published_schedule["version"]["versionNo"] == 1
+schedule_version_id = published_schedule["version"]["id"]
+versions = request(f"/schedules/{publishable_schedule['id']}/versions")
+assert isinstance(versions, dict) and versions["total"] == 1
+share_link = request(
+    f"/schedule-versions/{schedule_version_id}/share-links", "POST", {}
+)
+assert isinstance(share_link, dict) and share_link["token"]
+public_version = request(f"/share/{share_link['token']}")
+assert isinstance(public_version, dict)
+assert public_version["snapshot"]["name"] == "阶段4发布验收"
+text_export = opener.open(f"{BASE_URL}/schedule-versions/{schedule_version_id}/exports/text")
+assert "阶段4发布验收" in text_export.read().decode()
+excel_export = opener.open(f"{BASE_URL}/schedule-versions/{schedule_version_id}/exports/excel")
+assert excel_export.read(2) == b"PK"
+image_export = opener.open(f"{BASE_URL}/schedule-versions/{schedule_version_id}/exports/image")
+assert image_export.read(4) == b"<svg"
+restored_schedule = request(
+    f"/schedules/{publishable_schedule['id']}/versions/1/restore-as-draft",
+    "POST",
+    {"baseRevision": 6},
+)
+assert isinstance(restored_schedule, dict)
+assert restored_schedule["status"] == "DRAFT" and restored_schedule["revision"] == 7
 oversized_payload = {
     **version_payload,
     "defaultWaveCount": 19,

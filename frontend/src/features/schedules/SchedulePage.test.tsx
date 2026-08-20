@@ -81,6 +81,7 @@ describe("SchedulePage", () => {
       if (path === "/dungeons") return { items: [], total: 0 };
       if (path === "/schedules/schedule-1") return detail;
       if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1/versions") return { items: [], total: 0 };
       throw new Error(`unexpected API path: ${path}`);
     });
 
@@ -101,6 +102,7 @@ describe("SchedulePage", () => {
       if (path === "/dungeons") return { items: [], total: 0 };
       if (path === "/schedules/schedule-1") return detail;
       if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1/versions") return { items: [], total: 0 };
       throw new Error(`unexpected API path: ${path}`);
     });
 
@@ -117,6 +119,36 @@ describe("SchedulePage", () => {
     const participantStatistic = participantTitle?.closest(".ant-statistic");
     expect(participantStatistic).not.toBeNull();
     expect(within(participantStatistic as HTMLElement).getByText("0")).toBeInTheDocument();
+  });
+
+  it("applies an editor lock command and exposes undo", async () => {
+    vi.mocked(api).mockImplementation(async (path: string) => {
+      if (path === "/schedules") return { items: [summary], total: 1 };
+      if (path === "/dungeons") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1") return detail;
+      if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1/versions") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1/commands") {
+        return {
+          operationId: "operation-1",
+          revision: 2,
+          schedule: {
+            ...detail,
+            revision: 2,
+            waves: detail.waves.map((wave) => ({ ...wave, isLocked: true })),
+          },
+          inverseOperations: [{ type: "LOCK_WAVE", waveId: "wave-1", locked: false }],
+        };
+      }
+      throw new Error(`unexpected API path: ${path}`);
+    });
+
+    render(<SchedulePage onError={vi.fn()} onSuccess={vi.fn()} />);
+    fireEvent.click(await screen.findByText("周六团"));
+    fireEvent.click(await screen.findByRole("button", { name: /锁定波次/ }));
+
+    expect(await screen.findByRole("button", { name: /解锁波次/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /撤销/ })).toBeEnabled();
   });
 
   it("previews copy configuration before creating the new schedule", async () => {
@@ -143,6 +175,7 @@ describe("SchedulePage", () => {
       }
       if (path === "/schedules/schedule-1") return detail;
       if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1/versions") return { items: [], total: 0 };
       if (path === "/schedules/schedule-1/copy/preview") {
         return {
           revision: 1,
@@ -187,6 +220,7 @@ describe("SchedulePage", () => {
       if (path === "/dungeons") return { items: [], total: 0 };
       if (path === "/schedules/schedule-1") return detail;
       if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1/versions") return { items: [], total: 0 };
       if (path === "/schedules/schedule-1/generate") {
         return {
           run: {

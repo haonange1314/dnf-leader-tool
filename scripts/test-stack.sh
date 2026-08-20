@@ -41,7 +41,7 @@ database_state="$(
         "'
 )"
 
-if [ "$database_state" != "20260818_0005|1|1|3|12" ]; then
+if [ "$database_state" != "20260820_0006|1|1|3|12" ]; then
     echo "unexpected database state: $database_state" >&2
     exit 1
 fi
@@ -64,4 +64,11 @@ if compose exec -T db psql -v ON_ERROR_STOP=1 -U dnf -d dnf_leader \
     exit 1
 fi
 
-echo "isolated stack check passed: migration, seed, auth, management and generation APIs, health and proxy"
+if compose exec -T db psql -v ON_ERROR_STOP=1 -U dnf -d dnf_leader \
+    -c "UPDATE schedule_versions SET snapshot_hash = repeat('0', 64)" \
+    >/dev/null 2>&1; then
+    echo "published schedule version unexpectedly allowed mutation" >&2
+    exit 1
+fi
+
+echo "isolated stack check passed: migration, editor, publication, exports, auth and proxy"

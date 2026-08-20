@@ -1,11 +1,29 @@
 import {
   CheckCircleOutlined,
   CopyOutlined,
+  CrownOutlined,
+  DownloadOutlined,
+  HistoryOutlined,
+  LockOutlined,
   PlayCircleOutlined,
   PlusOutlined,
+  RedoOutlined,
   ReloadOutlined,
+  SendOutlined,
   SettingOutlined,
+  UndoOutlined,
+  UnlockOutlined,
 } from "@ant-design/icons";
+import {
+  DndContext,
+  type DragEndEvent,
+  PointerSensor,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import { CSS } from "@dnd-kit/utilities";
 import {
   Alert,
   Button,
@@ -18,6 +36,7 @@ import {
   InputNumber,
   Modal,
   Row,
+  Segmented,
   Select,
   Space,
   Statistic,
@@ -31,15 +50,24 @@ import {
   type Dungeon,
   type GenerationResponse,
   type GenerationRun,
+  type ScheduleCommandResponse,
   type ScheduleCopyPreview,
   type ScheduleDetail,
+  type ScheduleOperation,
   type ScheduleParticipant,
+  type SchedulePublishResponse,
   type SchedulePreference,
+  type ScheduleSlot,
   type ScheduleSummary,
   type ScheduleSyncPreview,
+  type ScheduleTeam,
+  type ScheduleVersionSummary,
+  type ScheduleWave,
+  type ShareLinkCreated,
   type ValidationIssue,
   type ValidationReport,
 } from "../../api/client";
+import { useScheduleEditorStore } from "./scheduleEditorStore";
 
 interface Props {
   onError: (error: unknown) => void;
@@ -84,8 +112,28 @@ export function SchedulePage({ onError, onSuccess }: Props) {
   const [generationTimeLimit, setGenerationTimeLimit] = useState(10);
   const [generationSeed, setGenerationSeed] = useState(42);
   const [latestGeneration, setLatestGeneration] = useState<GenerationRun | null>(null);
+  const [editorPending, setEditorPending] = useState(false);
+  const [versions, setVersions] = useState<ScheduleVersionSummary[]>([]);
+  const [publishOpen, setPublishOpen] = useState(false);
+  const [publishPending, setPublishPending] = useState(false);
+  const [confirmPublishWarnings, setConfirmPublishWarnings] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [shareUrl, setShareUrl] = useState("");
   const [waveCount, setWaveCount] = useState(1);
   const [createForm] = Form.useForm();
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const {
+    viewMode,
+    selectedWaveNo,
+    undoStack,
+    redoStack,
+    setViewMode,
+    setSelectedWaveNo,
+    record,
+    commitUndo,
+    commitRedo,
+    reset: resetEditor,
+  } = useScheduleEditorStore();
 
   const versionOptions = useMemo(
     () =>
@@ -144,15 +192,81 @@ export function SchedulePage({ onError, onSuccess }: Props) {
 
   const openSchedule = async (scheduleId: string) => {
     try {
-      const [schedule, runs] = await Promise.all([
+      const [schedule, runs, versionResult] = await Promise.all([
         api<ScheduleDetail>(`/schedules/${scheduleId}`),
         api<{ items: GenerationRun[] }>(`/schedules/${scheduleId}/generation-runs`),
+        api<{ items: ScheduleVersionSummary[] }>(`/schedules/${scheduleId}/versions`),
       ]);
       applyDetail(schedule);
+      resetEditor();
       setLatestGeneration(runs.items[0] ?? null);
+      setVersions(versionResult.items);
     } catch (error) {
       onError(error);
     }
+  };
+
+  const executeEditorOperations = async (
+    operations: ScheduleOperation[],
+    historyMode: "record" | "undo" | "redo" = "record",
+  ) => {
+    if (!detail || editorPending) return;
+    setEditorPending(true);
+    try {
+      const response = await api<ScheduleCommandResponse>(`/schedules/${detail.id}/commands`, {
+        method: "POST",
+        body: JSON.stringify({
+          operationId: globalThis.crypto.randomUUID(),
+          baseRevision: detail.revision,
+          operations,
+        }),
+      });
+      applyDetail(response.schedule);
+      if (historyMode === "record") {
+        record({ forward: operations, inverse: response.inverseOperations });
+      } else if (historyMode === "undo") {
+        commitUndo();
+      } else {
+        commitRedo(response.inverseOperations);
+      }
+      onSuccess(
+        historyMode === "record" ? "排表已更新" : historyMode === "undo" ? "已撤销" : "已恢复",
+      );
+    } catch (error) {
+      onError(error);
+    } finally {
+      setEditorPending(false);
+    }
+  };
+
+  const undo = async () => {
+    const entry = undoStack.at(-1);
+    if (entry) await executeEditorOperations(entry.inverse, "undo");
+  };
+
+  const redo = async () => {
+    const entry = redoStack.at(-1);
+    if (entry) await executeEditorOperations(entry.forward, "redo");
+  };
+
+  const onDragEnd = async ({ active, over }: DragEndEvent) => {
+    if (!detail || !over) return;
+    const participantId = String(active.id).replace(/^participant:/, "");
+    const slotId = String(over.id).replace(/^slot:/, "");
+    const target = detail.waves
+      .flatMap((wave) => wave.teams)
+      .flatMap((team) => team.slots)
+      .find((slot) => slot.id === slotId);
+    if (!target || target.participantId === participantId) return;
+    await executeEditorOperations([
+      target.participantId
+        ? {
+            type: "SWAP_PARTICIPANTS",
+            participantId,
+            otherParticipantId: target.participantId,
+          }
+        : { type: "MOVE_PARTICIPANT", participantId, toSlotId: target.id },
+    ]);
   };
 
   useEffect(() => {
@@ -174,6 +288,8 @@ export function SchedulePage({ onError, onSuccess }: Props) {
       createForm.resetFields();
       await loadList();
       applyDetail(created);
+      resetEditor();
+      setVersions([]);
       onSuccess("排表已创建");
     } catch (error) {
       onError(error);
@@ -347,6 +463,73 @@ export function SchedulePage({ onError, onSuccess }: Props) {
     }
   };
 
+  const publish = async () => {
+    if (!detail) return;
+    setPublishPending(true);
+    try {
+      const response = await api<SchedulePublishResponse>(`/schedules/${detail.id}/publish`, {
+        method: "POST",
+        body: JSON.stringify({
+          baseRevision: detail.revision,
+          confirmWarnings: confirmPublishWarnings,
+        }),
+      });
+      applyDetail(response.schedule);
+      setVersions((current) => [response.version, ...current]);
+      setPublishOpen(false);
+      setConfirmPublishWarnings(false);
+      resetEditor();
+      await loadList();
+      onSuccess(`排表已发布为 v${response.version.versionNo}`);
+    } catch (error) {
+      onError(error);
+    } finally {
+      setPublishPending(false);
+    }
+  };
+
+  const restoreVersion = async (versionNo: number) => {
+    if (!detail) return;
+    try {
+      const restored = await api<ScheduleDetail>(
+        `/schedules/${detail.id}/versions/${versionNo}/restore-as-draft`,
+        {
+          method: "POST",
+          body: JSON.stringify({ baseRevision: detail.revision }),
+        },
+      );
+      applyDetail(restored);
+      resetEditor();
+      setHistoryOpen(false);
+      await loadList();
+      onSuccess(`已从发布版本 v${versionNo} 恢复为草稿`);
+    } catch (error) {
+      onError(error);
+    }
+  };
+
+  const confirmRestoreVersion = (versionNo: number) => {
+    Modal.confirm({
+      title: `恢复发布版本 v${versionNo}？`,
+      content: "当前草稿布局会被该发布版本替换；发布历史不会被删除。",
+      okText: "确认恢复",
+      cancelText: "取消",
+      onOk: () => restoreVersion(versionNo),
+    });
+  };
+
+  const createShare = async (version: ScheduleVersionSummary) => {
+    try {
+      const link = await api<ShareLinkCreated>(`/schedule-versions/${version.id}/share-links`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      setShareUrl(`${window.location.origin}/share/${link.token}`);
+    } catch (error) {
+      onError(error);
+    }
+  };
+
   const previewSync = async () => {
     if (!detail) return;
     try {
@@ -479,6 +662,19 @@ export function SchedulePage({ onError, onSuccess }: Props) {
   const damageCount = selectedParticipants.filter(
     (participant) => participant.roleTypeSnapshot === "DAMAGE",
   ).length;
+  const assignedParticipantIds = new Set(
+    detail.waves
+      .flatMap((wave) => wave.teams)
+      .flatMap((team) => team.slots)
+      .flatMap((slot) => (slot.participantId ? [slot.participantId] : [])),
+  );
+  const unassignedParticipants = selectedParticipants.filter(
+    (participant) => !assignedParticipantIds.has(participant.id),
+  );
+  const visibleWaves =
+    viewMode === "overview"
+      ? detail.waves
+      : detail.waves.filter((wave) => wave.waveNo === selectedWaveNo);
 
   return (
     <section>
@@ -490,6 +686,9 @@ export function SchedulePage({ onError, onSuccess }: Props) {
             onClick={() => {
               setDetail(null);
               setLatestGeneration(null);
+              setVersions([]);
+              setShareUrl("");
+              resetEditor();
             }}
           >
             ← 返回排表列表
@@ -500,6 +699,19 @@ export function SchedulePage({ onError, onSuccess }: Props) {
           </Typography.Text>
         </div>
         <Space wrap>
+          <Button icon={<HistoryOutlined />} onClick={() => setHistoryOpen(true)}>
+            发布历史 {versions.length ? `(${versions.length})` : ""}
+          </Button>
+          <Button
+            type="primary"
+            icon={<SendOutlined />}
+            disabled={
+              hasUnsavedChanges || detail.status === "ARCHIVED" || detail.status === "PUBLISHED"
+            }
+            onClick={() => setPublishOpen(true)}
+          >
+            发布排表
+          </Button>
           <Button
             icon={<CopyOutlined />}
             disabled={hasUnsavedChanges}
@@ -622,56 +834,172 @@ export function SchedulePage({ onError, onSuccess }: Props) {
         </Checkbox.Group>
       </Card>
 
-      <div className="wave-list">
-        {detail.waves.map((wave) => (
-          <Card
-            title={`第 ${wave.waveNo} 波`}
-            extra={`C ${wave.damageTotal} 亿 · 奶 ${wave.bufferTotal}`}
-            key={wave.id}
-            className="schedule-panel wave-card"
+      <Card className="schedule-panel editor-toolbar">
+        <Space wrap>
+          <Segmented
+            value={viewMode}
+            onChange={(value) => setViewMode(value as "overview" | "wave")}
+            options={[
+              { label: "总览", value: "overview" },
+              { label: "单波", value: "wave" },
+            ]}
+          />
+          {viewMode === "wave" ? (
+            <Select
+              value={selectedWaveNo}
+              onChange={setSelectedWaveNo}
+              options={detail.waves.map((wave) => ({
+                label: `第 ${wave.waveNo} 波`,
+                value: wave.waveNo,
+              }))}
+              style={{ width: 128 }}
+            />
+          ) : null}
+          <Button
+            icon={<UndoOutlined />}
+            disabled={!undoStack.length || editorPending}
+            onClick={() => void undo()}
           >
-            <Row gutter={[12, 12]}>
-              {wave.teams.map((team) => (
-                <Col xs={24} xl={Math.max(6, Math.floor(24 / wave.teams.length))} key={team.id}>
-                  <Card
+            撤销
+          </Button>
+          <Button
+            icon={<RedoOutlined />}
+            disabled={!redoStack.length || editorPending}
+            onClick={() => void redo()}
+          >
+            恢复
+          </Button>
+          <Typography.Text type="secondary">拖动角色到空位，拖到其他角色上可直接交换</Typography.Text>
+        </Space>
+      </Card>
+
+      <DndContext sensors={sensors} onDragEnd={(event) => void onDragEnd(event)}>
+        <Card title={`未分配角色 · ${unassignedParticipants.length}`} className="schedule-panel">
+          <div className="unassigned-pool">
+            {unassignedParticipants.length ? (
+              unassignedParticipants.map((participant) => (
+                <DraggableParticipant
+                  key={participant.id}
+                  participant={participant}
+                  disabled={participant.isLocked || editorPending}
+                />
+              ))
+            ) : (
+              <Typography.Text type="secondary">所有参团角色都已安排</Typography.Text>
+            )}
+          </div>
+        </Card>
+        <div className="wave-list">
+          {visibleWaves.map((wave) => (
+            <EditorWave
+              key={wave.id}
+              wave={wave}
+              participantsById={participantsById}
+              disabled={editorPending}
+              onOperation={(operation) => void executeEditorOperations([operation])}
+            />
+          ))}
+        </div>
+      </DndContext>
+
+      <Modal
+        title="发布排表"
+        open={publishOpen}
+        onCancel={() => setPublishOpen(false)}
+        onOk={() => void publish()}
+        okText="确认发布"
+        confirmLoading={publishPending}
+      >
+        <Alert
+          type="info"
+          showIcon
+          title="发布后会保存不可变快照"
+          description="以后继续编辑会自动回到草稿状态，已发布版本及其导出内容不会改变。"
+        />
+        <Checkbox
+          className="publish-warning-confirm"
+          checked={confirmPublishWarnings}
+          onChange={(event) => setConfirmPublishWarnings(event.target.checked)}
+        >
+          我确认在存在非阻断警告时仍然发布
+        </Checkbox>
+      </Modal>
+
+      <Modal
+        title="发布历史"
+        open={historyOpen}
+        onCancel={() => setHistoryOpen(false)}
+        footer={null}
+        width={760}
+      >
+        {versions.length ? (
+          <div className="version-history-list">
+            {versions.map((version) => (
+              <Card
+                size="small"
+                key={version.id}
+                title={`v${version.versionNo}`}
+                extra={new Date(version.publishedAt).toLocaleString()}
+              >
+                <Space wrap>
+                  <Button
                     size="small"
-                    title={`${team.displayNameSnapshot} · ${team.compositionCode}`}
-                    extra={`C ${team.damageTotal} · 奶 ${team.bufferTotal}`}
-                    className="team-card"
-                    style={{ borderTopColor: team.displayColorSnapshot }}
+                    icon={<HistoryOutlined />}
+                    onClick={() => confirmRestoreVersion(version.versionNo)}
                   >
-                    <div className="team-slots">
-                      {team.slots.map((slot) => {
-                        const participant = slot.participantId
-                          ? participantsById.get(slot.participantId)
-                          : undefined;
-                        return (
-                          <div className="team-slot" key={slot.id}>
-                            <Typography.Text type={participant ? undefined : "secondary"}>
-                              {participant ? (
-                                <ParticipantLabel
-                                  participant={participant}
-                                  compact
-                                  core={wave.specialAssignments.some(
-                                    (assignment) =>
-                                      assignment.participantId === participant.id,
-                                  )}
-                                />
-                              ) : (
-                                `位置 ${slot.slotNo} · 待排`
-                              )}
-                            </Typography.Text>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </Card>
-                </Col>
-              ))}
-            </Row>
-          </Card>
-        ))}
-      </div>
+                    恢复为草稿
+                  </Button>
+                  <Button
+                    size="small"
+                    icon={<DownloadOutlined />}
+                    href={`/api/v1/schedule-versions/${version.id}/exports/image`}
+                  >
+                    长图
+                  </Button>
+                  <Button
+                    size="small"
+                    icon={<DownloadOutlined />}
+                    href={`/api/v1/schedule-versions/${version.id}/exports/excel`}
+                  >
+                    Excel
+                  </Button>
+                  <Button
+                    size="small"
+                    icon={<DownloadOutlined />}
+                    href={`/api/v1/schedule-versions/${version.id}/exports/text`}
+                  >
+                    文本
+                  </Button>
+                  <Button
+                    size="small"
+                    icon={<SendOutlined />}
+                    onClick={() => void createShare(version)}
+                  >
+                    创建只读链接
+                  </Button>
+                </Space>
+                <Typography.Text type="secondary" className="version-hash">
+                  revision {version.sourceRevision} · {version.snapshotHash.slice(0, 12)}
+                </Typography.Text>
+              </Card>
+            ))}
+          </div>
+        ) : (
+          <Empty description="尚未发布任何版本" />
+        )}
+      </Modal>
+
+      <Modal
+        title="只读分享链接"
+        open={Boolean(shareUrl)}
+        onCancel={() => setShareUrl("")}
+        footer={<Button onClick={() => setShareUrl("")}>关闭</Button>}
+      >
+        <Typography.Paragraph type="secondary">
+          链接只展示对应的不可变发布版本，不会随草稿修改而变化。
+        </Typography.Paragraph>
+        <Input value={shareUrl} readOnly />
+      </Modal>
 
       <Modal
         title="自动排表"
@@ -926,6 +1254,204 @@ export function SchedulePage({ onError, onSuccess }: Props) {
         </div>
       </Modal>
     </section>
+  );
+}
+
+function EditorWave({
+  wave,
+  participantsById,
+  disabled,
+  onOperation,
+}: {
+  wave: ScheduleWave;
+  participantsById: Map<string, ScheduleParticipant>;
+  disabled: boolean;
+  onOperation: (operation: ScheduleOperation) => void;
+}) {
+  return (
+    <Card
+      title={`第 ${wave.waveNo} 波`}
+      extra={
+        <Space>
+          <Typography.Text type="secondary">
+            C {wave.damageTotal} 亿 · 奶 {wave.bufferTotal}
+          </Typography.Text>
+          <Button
+            size="small"
+            icon={wave.isLocked ? <UnlockOutlined /> : <LockOutlined />}
+            disabled={disabled}
+            onClick={() =>
+              onOperation({ type: "LOCK_WAVE", waveId: wave.id, locked: !wave.isLocked })
+            }
+          >
+            {wave.isLocked ? "解锁波次" : "锁定波次"}
+          </Button>
+        </Space>
+      }
+      className="schedule-panel wave-card"
+    >
+      <Row gutter={[12, 12]}>
+        {wave.teams.map((team) => (
+          <Col xs={24} xl={Math.max(6, Math.floor(24 / wave.teams.length))} key={team.id}>
+            <Card
+              size="small"
+              title={`${team.displayNameSnapshot} · ${team.compositionCode}`}
+              extra={`C ${team.damageTotal} · 奶 ${team.bufferTotal}`}
+              className="team-card"
+              style={{ borderTopColor: team.displayColorSnapshot }}
+            >
+              <div className="team-slots">
+                {team.slots.map((slot) => (
+                  <EditorSlot
+                    key={slot.id}
+                    slot={slot}
+                    team={team}
+                    wave={wave}
+                    participant={
+                      slot.participantId ? participantsById.get(slot.participantId) : undefined
+                    }
+                    disabled={disabled}
+                    onOperation={onOperation}
+                  />
+                ))}
+              </div>
+            </Card>
+          </Col>
+        ))}
+      </Row>
+    </Card>
+  );
+}
+
+function EditorSlot({
+  slot,
+  team,
+  wave,
+  participant,
+  disabled,
+  onOperation,
+}: {
+  slot: ScheduleSlot;
+  team: ScheduleTeam;
+  wave: ScheduleWave;
+  participant?: ScheduleParticipant;
+  disabled: boolean;
+  onOperation: (operation: ScheduleOperation) => void;
+}) {
+  const { setNodeRef, isOver } = useDroppable({
+    id: `slot:${slot.id}`,
+    disabled: disabled || slot.isLocked || wave.isLocked,
+  });
+  const core = participant
+    ? wave.specialAssignments.find((assignment) => assignment.participantId === participant.id)
+    : undefined;
+  const moveDisabled = disabled || slot.isLocked || wave.isLocked || Boolean(participant?.isLocked);
+  return (
+    <div
+      ref={setNodeRef}
+      className={`team-slot editor-slot${isOver ? " editor-slot-over" : ""}${
+        slot.isLocked ? " editor-slot-locked" : ""
+      }`}
+    >
+      <div className="editor-slot-content">
+        {participant ? (
+          <DraggableParticipant participant={participant} core={Boolean(core)} disabled={moveDisabled} />
+        ) : (
+          <Typography.Text type="secondary">位置 {slot.slotNo} · 待排</Typography.Text>
+        )}
+      </div>
+      <Space size={2} className="editor-slot-actions" onPointerDown={(event) => event.stopPropagation()}>
+        {participant?.isTreasureSnapshot ? (
+          <Button
+            type="text"
+            size="small"
+            title={core ? "取消本波核心" : "设为本波核心"}
+            icon={<CrownOutlined />}
+            disabled={disabled || wave.isLocked}
+            onClick={() =>
+              onOperation(
+                core
+                  ? {
+                      type: "CLEAR_WAVE_CORE",
+                      waveId: wave.id,
+                      ruleCode: core.ruleCode,
+                    }
+                  : {
+                      type: "SET_WAVE_CORE",
+                      waveId: wave.id,
+                      participantId: participant.id,
+                    },
+              )
+            }
+          />
+        ) : null}
+        {participant ? (
+          <>
+            <Button
+              type="text"
+              size="small"
+              title={participant.isLocked ? "解锁角色" : "锁定角色"}
+              icon={participant.isLocked ? <UnlockOutlined /> : <LockOutlined />}
+              disabled={disabled}
+              onClick={() =>
+                onOperation({
+                  type: "LOCK_PARTICIPANT",
+                  participantId: participant.id,
+                  locked: !participant.isLocked,
+                })
+              }
+            />
+            <Button
+              type="text"
+              size="small"
+              danger
+              disabled={moveDisabled}
+              onClick={() =>
+                onOperation({ type: "UNASSIGN_PARTICIPANT", participantId: participant.id })
+              }
+            >
+              移出
+            </Button>
+          </>
+        ) : null}
+        <Button
+          type="text"
+          size="small"
+          title={slot.isLocked ? "解锁位置" : "锁定位置"}
+          icon={slot.isLocked ? <UnlockOutlined /> : <LockOutlined />}
+          disabled={disabled || wave.isLocked}
+          onClick={() =>
+            onOperation({ type: "LOCK_SLOT", slotId: slot.id, locked: !slot.isLocked })
+          }
+        />
+      </Space>
+    </div>
+  );
+}
+
+function DraggableParticipant({
+  participant,
+  core = false,
+  disabled,
+}: {
+  participant: ScheduleParticipant;
+  core?: boolean;
+  disabled: boolean;
+}) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+    id: `participant:${participant.id}`,
+    disabled,
+  });
+  return (
+    <div
+      ref={setNodeRef}
+      className={`draggable-participant${isDragging ? " dragging" : ""}`}
+      style={{ transform: CSS.Translate.toString(transform) }}
+      {...listeners}
+      {...attributes}
+    >
+      <ParticipantLabel participant={participant} compact core={core} />
+    </div>
   );
 }
 
