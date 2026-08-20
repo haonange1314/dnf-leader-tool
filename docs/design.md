@@ -667,9 +667,9 @@ erDiagram
 | 数据库 | PostgreSQL |
 | ORM 与迁移 | SQLAlchemy + Alembic |
 | Excel | openpyxl |
-| 长图 | Playwright for Python |
+| 长图 | Pillow |
 | 部署 | Docker Compose |
-| 测试 | Vitest + pytest + Playwright |
+| 测试 | Vitest + pytest + 隔离 Docker/PostgreSQL 冒烟测试；公网阶段补 Playwright E2E |
 
 ### 15.2 部署结构
 
@@ -682,7 +682,7 @@ erDiagram
        ├── PostgreSQL
        ├── OR-Tools
        ├── Excel 导入导出
-       └── Playwright 长图生成
+       └── Pillow PNG 长图生成
 ```
 
 本地阶段使用 Docker Compose 启动前端、后端和 PostgreSQL。后续迁移到公网单机时复用相同容器结构，在入口增加 HTTPS 反向代理。
