@@ -1,22 +1,19 @@
 from __future__ import annotations
 
 import hashlib
-import io
 import secrets
 import uuid
 from datetime import timedelta
-from typing import Any, cast
-from xml.sax.saxutils import escape
+from typing import Any, Literal
 
 from fastapi import APIRouter, Response
 from fastapi.responses import StreamingResponse
-from openpyxl import Workbook
-from openpyxl.worksheet.worksheet import Worksheet
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from app.api.dependencies import CurrentUser, DbSession
 from app.application.schedule_editor import recompute_schedule
+from app.application.schedule_exports import snapshot_png, snapshot_text, snapshot_workbook
 from app.application.schedule_publication import (
     SNAPSHOT_SCHEMA_VERSION,
     create_schedule_snapshot,
@@ -30,14 +27,19 @@ from app.models.schedule import Schedule, ScheduleVersion, ShareLink, Team, Wave
 from app.schemas.schedule import (
     PublicScheduleVersion,
     ScheduleDetail,
+    SchedulePublicationCheck,
     SchedulePublishRequest,
     SchedulePublishResponse,
     ScheduleRestoreRequest,
+    ScheduleVersionCopyRequest,
     ScheduleVersionList,
     ScheduleVersionSummary,
     ScheduleVersionView,
     ShareLinkCreate,
     ShareLinkCreated,
+    ShareLinkList,
+    ShareLinkView,
+    ValidationRequest,
 )
 
 router = APIRouter()
@@ -62,6 +64,51 @@ def _load_schedule(db: DbSession, schedule_id: uuid.UUID, *, for_update: bool = 
     return schedule
 
 
+def _load_dungeon_version(db: DbSession, version_id: uuid.UUID) -> DungeonVersion:
+    version = db.scalar(
+        select(DungeonVersion)
+        .where(DungeonVersion.id == version_id)
+        .options(
+            selectinload(DungeonVersion.dungeon),
+            selectinload(DungeonVersion.formula_version),
+            selectinload(DungeonVersion.teams),
+        )
+    )
+    if version is None:
+        raise AppError(409, "DUNGEON_VERSION_MISSING", "排表引用的副本版本不存在")
+    return version
+
+
+@router.post(
+    "/schedules/{schedule_id}/publication-check", response_model=SchedulePublicationCheck
+)
+def check_schedule_publication(
+    schedule_id: uuid.UUID,
+    payload: ValidationRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> SchedulePublicationCheck:
+    del current_user
+    schedule = _load_schedule(db, schedule_id)
+    if schedule.status == "ARCHIVED":
+        raise AppError(409, "SCHEDULE_ARCHIVED", "已归档排表不能发布")
+    if schedule.revision != payload.base_revision:
+        raise AppError(409, "SCHEDULE_REVISION_CONFLICT", "排表已变化，请刷新后重试")
+    version_definition = _load_dungeon_version(db, schedule.dungeon_version_id)
+    recompute_schedule(schedule, version_definition)
+    issues = publication_issues(schedule, version_definition)
+    summary = {
+        severity.lower(): sum(issue.severity == severity for issue in issues)
+        for severity in ("ERROR", "WARNING", "INFO")
+    }
+    return SchedulePublicationCheck(
+        revision=schedule.revision,
+        publishable=summary["error"] == 0,
+        issues=issues,
+        summary=summary,
+    )
+
+
 @router.post("/schedules/{schedule_id}/publish", response_model=SchedulePublishResponse)
 def publish_schedule(
     schedule_id: uuid.UUID,
@@ -81,9 +128,7 @@ def publish_schedule(
             "排表已被其他操作修改，请刷新后重试",
             details={"expected": payload.base_revision, "current": schedule.revision},
         )
-    version_definition = db.get(DungeonVersion, schedule.dungeon_version_id)
-    if version_definition is None:
-        raise AppError(409, "DUNGEON_VERSION_MISSING", "排表引用的副本版本不存在")
+    version_definition = _load_dungeon_version(db, schedule.dungeon_version_id)
     recompute_schedule(schedule, version_definition)
     issues = publication_issues(schedule, version_definition)
     errors = [issue for issue in issues if issue.severity == "ERROR"]
@@ -102,7 +147,10 @@ def publish_schedule(
             "排表存在警告，请确认后发布",
             details={"issues": [issue.model_dump() for issue in warnings]},
         )
-    snapshot, snapshot_hash = create_schedule_snapshot(schedule)
+    published_at = utc_now()
+    snapshot, snapshot_hash = create_schedule_snapshot(
+        schedule, version_definition, issues, published_at
+    )
     version_no = (
         db.scalar(
             select(func.coalesce(func.max(ScheduleVersion.version_no), 0)).where(
@@ -121,6 +169,7 @@ def publish_schedule(
         snapshot_hash=snapshot_hash,
         formula_version_id=schedule.formula_version_id,
         published_by=current_user.id,
+        published_at=published_at,
     )
     db.add(published)
     schedule.status = "PUBLISHED"
@@ -217,6 +266,55 @@ def restore_schedule_version(
 
 
 @router.post(
+    "/schedules/{schedule_id}/versions/{version_no}/copy-as-draft",
+    response_model=ScheduleDetail,
+    status_code=201,
+)
+def copy_schedule_version_as_draft(
+    schedule_id: uuid.UUID,
+    version_no: int,
+    payload: ScheduleVersionCopyRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> ScheduleDetail:
+    version = db.scalar(
+        select(ScheduleVersion).where(
+            ScheduleVersion.schedule_id == schedule_id,
+            ScheduleVersion.version_no == version_no,
+        )
+    )
+    if version is None:
+        raise AppError(404, "SCHEDULE_VERSION_NOT_FOUND", "排表发布版本不存在")
+    snapshot = version.snapshot
+    copied = Schedule(
+        id=uuid.uuid4(),
+        name=payload.name,
+        dungeon_version_id=uuid.UUID(str(snapshot["dungeonVersionId"])),
+        formula_version_id=version.formula_version_id,
+        wave_count=int(str(snapshot["waveCount"])),
+        status="DRAFT",
+        note=str(snapshot["note"]) if snapshot.get("note") is not None else None,
+        revision=1,
+        validation_summary=None,
+        created_by=current_user.id,
+        updated_by=current_user.id,
+    )
+    db.add(copied)
+    db.flush()
+    try:
+        restore_snapshot(db, copied, snapshot)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise AppError(409, "SCHEDULE_SNAPSHOT_INVALID", "发布版本快照无法复制") from exc
+    copied.name = payload.name
+    copied.status = "DRAFT"
+    copied.revision = 1
+    copied.last_published_version = None
+    copied.validation_summary = None
+    db.commit()
+    return ScheduleDetail.model_validate(_load_schedule(db, copied.id))
+
+
+@router.post(
     "/schedule-versions/{version_id}/share-links",
     response_model=ShareLinkCreated,
     status_code=201,
@@ -250,6 +348,46 @@ def create_share_link(
         token=token,
         expires_at=expires_at,
     )
+
+
+@router.get(
+    "/schedule-versions/{version_id}/share-links",
+    response_model=ShareLinkList,
+)
+def list_share_links(
+    version_id: uuid.UUID, db: DbSession, current_user: CurrentUser
+) -> ShareLinkList:
+    del current_user
+    if db.get(ScheduleVersion, version_id) is None:
+        raise AppError(404, "SCHEDULE_VERSION_NOT_FOUND", "排表发布版本不存在")
+    links = list(
+        db.scalars(
+            select(ShareLink)
+            .where(ShareLink.schedule_version_id == version_id)
+            .order_by(ShareLink.created_at.desc())
+        )
+    )
+    now = utc_now()
+    items = []
+    for link in links:
+        status: Literal["ACTIVE", "EXPIRED", "REVOKED"] = (
+            "REVOKED"
+            if link.revoked_at is not None
+            else "EXPIRED"
+            if link.expires_at is not None and link.expires_at <= now
+            else "ACTIVE"
+        )
+        items.append(
+            ShareLinkView(
+                id=link.id,
+                schedule_version_id=link.schedule_version_id,
+                expires_at=link.expires_at,
+                revoked_at=link.revoked_at,
+                created_at=link.created_at,
+                status=status,
+            )
+        )
+    return ShareLinkList(items=items, total=len(items))
 
 
 @router.delete("/share-links/{share_link_id}", status_code=204)
@@ -296,7 +434,7 @@ def export_schedule_text(
     del current_user
     version = _version(db, version_id)
     return Response(
-        content=_snapshot_text(version.snapshot, version.version_no),
+        content=snapshot_text(version.snapshot, f"发布版本 v{version.version_no}"),
         media_type="text/plain; charset=utf-8",
         headers={
             "Content-Disposition": f'attachment; filename="schedule-v{version.version_no}.txt"'
@@ -310,42 +448,7 @@ def export_schedule_excel(
 ) -> StreamingResponse:
     del current_user
     version = _version(db, version_id)
-    workbook = Workbook()
-    sheet = cast(Worksheet, workbook.active)
-    sheet.title = "排表"
-    sheet.append([version.snapshot.get("name", "排表"), f"发布版本 v{version.version_no}"])
-    sheet.append(["波次", "队伍", "位置", "玩家", "角色", "职业", "类型", "评分", "核心"])
-    participants = {
-        str(item["id"]): item for item in version.snapshot.get("participants", [])
-    }
-    for wave in version.snapshot.get("waves", []):
-        cores = {
-            str(item["participantId"]) for item in wave.get("specialAssignments", [])
-        }
-        for team in wave.get("teams", []):
-            for slot in team.get("slots", []):
-                participant = participants.get(str(slot.get("participantId")), {})
-                score = participant.get("damageScoreSnapshot") or participant.get(
-                    "bufferScoreSnapshot"
-                )
-                sheet.append(
-                    [
-                        wave["waveNo"],
-                        team["displayNameSnapshot"],
-                        slot["slotNo"],
-                        participant.get("playerNameSnapshot", "待补"),
-                        participant.get("characterNameSnapshot", ""),
-                        participant.get("professionSnapshot", ""),
-                        participant.get("roleTypeSnapshot", ""),
-                        score or "",
-                        "是" if str(participant.get("id")) in cores else "",
-                    ]
-                )
-    for column_letter in "ABCDEFGHI":
-        sheet.column_dimensions[column_letter].width = 18
-    output = io.BytesIO()
-    workbook.save(output)
-    output.seek(0)
+    output = snapshot_workbook(version.snapshot, f"发布版本 v{version.version_no}")
     return StreamingResponse(
         output,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -358,28 +461,62 @@ def export_schedule_excel(
 @router.get("/schedule-versions/{version_id}/exports/image")
 def export_schedule_image(
     version_id: uuid.UUID, db: DbSession, current_user: CurrentUser
-) -> Response:
+) -> StreamingResponse:
     del current_user
     version = _version(db, version_id)
-    lines = _snapshot_text(version.snapshot, version.version_no).splitlines()
-    width = 1200
-    line_height = 30
-    height = max(180, 80 + len(lines) * line_height)
-    text_nodes = "".join(
-        f'<text x="40" y="{60 + index * line_height}" class="line">{escape(line)}</text>'
-        for index, line in enumerate(lines)
-    )
-    svg = (
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
-        f'viewBox="0 0 {width} {height}"><rect width="100%" height="100%" fill="#f7f4ee"/>'
-        '<style>.line{font:20px sans-serif;fill:#292724}</style>'
-        f"{text_nodes}</svg>"
-    )
-    return Response(
-        content=svg,
-        media_type="image/svg+xml",
+    return StreamingResponse(
+        snapshot_png(version.snapshot, f"发布版本 v{version.version_no}"),
+        media_type="image/png",
         headers={
-            "Content-Disposition": f'attachment; filename="schedule-v{version.version_no}.svg"'
+            "Content-Disposition": f'attachment; filename="schedule-v{version.version_no}.png"'
+        },
+    )
+
+
+@router.get("/schedules/{schedule_id}/exports/text")
+def export_draft_text(
+    schedule_id: uuid.UUID, db: DbSession, current_user: CurrentUser
+) -> Response:
+    del current_user
+    schedule, snapshot = _draft_snapshot(db, schedule_id)
+    return Response(
+        content=snapshot_text(snapshot, f"revision {schedule.revision}", draft=True),
+        media_type="text/plain; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="schedule-draft-r{schedule.revision}.txt"'
+        },
+    )
+
+
+@router.get("/schedules/{schedule_id}/exports/excel")
+def export_draft_excel(
+    schedule_id: uuid.UUID, db: DbSession, current_user: CurrentUser
+) -> StreamingResponse:
+    del current_user
+    schedule, snapshot = _draft_snapshot(db, schedule_id)
+    output = snapshot_workbook(snapshot, f"revision {schedule.revision}", draft=True)
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="schedule-draft-r{schedule.revision}.xlsx"'
+            )
+        },
+    )
+
+
+@router.get("/schedules/{schedule_id}/exports/image")
+def export_draft_image(
+    schedule_id: uuid.UUID, db: DbSession, current_user: CurrentUser
+) -> StreamingResponse:
+    del current_user
+    schedule, snapshot = _draft_snapshot(db, schedule_id)
+    return StreamingResponse(
+        snapshot_png(snapshot, f"revision {schedule.revision}", draft=True),
+        media_type="image/png",
+        headers={
+            "Content-Disposition": f'attachment; filename="schedule-draft-r{schedule.revision}.png"'
         },
     )
 
@@ -391,23 +528,13 @@ def _version(db: DbSession, version_id: uuid.UUID) -> ScheduleVersion:
     return version
 
 
-def _snapshot_text(snapshot: dict[str, Any], version_no: int) -> str:
-    lines = [f"{snapshot.get('name', '排表')} · 发布版本 v{version_no}"]
-    participants = {str(item["id"]): item for item in snapshot.get("participants", [])}
-    for wave in snapshot.get("waves", []):
-        lines.append("")
-        lines.append(f"第 {wave['waveNo']} 波")
-        cores = {str(item["participantId"]) for item in wave.get("specialAssignments", [])}
-        for team in wave.get("teams", []):
-            members: list[str] = []
-            for slot in team.get("slots", []):
-                participant = participants.get(str(slot.get("participantId")))
-                if participant is None:
-                    members.append("待补")
-                else:
-                    core = "【核心】" if str(participant["id"]) in cores else ""
-                    members.append(
-                        f"{participant['playerNameSnapshot']}·{participant['characterNameSnapshot']}{core}"
-                    )
-            lines.append(f"{team['displayNameSnapshot']}：{' / '.join(members)}")
-    return "\n".join(lines)
+def _draft_snapshot(db: DbSession, schedule_id: uuid.UUID) -> tuple[Schedule, dict[str, Any]]:
+    schedule = _load_schedule(db, schedule_id)
+    if schedule.status != "DRAFT":
+        raise AppError(409, "SCHEDULE_NOT_DRAFT", "当前排表不是草稿，请从发布历史导出")
+    version_definition = _load_dungeon_version(db, schedule.dungeon_version_id)
+    recompute_schedule(schedule, version_definition)
+    issues = publication_issues(schedule, version_definition)
+    snapshot = ScheduleDetail.model_validate(schedule).model_dump(mode="json", by_alias=True)
+    snapshot["issues"] = [issue.model_dump(mode="json") for issue in issues]
+    return schedule, snapshot

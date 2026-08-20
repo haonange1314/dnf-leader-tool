@@ -3,6 +3,7 @@ import {
   CopyOutlined,
   CrownOutlined,
   DownloadOutlined,
+  EyeOutlined,
   HistoryOutlined,
   LockOutlined,
   PlayCircleOutlined,
@@ -18,11 +19,13 @@ import {
   DndContext,
   type DragEndEvent,
   PointerSensor,
+  KeyboardSensor,
   useDraggable,
   useDroppable,
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
+import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
   Alert,
@@ -54,6 +57,7 @@ import {
   type ScheduleCopyPreview,
   type ScheduleDetail,
   type ScheduleOperation,
+  type SchedulePublicationCheck,
   type ScheduleParticipant,
   type SchedulePublishResponse,
   type SchedulePreference,
@@ -62,6 +66,8 @@ import {
   type ScheduleSyncPreview,
   type ScheduleTeam,
   type ScheduleVersionSummary,
+  type ScheduleVersionView,
+  type ShareLinkView,
   type ScheduleWave,
   type ShareLinkCreated,
   type ValidationIssue,
@@ -88,6 +94,12 @@ const ISSUE_LABELS: Record<string, string> = {
   MISSING_WAVE_CORE: "完整波次缺少核心角色",
   DAMAGE_ORDER_VIOLATION: "C 强度顺序未满足",
   BUFFER_ORDER_VIOLATION: "奶强度顺序未满足",
+  TEAM_INCOMPLETE: "队伍存在待补位置",
+  TEAM_COMPOSITION_INVALID: "队伍组成不符合副本规则",
+  PLAYER_DUPLICATE_IN_WAVE: "同一玩家在同一波使用多个角色",
+  PARTICIPANT_WAVE_NOT_ALLOWED: "角色被安排到玩家不可用波次",
+  PLAYER_MAX_WAVE_COUNT_EXCEEDED: "玩家出场次数超过上限",
+  UNASSIGNED_SELECTED_PARTICIPANTS: "仍有已选角色未分配",
 };
 
 export function SchedulePage({ onError, onSuccess }: Props) {
@@ -117,11 +129,23 @@ export function SchedulePage({ onError, onSuccess }: Props) {
   const [publishOpen, setPublishOpen] = useState(false);
   const [publishPending, setPublishPending] = useState(false);
   const [confirmPublishWarnings, setConfirmPublishWarnings] = useState(false);
+  const [publicationCheck, setPublicationCheck] = useState<SchedulePublicationCheck | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [versionPreview, setVersionPreview] = useState<ScheduleVersionView | null>(null);
+  const [copyVersionTarget, setCopyVersionTarget] = useState<ScheduleVersionSummary | null>(null);
+  const [copyVersionName, setCopyVersionName] = useState("");
+  const [versionActionPending, setVersionActionPending] = useState(false);
+  const [shareVersion, setShareVersion] = useState<ScheduleVersionSummary | null>(null);
+  const [shareLinks, setShareLinks] = useState<ShareLinkView[]>([]);
+  const [shareExpiryDays, setShareExpiryDays] = useState<number | null>(7);
+  const [sharePending, setSharePending] = useState(false);
   const [shareUrl, setShareUrl] = useState("");
   const [waveCount, setWaveCount] = useState(1);
   const [createForm] = Form.useForm();
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
   const {
     viewMode,
     selectedWaveNo,
@@ -209,9 +233,12 @@ export function SchedulePage({ onError, onSuccess }: Props) {
   const executeEditorOperations = async (
     operations: ScheduleOperation[],
     historyMode: "record" | "undo" | "redo" = "record",
+    optimisticDetail?: ScheduleDetail,
   ) => {
     if (!detail || editorPending) return;
+    const previousDetail = detail;
     setEditorPending(true);
+    if (optimisticDetail) setDetail(optimisticDetail);
     try {
       const response = await api<ScheduleCommandResponse>(`/schedules/${detail.id}/commands`, {
         method: "POST",
@@ -233,6 +260,7 @@ export function SchedulePage({ onError, onSuccess }: Props) {
         historyMode === "record" ? "排表已更新" : historyMode === "undo" ? "已撤销" : "已恢复",
       );
     } catch (error) {
+      if (optimisticDetail) setDetail(previousDetail);
       onError(error);
     } finally {
       setEditorPending(false);
@@ -253,20 +281,11 @@ export function SchedulePage({ onError, onSuccess }: Props) {
     if (!detail || !over) return;
     const participantId = String(active.id).replace(/^participant:/, "");
     const slotId = String(over.id).replace(/^slot:/, "");
-    const target = detail.waves
-      .flatMap((wave) => wave.teams)
-      .flatMap((team) => team.slots)
-      .find((slot) => slot.id === slotId);
+    const target = allScheduleSlots(detail).find((slot) => slot.id === slotId);
     if (!target || target.participantId === participantId) return;
-    await executeEditorOperations([
-      target.participantId
-        ? {
-            type: "SWAP_PARTICIPANTS",
-            participantId,
-            otherParticipantId: target.participantId,
-          }
-        : { type: "MOVE_PARTICIPANT", participantId, toSlotId: target.id },
-    ]);
+    const operations = buildDropOperations(detail, participantId, target.id);
+    if (operations.length === 0) return;
+    await executeEditorOperations(operations, "record", applyOptimisticAssignment(detail, operations));
   };
 
   useEffect(() => {
@@ -463,6 +482,27 @@ export function SchedulePage({ onError, onSuccess }: Props) {
     }
   };
 
+  const openPublish = async () => {
+    if (!detail) return;
+    setPublishPending(true);
+    try {
+      const check = await api<SchedulePublicationCheck>(
+        `/schedules/${detail.id}/publication-check`,
+        {
+          method: "POST",
+          body: JSON.stringify({ baseRevision: detail.revision }),
+        },
+      );
+      setPublicationCheck(check);
+      setConfirmPublishWarnings(false);
+      setPublishOpen(true);
+    } catch (error) {
+      onError(error);
+    } finally {
+      setPublishPending(false);
+    }
+  };
+
   const publish = async () => {
     if (!detail) return;
     setPublishPending(true);
@@ -478,6 +518,7 @@ export function SchedulePage({ onError, onSuccess }: Props) {
       setVersions((current) => [response.version, ...current]);
       setPublishOpen(false);
       setConfirmPublishWarnings(false);
+      setPublicationCheck(null);
       resetEditor();
       await loadList();
       onSuccess(`排表已发布为 v${response.version.versionNo}`);
@@ -518,15 +559,98 @@ export function SchedulePage({ onError, onSuccess }: Props) {
     });
   };
 
-  const createShare = async (version: ScheduleVersionSummary) => {
+  const previewPublishedVersion = async (version: ScheduleVersionSummary) => {
+    if (!detail) return;
+    setVersionActionPending(true);
     try {
-      const link = await api<ShareLinkCreated>(`/schedule-versions/${version.id}/share-links`, {
-        method: "POST",
-        body: JSON.stringify({}),
-      });
-      setShareUrl(`${window.location.origin}/share/${link.token}`);
+      setVersionPreview(
+        await api<ScheduleVersionView>(
+          `/schedules/${detail.id}/versions/${version.versionNo}`,
+        ),
+      );
     } catch (error) {
       onError(error);
+    } finally {
+      setVersionActionPending(false);
+    }
+  };
+
+  const copyPublishedVersion = async () => {
+    if (!detail || !copyVersionTarget || !copyVersionName.trim()) return;
+    setVersionActionPending(true);
+    try {
+      const copied = await api<ScheduleDetail>(
+        `/schedules/${detail.id}/versions/${copyVersionTarget.versionNo}/copy-as-draft`,
+        {
+          method: "POST",
+          body: JSON.stringify({ name: copyVersionName }),
+        },
+      );
+      setCopyVersionTarget(null);
+      setHistoryOpen(false);
+      applyDetail(copied);
+      resetEditor();
+      setVersions([]);
+      await loadList();
+      onSuccess(`已从发布版本 v${copyVersionTarget.versionNo} 创建新草稿`);
+    } catch (error) {
+      onError(error);
+    } finally {
+      setVersionActionPending(false);
+    }
+  };
+
+  const openShareManager = async (version: ScheduleVersionSummary) => {
+    setShareVersion(version);
+    setShareUrl("");
+    setSharePending(true);
+    try {
+      const result = await api<{ items: ShareLinkView[] }>(
+        `/schedule-versions/${version.id}/share-links`,
+      );
+      setShareLinks(result.items);
+    } catch (error) {
+      setShareVersion(null);
+      onError(error);
+    } finally {
+      setSharePending(false);
+    }
+  };
+
+  const createShare = async () => {
+    if (!shareVersion) return;
+    setSharePending(true);
+    try {
+      const link = await api<ShareLinkCreated>(`/schedule-versions/${shareVersion.id}/share-links`, {
+        method: "POST",
+        body: JSON.stringify({ expiresInDays: shareExpiryDays }),
+      });
+      setShareUrl(`${window.location.origin}/share/${link.token}`);
+      const result = await api<{ items: ShareLinkView[] }>(
+        `/schedule-versions/${shareVersion.id}/share-links`,
+      );
+      setShareLinks(result.items);
+    } catch (error) {
+      onError(error);
+    } finally {
+      setSharePending(false);
+    }
+  };
+
+  const revokeShare = async (shareLinkId: string) => {
+    if (!shareVersion) return;
+    setSharePending(true);
+    try {
+      await api<void>(`/share-links/${shareLinkId}`, { method: "DELETE" });
+      const result = await api<{ items: ShareLinkView[] }>(
+        `/schedule-versions/${shareVersion.id}/share-links`,
+      );
+      setShareLinks(result.items);
+      onSuccess("分享链接已撤销");
+    } catch (error) {
+      onError(error);
+    } finally {
+      setSharePending(false);
     }
   };
 
@@ -705,13 +829,36 @@ export function SchedulePage({ onError, onSuccess }: Props) {
           <Button
             type="primary"
             icon={<SendOutlined />}
+            loading={publishPending}
             disabled={
               hasUnsavedChanges || detail.status === "ARCHIVED" || detail.status === "PUBLISHED"
             }
-            onClick={() => setPublishOpen(true)}
+            onClick={() => void openPublish()}
           >
             发布排表
           </Button>
+          {detail.status === "DRAFT" ? (
+            <>
+              <Button
+                icon={<DownloadOutlined />}
+                href={`/api/v1/schedules/${detail.id}/exports/image`}
+              >
+                草稿长图
+              </Button>
+              <Button
+                icon={<DownloadOutlined />}
+                href={`/api/v1/schedules/${detail.id}/exports/excel`}
+              >
+                草稿 Excel
+              </Button>
+              <Button
+                icon={<DownloadOutlined />}
+                href={`/api/v1/schedules/${detail.id}/exports/text`}
+              >
+                草稿文本
+              </Button>
+            </>
+          ) : null}
           <Button
             icon={<CopyOutlined />}
             disabled={hasUnsavedChanges}
@@ -905,10 +1052,19 @@ export function SchedulePage({ onError, onSuccess }: Props) {
       <Modal
         title="发布排表"
         open={publishOpen}
-        onCancel={() => setPublishOpen(false)}
+        onCancel={() => {
+          setPublishOpen(false);
+          setPublicationCheck(null);
+        }}
         onOk={() => void publish()}
         okText="确认发布"
         confirmLoading={publishPending}
+        okButtonProps={{
+          disabled:
+            !publicationCheck?.publishable ||
+            Boolean(publicationCheck.summary.warning && !confirmPublishWarnings),
+        }}
+        width={720}
       >
         <Alert
           type="info"
@@ -916,13 +1072,35 @@ export function SchedulePage({ onError, onSuccess }: Props) {
           title="发布后会保存不可变快照"
           description="以后继续编辑会自动回到草稿状态，已发布版本及其导出内容不会改变。"
         />
-        <Checkbox
-          className="publish-warning-confirm"
-          checked={confirmPublishWarnings}
-          onChange={(event) => setConfirmPublishWarnings(event.target.checked)}
-        >
-          我确认在存在非阻断警告时仍然发布
-        </Checkbox>
+        {publicationCheck ? (
+          <>
+            <Space wrap className="publish-check-summary">
+              <Tag color="red">错误 {publicationCheck.summary.error}</Tag>
+              <Tag color="orange">警告 {publicationCheck.summary.warning}</Tag>
+              <Tag color="blue">提示 {publicationCheck.summary.info}</Tag>
+            </Space>
+            <div className="issue-list publish-issue-list">
+              {publicationCheck.issues.map((issue) => (
+                <Alert
+                  key={`${issue.code}-${JSON.stringify(issue.message_params)}`}
+                  type={issue.severity === "ERROR" ? "error" : "warning"}
+                  showIcon
+                  title={ISSUE_LABELS[issue.code] ?? issue.code}
+                  description={describeIssue(issue)}
+                />
+              ))}
+            </div>
+            {publicationCheck.summary.warning ? (
+              <Checkbox
+                className="publish-warning-confirm"
+                checked={confirmPublishWarnings}
+                onChange={(event) => setConfirmPublishWarnings(event.target.checked)}
+              >
+                我已查看以上非阻断警告，仍要发布
+              </Checkbox>
+            ) : null}
+          </>
+        ) : null}
       </Modal>
 
       <Modal
@@ -944,10 +1122,28 @@ export function SchedulePage({ onError, onSuccess }: Props) {
                 <Space wrap>
                   <Button
                     size="small"
+                    icon={<EyeOutlined />}
+                    loading={versionActionPending}
+                    onClick={() => void previewPublishedVersion(version)}
+                  >
+                    预览
+                  </Button>
+                  <Button
+                    size="small"
                     icon={<HistoryOutlined />}
                     onClick={() => confirmRestoreVersion(version.versionNo)}
                   >
                     恢复为草稿
+                  </Button>
+                  <Button
+                    size="small"
+                    icon={<CopyOutlined />}
+                    onClick={() => {
+                      setCopyVersionTarget(version);
+                      setCopyVersionName(`${detail.name} · v${version.versionNo} 副本`);
+                    }}
+                  >
+                    复制为新草稿
                   </Button>
                   <Button
                     size="small"
@@ -973,9 +1169,9 @@ export function SchedulePage({ onError, onSuccess }: Props) {
                   <Button
                     size="small"
                     icon={<SendOutlined />}
-                    onClick={() => void createShare(version)}
+                    onClick={() => void openShareManager(version)}
                   >
-                    创建只读链接
+                    管理分享链接
                   </Button>
                 </Space>
                 <Typography.Text type="secondary" className="version-hash">
@@ -990,15 +1186,112 @@ export function SchedulePage({ onError, onSuccess }: Props) {
       </Modal>
 
       <Modal
-        title="只读分享链接"
-        open={Boolean(shareUrl)}
-        onCancel={() => setShareUrl("")}
-        footer={<Button onClick={() => setShareUrl("")}>关闭</Button>}
+        title={versionPreview ? `发布版本 v${versionPreview.versionNo} 预览` : "发布版本预览"}
+        open={versionPreview !== null}
+        onCancel={() => setVersionPreview(null)}
+        footer={<Button onClick={() => setVersionPreview(null)}>关闭</Button>}
+        width={1100}
+      >
+        {versionPreview ? <ScheduleSnapshotPreview schedule={versionPreview.snapshot} /> : null}
+      </Modal>
+
+      <Modal
+        title={copyVersionTarget ? `复制发布版本 v${copyVersionTarget.versionNo}` : "复制发布版本"}
+        open={copyVersionTarget !== null}
+        onCancel={() => setCopyVersionTarget(null)}
+        onOk={() => void copyPublishedVersion()}
+        okText="创建新草稿"
+        confirmLoading={versionActionPending}
+        okButtonProps={{ disabled: !copyVersionName.trim() }}
       >
         <Typography.Paragraph type="secondary">
-          链接只展示对应的不可变发布版本，不会随草稿修改而变化。
+          新草稿会完整复制该不可变版本的人员快照、队伍位置、核心角色和锁定状态，原版本不会改变。
         </Typography.Paragraph>
-        <Input value={shareUrl} readOnly />
+        <Input
+          value={copyVersionName}
+          maxLength={160}
+          onChange={(event) => setCopyVersionName(event.target.value)}
+          placeholder="新草稿名称"
+        />
+      </Modal>
+
+      <Modal
+        title={shareVersion ? `发布版本 v${shareVersion.versionNo} · 分享链接` : "分享链接"}
+        open={shareVersion !== null}
+        onCancel={() => {
+          setShareVersion(null);
+          setShareUrl("");
+          setShareLinks([]);
+        }}
+        footer={<Button onClick={() => setShareVersion(null)}>关闭</Button>}
+        width={760}
+      >
+        <Typography.Paragraph type="secondary">
+          明文链接仅在创建时展示一次。列表只保留状态和有效期，服务端不会保存明文令牌。
+        </Typography.Paragraph>
+        <Space wrap className="share-create-row">
+          <Select
+            value={shareExpiryDays ?? "never"}
+            onChange={(value) => setShareExpiryDays(value === "never" ? null : Number(value))}
+            options={[
+              { label: "7 天有效", value: 7 },
+              { label: "30 天有效", value: 30 },
+              { label: "90 天有效", value: 90 },
+              { label: "永不过期", value: "never" },
+            ]}
+            style={{ width: 150 }}
+          />
+          <Button type="primary" loading={sharePending} onClick={() => void createShare()}>
+            创建只读链接
+          </Button>
+        </Space>
+        {shareUrl ? (
+          <Alert
+            className="share-created-alert"
+            type="success"
+            showIcon
+            title="链接已创建，请立即复制保存"
+            description={<Input value={shareUrl} readOnly />}
+          />
+        ) : null}
+        <div className="share-link-list">
+          {shareLinks.length ? (
+            shareLinks.map((link) => (
+              <Card
+                key={link.id}
+                size="small"
+                title={
+                  <Space>
+                    <Tag color={shareStatusColor(link.status)}>{shareStatusLabel(link.status)}</Tag>
+                    <Typography.Text type="secondary">
+                      创建于 {new Date(link.createdAt).toLocaleString()}
+                    </Typography.Text>
+                  </Space>
+                }
+                extra={
+                  link.status === "ACTIVE" ? (
+                    <Button
+                      danger
+                      size="small"
+                      disabled={sharePending}
+                      onClick={() => void revokeShare(link.id)}
+                    >
+                      撤销
+                    </Button>
+                  ) : null
+                }
+              >
+                <Typography.Text type="secondary">
+                  {link.expiresAt
+                    ? `有效期至 ${new Date(link.expiresAt).toLocaleString()}`
+                    : "永不过期"}
+                </Typography.Text>
+              </Card>
+            ))
+          ) : (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未创建分享链接" />
+          )}
+        </div>
       </Modal>
 
       <Modal
@@ -1018,7 +1311,7 @@ export function SchedulePage({ onError, onSuccess }: Props) {
               checked={generationPreserveLocks}
               onChange={setGenerationPreserveLocks}
             />
-            保留当前锁定安排
+            保留当前锁定安排，仅重新生成未锁定部分
           </Space>
           <Row gutter={12} className="full-width">
             <Col span={12}>
@@ -1255,6 +1548,76 @@ export function SchedulePage({ onError, onSuccess }: Props) {
       </Modal>
     </section>
   );
+}
+
+function ScheduleSnapshotPreview({ schedule }: { schedule: ScheduleDetail }) {
+  const participantById = new Map(
+    schedule.participants.map((participant) => [participant.id, participant]),
+  );
+  return (
+    <div className="snapshot-preview">
+      <Typography.Title level={4}>{schedule.name}</Typography.Title>
+      <Typography.Text type="secondary">
+        {schedule.waveCount} 波 · revision {schedule.revision}
+      </Typography.Text>
+      <div className="wave-list snapshot-preview-waves">
+        {schedule.waves.map((wave) => (
+          <Card
+            key={wave.id}
+            size="small"
+            title={`第 ${wave.waveNo} 波`}
+            extra={`C ${wave.damageTotal} 亿 · 奶 ${wave.bufferTotal}`}
+          >
+            <Row gutter={[8, 8]}>
+              {wave.teams.map((team) => (
+                <Col
+                  xs={24}
+                  xl={Math.max(6, Math.floor(24 / wave.teams.length))}
+                  key={team.id}
+                >
+                  <Card
+                    size="small"
+                    className="team-card"
+                    style={{ borderTopColor: team.displayColorSnapshot }}
+                    title={`${team.displayNameSnapshot} · ${team.compositionCode}`}
+                  >
+                    {team.slots.map((slot) => {
+                      const participant = slot.participantId
+                        ? participantById.get(slot.participantId)
+                        : undefined;
+                      return (
+                        <div className="team-slot" key={slot.id}>
+                          {participant ? (
+                            <ParticipantLabel
+                              participant={participant}
+                              compact
+                              core={wave.specialAssignments.some(
+                                (assignment) => assignment.participantId === participant.id,
+                              )}
+                            />
+                          ) : (
+                            <Typography.Text type="secondary">待补</Typography.Text>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </Card>
+                </Col>
+              ))}
+            </Row>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function shareStatusColor(status: ShareLinkView["status"]): string {
+  return status === "ACTIVE" ? "green" : status === "EXPIRED" ? "orange" : "default";
+}
+
+function shareStatusLabel(status: ShareLinkView["status"]): string {
+  return status === "ACTIVE" ? "有效" : status === "EXPIRED" ? "已过期" : "已撤销";
 }
 
 function EditorWave({
@@ -1551,6 +1914,117 @@ function GenerationSummary({
   );
 }
 
+function allScheduleSlots(schedule: ScheduleDetail): ScheduleSlot[] {
+  return schedule.waves.flatMap((wave) => wave.teams.flatMap((team) => team.slots));
+}
+
+export function buildDropOperations(
+  schedule: ScheduleDetail,
+  participantId: string,
+  targetSlotId: string,
+): ScheduleOperation[] {
+  const slots = allScheduleSlots(schedule);
+  const target = slots.find((slot) => slot.id === targetSlotId);
+  if (!target || target.participantId === participantId) return [];
+  if (!target.participantId) {
+    return [{ type: "MOVE_PARTICIPANT", participantId, toSlotId: targetSlotId }];
+  }
+  const source = slots.find((slot) => slot.participantId === participantId);
+  if (source) {
+    return [
+      {
+        type: "SWAP_PARTICIPANTS",
+        participantId,
+        otherParticipantId: target.participantId,
+      },
+    ];
+  }
+  return [
+    { type: "UNASSIGN_PARTICIPANT", participantId: target.participantId },
+    { type: "MOVE_PARTICIPANT", participantId, toSlotId: targetSlotId },
+  ];
+}
+
+export function applyOptimisticAssignment(
+  schedule: ScheduleDetail,
+  operations: ScheduleOperation[],
+): ScheduleDetail {
+  const next: ScheduleDetail = {
+    ...schedule,
+    participants: schedule.participants.map((participant) => ({ ...participant })),
+    waves: schedule.waves.map((wave) => ({
+      ...wave,
+      specialAssignments: wave.specialAssignments.map((assignment) => ({ ...assignment })),
+      teams: wave.teams.map((team) => ({
+        ...team,
+        slots: team.slots.map((slot) => ({ ...slot })),
+      })),
+    })),
+  };
+  const participantById = new Map(next.participants.map((item) => [item.id, item]));
+  const slots = allScheduleSlots(next);
+
+  for (const operation of operations) {
+    if (operation.type === "UNASSIGN_PARTICIPANT" && operation.participantId) {
+      const source = slots.find((slot) => slot.participantId === operation.participantId);
+      if (source) source.participantId = null;
+      const participant = participantById.get(operation.participantId);
+      if (participant) participant.unassignedReason = { code: "MANUALLY_UNASSIGNED" };
+    }
+    if (
+      operation.type === "MOVE_PARTICIPANT" &&
+      operation.participantId &&
+      operation.toSlotId
+    ) {
+      const source = slots.find((slot) => slot.participantId === operation.participantId);
+      const target = slots.find((slot) => slot.id === operation.toSlotId);
+      if (source) source.participantId = null;
+      if (target) target.participantId = operation.participantId;
+      const participant = participantById.get(operation.participantId);
+      if (participant) participant.unassignedReason = null;
+    }
+    if (
+      operation.type === "SWAP_PARTICIPANTS" &&
+      operation.participantId &&
+      operation.otherParticipantId
+    ) {
+      const source = slots.find((slot) => slot.participantId === operation.participantId);
+      const target = slots.find((slot) => slot.participantId === operation.otherParticipantId);
+      if (source && target) {
+        [source.participantId, target.participantId] = [target.participantId, source.participantId];
+      }
+    }
+  }
+
+  for (const wave of next.waves) {
+    for (const team of wave.teams) {
+      const members = team.slots
+        .map((slot) => participantById.get(slot.participantId ?? ""))
+        .filter((participant): participant is ScheduleParticipant => Boolean(participant));
+      team.damageTotal = String(
+        members.reduce((total, item) => total + Number(item.damageScoreSnapshot ?? 0), 0),
+      );
+      team.bufferTotal = String(
+        members.reduce((total, item) => total + Number(item.bufferScoreSnapshot ?? 0), 0),
+      );
+    }
+    wave.damageTotal = String(
+      wave.teams.reduce((total, team) => total + Number(team.damageTotal), 0),
+    );
+    wave.bufferTotal = String(
+      wave.teams.reduce((total, team) => total + Number(team.bufferTotal), 0),
+    );
+    wave.specialAssignments = wave.specialAssignments.filter((assignment) =>
+      wave.teams.some(
+        (team) =>
+          team.teamKey === assignment.targetTeamKeySnapshot &&
+          team.slots.some((slot) => slot.participantId === assignment.participantId),
+      ),
+    );
+  }
+  return next;
+}
+
 function describeUnassignedReason(reason: Record<string, unknown>): string {
   if (reason.message === "角色或玩家已停用" || reason.code === "SOURCE_INACTIVE") {
     return "档案已停用，待处理";
@@ -1594,6 +2068,23 @@ function describeGenerationDiagnostic(
 function describeIssue(issue: ValidationIssue): string {
   const params = issue.message_params;
   switch (issue.code) {
+    case "TEAM_INCOMPLETE":
+      return `第 ${params.waveNo} 波 ${params.teamKey} 队存在待补位置。`;
+    case "TEAM_COMPOSITION_INVALID":
+      return `第 ${params.waveNo} 波 ${params.teamKey} 队的角色组成不符合副本规则。`;
+    case "PLAYER_DUPLICATE_IN_WAVE":
+      return `第 ${params.waveNo} 波同一玩家安排了 ${params.count} 个角色。`;
+    case "PARTICIPANT_WAVE_NOT_ALLOWED":
+      return `第 ${params.waveNo} 波安排了玩家不可用的角色。`;
+    case "PLAYER_MAX_WAVE_COUNT_EXCEEDED":
+      return `玩家最多参加 ${params.maximum} 波，当前已安排 ${params.current} 波。`;
+    case "MISSING_WAVE_CORE":
+      return `第 ${params.waveNo} 波缺少规则 ${params.ruleCode} 要求的核心角色。`;
+    case "DAMAGE_ORDER_VIOLATION":
+    case "BUFFER_ORDER_VIOLATION":
+      return `第 ${params.waveNo} 波 ${params.strongerTeamKey} 队弱于 ${params.weakerTeamKey} 队。`;
+    case "UNASSIGNED_SELECTED_PARTICIPANTS":
+      return `仍有 ${params.count} 个已选角色未分配到位置。`;
     case "CAPACITY_EXCEEDED":
       return `容量 ${params.capacity}，当前 ${params.current}，请减少角色或增加波数。`;
     case "PARTICIPANT_SHORTAGE":

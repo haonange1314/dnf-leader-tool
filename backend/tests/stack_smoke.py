@@ -487,6 +487,26 @@ unlock_response = request(
     },
 )
 assert isinstance(unlock_response, dict) and unlock_response["revision"] == 5
+publication_check = request(
+    f"/schedules/{publishable_schedule['id']}/publication-check",
+    "POST",
+    {"baseRevision": 5},
+)
+assert isinstance(publication_check, dict)
+assert publication_check["publishable"] is True
+assert publication_check["summary"]["error"] == 0
+draft_text_export = opener.open(
+    f"{BASE_URL}/schedules/{publishable_schedule['id']}/exports/text"
+)
+assert draft_text_export.read().decode().startswith("【草稿】阶段4发布验收")
+draft_excel_export = opener.open(
+    f"{BASE_URL}/schedules/{publishable_schedule['id']}/exports/excel"
+)
+assert draft_excel_export.read(2) == b"PK"
+draft_image_export = opener.open(
+    f"{BASE_URL}/schedules/{publishable_schedule['id']}/exports/image"
+)
+assert draft_image_export.read(8) == b"\x89PNG\r\n\x1a\n"
 published_schedule = request(
     f"/schedules/{publishable_schedule['id']}/publish",
     "POST",
@@ -496,22 +516,50 @@ assert isinstance(published_schedule, dict)
 assert published_schedule["schedule"]["status"] == "PUBLISHED"
 assert published_schedule["schedule"]["revision"] == 6
 assert published_schedule["version"]["versionNo"] == 1
+assert published_schedule["version"]["snapshot"]["schemaVersion"] == 1
+assert published_schedule["version"]["snapshot"]["dungeon"]["versionId"] == published["id"]
+assert published_schedule["version"]["snapshot"]["formula"]["code"]
+assert "issues" in published_schedule["version"]["snapshot"]
 schedule_version_id = published_schedule["version"]["id"]
 versions = request(f"/schedules/{publishable_schedule['id']}/versions")
 assert isinstance(versions, dict) and versions["total"] == 1
 share_link = request(
-    f"/schedule-versions/{schedule_version_id}/share-links", "POST", {}
+    f"/schedule-versions/{schedule_version_id}/share-links",
+    "POST",
+    {"expiresInDays": 7},
 )
 assert isinstance(share_link, dict) and share_link["token"]
+share_links = request(f"/schedule-versions/{schedule_version_id}/share-links")
+assert isinstance(share_links, dict) and share_links["total"] == 1
+assert share_links["items"][0]["status"] == "ACTIVE"
 public_version = request(f"/share/{share_link['token']}")
 assert isinstance(public_version, dict)
 assert public_version["snapshot"]["name"] == "阶段4发布验收"
+request(f"/share-links/{share_link['id']}", "DELETE")
+revoked_share = request_error(f"/share/{share_link['token']}", "GET", {}, expected_status=404)
+assert revoked_share["error"]["code"] == "SHARE_LINK_INVALID"
+share_links = request(f"/schedule-versions/{schedule_version_id}/share-links")
+assert share_links["items"][0]["status"] == "REVOKED"
 text_export = opener.open(f"{BASE_URL}/schedule-versions/{schedule_version_id}/exports/text")
 assert "阶段4发布验收" in text_export.read().decode()
 excel_export = opener.open(f"{BASE_URL}/schedule-versions/{schedule_version_id}/exports/excel")
 assert excel_export.read(2) == b"PK"
 image_export = opener.open(f"{BASE_URL}/schedule-versions/{schedule_version_id}/exports/image")
-assert image_export.read(4) == b"<svg"
+assert image_export.read(8) == b"\x89PNG\r\n\x1a\n"
+version_copy = request(
+    f"/schedules/{publishable_schedule['id']}/versions/1/copy-as-draft",
+    "POST",
+    {"name": "阶段4历史版本副本"},
+)
+assert isinstance(version_copy, dict)
+assert version_copy["name"] == "阶段4历史版本副本"
+assert version_copy["status"] == "DRAFT" and version_copy["revision"] == 1
+assert any(
+    slot["participantId"] is not None
+    for wave in version_copy["waves"]
+    for team in wave["teams"]
+    for slot in team["slots"]
+)
 restored_schedule = request(
     f"/schedules/{publishable_schedule['id']}/versions/1/restore-as-draft",
     "POST",
@@ -569,4 +617,4 @@ assert isinstance(player, dict) and player["displayName"] == "全栈验收玩家
 players = request("/players?search=%E5%85%A8%E6%A0%88")
 assert isinstance(players, dict) and players["total"] == 1
 request("/auth/logout", "POST")
-print("stage 3 automatic scheduling workflow smoke passed")
+print("stage 4.2 editor, publication, PNG export and sharing workflow smoke passed")

@@ -45,7 +45,7 @@
 | 智能排表 | OR-Tools CP-SAT | 约束满足和多目标优化 |
 | 数据库 | PostgreSQL | 事务、JSONB、约束、版本和编辑锁 |
 | Excel | openpyxl | `.xlsx` 模板、预览、导入和导出 |
-| 长图 | Playwright for Python | 复用前端打印页生成长图 |
+| 长图 | Pillow | 根据版本化副本结构直接绘制 PNG 长图 |
 | 容器 | Docker Compose | 本机和公网单机部署 |
 | 测试 | pytest、Vitest、Playwright | 单元、集成和端到端测试 |
 
@@ -60,8 +60,8 @@ flowchart LR
     API --> DB[("PostgreSQL")]
     API --> Solver["OR-Tools 排表领域模块"]
     API --> Excel["openpyxl 导入导出"]
-    API --> Exporter["Playwright 长图生成"]
-    Exporter --> PrintPage["React 只读打印页"]
+    API --> Exporter["Pillow PNG 长图生成"]
+    Exporter --> Snapshot["不可变排表快照"]
 ```
 
 ### 4.1 MVP 进程
@@ -69,7 +69,7 @@ flowchart LR
 Docker Compose 包含三个常驻服务：
 
 1. `web`：构建并提供 React 静态资源。
-2. `api`：运行 FastAPI，同时包含 OR-Tools、openpyxl 和 Playwright Python 依赖。
+2. `api`：运行 FastAPI，同时包含 OR-Tools、openpyxl 和 Pillow 依赖。
 3. `db`：运行 PostgreSQL 并挂载持久化卷。
 
 MVP 不引入 Redis、消息队列和独立求解服务。默认 12 波求解采用同步请求并设置严格时间上限。若性能测试表明公网阶段需要异步化，可在不改变求解器接口的情况下增加 `worker` 服务。
@@ -294,7 +294,7 @@ UNLOCK_*
 - 超过配置阈值后启用纵向虚拟化。
 - 拖拽期间只更新源队、目标队和强度摘要。
 - 强度计算使用派生选择器，不全量重建编辑器状态。
-- 长图导出使用独立打印页，不从虚拟化页面直接截图。
+- 长图导出由后端按版本化副本结构绘制，不依赖虚拟化页面截图。
 
 ## 7. 后端设计
 
@@ -959,11 +959,14 @@ GET    /generation-runs/{runId}
 ### 9.8 发布、历史和分享
 
 ```text
+POST   /schedules/{scheduleId}/publication-check
 POST   /schedules/{scheduleId}/publish
 GET    /schedules/{scheduleId}/versions
 GET    /schedules/{scheduleId}/versions/{versionNo}
 POST   /schedules/{scheduleId}/versions/{versionNo}/restore-as-draft
+POST   /schedules/{scheduleId}/versions/{versionNo}/copy-as-draft
 POST   /schedule-versions/{versionId}/share-links
+GET    /schedule-versions/{versionId}/share-links
 DELETE /share-links/{shareLinkId}
 GET    /share/{token}
 ```
@@ -976,6 +979,9 @@ GET    /share/{token}
 GET    /schedule-versions/{versionId}/exports/image
 GET    /schedule-versions/{versionId}/exports/excel
 GET    /schedule-versions/{versionId}/exports/text
+GET    /schedules/{scheduleId}/exports/image
+GET    /schedules/{scheduleId}/exports/excel
+GET    /schedules/{scheduleId}/exports/text
 ```
 
 草稿导出使用单独接口并强制“草稿”水印。
@@ -1397,14 +1403,13 @@ class SolverResult:
 
 ### 16.1 长图
 
-1. 后端生成短期内部导出令牌。
-2. Playwright 打开 `web` 容器中的打印路由。
-3. 打印页读取指定不可变版本。
-4. 等待字体、布局和图片加载完成。
-5. 对排表根节点进行完整截图。
-6. 返回 PNG，并设置安全文件名。
+1. 后端读取指定不可变版本或当前草稿快照。
+2. 按快照中的波次、队伍数量和每队位置数动态计算画布尺寸。
+3. Pillow 使用容器内 Noto CJK 字体绘制标题、波次、队伍、成员和强度。
+4. 草稿版本叠加醒目的草稿标记，发布版本不添加水印。
+5. 返回 PNG，并设置安全文件名。
 
-打印页不使用虚拟化，分页只用于 Excel 和打印 PDF；长图保持连续纵向布局。
+导出器只依赖快照结构，不写死三队四人，也不依赖前端虚拟化页面。
 
 ### 16.2 Excel 导出
 
@@ -1674,19 +1679,16 @@ flowchart TD
 - 自动生成、锁定保留和重新生成。
 - 标准、短缺和冲突测试集。
 
-### 阶段 4：完整编辑器
+### 阶段 4：完整编辑与发布
 
 - dnd-kit 拖拽、交换、锁定和未分配角色池。
 - 命令接口、revision、撤销恢复和单编辑锁。
 - 总览、单波视图和实时 issue。
-
-### 阶段 5：版本和分享
-
 - 发布快照、恢复草稿和归档。
 - 只读分享链接。
 - 长图、Excel 和纯文本导出。
 
-### 阶段 6：公网化
+### 阶段 5：公网化
 
 - HTTPS、权限、限流、备份和恢复演练。
 - 完整端到端及性能测试。
@@ -1757,4 +1759,4 @@ flowchart TD
 - [PostgreSQL Documentation](https://www.postgresql.org/docs/current/)
 - [SQLAlchemy 2 Documentation](https://docs.sqlalchemy.org/en/20/)
 - [Docker Compose](https://docs.docker.com/compose)
-- [Playwright Python Screenshots](https://playwright.dev/python/docs/screenshots)
+- [Pillow ImageDraw](https://pillow.readthedocs.io/en/stable/reference/ImageDraw.html)

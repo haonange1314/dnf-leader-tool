@@ -371,6 +371,15 @@ class SchedulePublishRequest(BaseModel):
     confirm_warnings: bool = False
 
 
+class SchedulePublicationCheck(BaseModel):
+    model_config = CFG
+
+    revision: int
+    publishable: bool
+    issues: list[IssueView]
+    summary: dict[str, int]
+
+
 class ScheduleVersionSummary(BaseModel):
     model_config = CFG
 
@@ -407,6 +416,20 @@ class ScheduleRestoreRequest(BaseModel):
     base_revision: int = Field(gt=0)
 
 
+class ScheduleVersionCopyRequest(BaseModel):
+    model_config = CFG
+
+    name: str = Field(min_length=1, max_length=160)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("排表名称不能为空")
+        return normalized
+
+
 class ShareLinkCreate(BaseModel):
     model_config = CFG
 
@@ -420,6 +443,22 @@ class ShareLinkCreated(BaseModel):
     schedule_version_id: uuid.UUID
     token: str
     expires_at: datetime | None
+
+
+class ShareLinkView(BaseModel):
+    model_config = CFG
+
+    id: uuid.UUID
+    schedule_version_id: uuid.UUID
+    expires_at: datetime | None
+    revoked_at: datetime | None
+    created_at: datetime
+    status: Literal["ACTIVE", "EXPIRED", "REVOKED"]
+
+
+class ShareLinkList(BaseModel):
+    items: list[ShareLinkView]
+    total: int
 
 
 class PublicScheduleVersion(BaseModel):

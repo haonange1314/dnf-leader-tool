@@ -256,17 +256,43 @@ export interface SchedulePublishResponse {
   schedule: ScheduleDetail;
   issues: ValidationIssue[];
 }
+export interface SchedulePublicationCheck {
+  revision: number;
+  publishable: boolean;
+  issues: ValidationIssue[];
+  summary: { error: number; warning: number; info: number };
+}
 export interface ShareLinkCreated {
   id: string;
   scheduleVersionId: string;
   token: string;
   expiresAt: string | null;
 }
+export interface ShareLinkView {
+  id: string;
+  scheduleVersionId: string;
+  expiresAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+  status: "ACTIVE" | "EXPIRED" | "REVOKED";
+}
 export interface PublicScheduleVersion {
   versionId: string;
   versionNo: number;
   publishedAt: string;
   snapshot: ScheduleDetail;
+}
+
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code: string,
+    readonly details: Record<string, unknown>,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
 }
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -280,9 +306,18 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as {
-      error?: { message?: string };
+      error?: {
+        code?: string;
+        message?: string;
+        details?: Record<string, unknown>;
+      };
     };
-    throw new Error(payload.error?.message || `请求失败（${response.status}）`);
+    throw new ApiError(
+      payload.error?.message || `请求失败（${response.status}）`,
+      response.status,
+      payload.error?.code || "HTTP_ERROR",
+      payload.error?.details || {},
+    );
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;

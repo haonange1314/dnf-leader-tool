@@ -226,6 +226,10 @@ body {
   display: grid;
   gap: 4px;
 }
+.wave-list > .wave-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 360px;
+}
 .team-card {
   height: 100%;
   border-top-width: 4px;
@@ -259,6 +263,30 @@ body {
   z-index: 20;
   opacity: 0.55;
   cursor: grabbing;
+}
+.publish-check-summary,
+.share-create-row {
+  margin-top: 16px;
+}
+.publish-issue-list {
+  max-height: 360px;
+  margin-top: 12px;
+  overflow: auto;
+}
+.share-created-alert {
+  margin-top: 16px;
+}
+.share-link-list {
+  display: grid;
+  gap: 10px;
+  max-height: 360px;
+  margin-top: 16px;
+  overflow: auto;
+}
+.snapshot-preview-waves {
+  max-height: 68vh;
+  margin-top: 16px;
+  overflow: auto;
 }
 .editor-slot {
   justify-content: space-between;

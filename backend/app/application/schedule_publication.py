@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy.orm import Session
@@ -23,9 +24,46 @@ from app.schemas.schedule import IssueView, ScheduleDetail
 SNAPSHOT_SCHEMA_VERSION = 1
 
 
-def create_schedule_snapshot(schedule: Schedule) -> tuple[dict[str, object], str]:
+def create_schedule_snapshot(
+    schedule: Schedule,
+    version: DungeonVersion,
+    issues: list[IssueView],
+    published_at: datetime,
+) -> tuple[dict[str, object], str]:
     snapshot = ScheduleDetail.model_validate(schedule).model_dump(mode="json", by_alias=True)
     snapshot["status"] = "PUBLISHED"
+    snapshot["schemaVersion"] = SNAPSHOT_SCHEMA_VERSION
+    snapshot["publishedAt"] = published_at.isoformat()
+    snapshot["dungeon"] = {
+        "id": str(version.dungeon_id),
+        "code": version.dungeon.code,
+        "name": version.dungeon.name,
+        "versionId": str(version.id),
+        "versionNo": version.version_no,
+        "teams": [
+            {
+                "teamKey": team.team_key,
+                "displayName": team.display_name,
+                "displayColor": team.display_color,
+                "displayOrder": team.display_order,
+                "memberCount": team.member_count,
+                "strengthRank": team.strength_rank,
+            }
+            for team in version.teams
+        ],
+        "compositionRules": version.composition_rules,
+        "specialRoleRules": version.special_role_rules,
+        "strengthOrderRules": version.strength_order_rules,
+        "optimizationRules": version.optimization_rules,
+        "missingSlotPolicy": version.missing_slot_policy,
+    }
+    snapshot["formula"] = {
+        "id": str(version.formula_version.id),
+        "code": version.formula_version.code,
+        "version": version.formula_version.version,
+        "config": version.formula_version.config,
+    }
+    snapshot["issues"] = [issue.model_dump(mode="json") for issue in issues]
     serialized = json.dumps(
         snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode()

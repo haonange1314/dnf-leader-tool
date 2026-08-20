@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api } from "../../api/client";
-import { SchedulePage } from "./SchedulePage";
+import { api, type ScheduleDetail } from "../../api/client";
+import { applyOptimisticAssignment, buildDropOperations, SchedulePage } from "./SchedulePage";
 
 vi.mock("../../api/client", () => ({ api: vi.fn() }));
 
@@ -286,5 +286,128 @@ describe("SchedulePage", () => {
     expect(await screen.findByText("最近一次自动排表")).toBeInTheDocument();
     expect(screen.getByText("已安排 1/1")).toBeInTheDocument();
     expect(screen.getByText("本波核心")).toBeInTheDocument();
+  });
+
+  it("shows server publication issues before enabling publish", async () => {
+    vi.mocked(api).mockImplementation(async (path: string) => {
+      if (path === "/schedules") return { items: [summary], total: 1 };
+      if (path === "/dungeons") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1") return detail;
+      if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1/versions") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1/publication-check") {
+        return {
+          revision: 1,
+          publishable: false,
+          summary: { error: 1, warning: 0, info: 0 },
+          issues: [
+            {
+              severity: "ERROR",
+              code: "TEAM_INCOMPLETE",
+              message_params: { waveNo: 1, teamKey: "RED" },
+            },
+          ],
+        };
+      }
+      throw new Error(`unexpected API path: ${path}`);
+    });
+
+    render(<SchedulePage onError={vi.fn()} onSuccess={vi.fn()} />);
+    fireEvent.click(await screen.findByText("周六团"));
+    fireEvent.click(await screen.findByRole("button", { name: /发布排表/ }));
+
+    expect(await screen.findByText("队伍存在待补位置")).toBeInTheDocument();
+    expect(screen.getByText("错误 1")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "确认发布" })).toBeDisabled();
+  });
+
+  it("lists managed share links for a published version", async () => {
+    const version = {
+      id: "published-version-1",
+      scheduleId: "schedule-1",
+      versionNo: 1,
+      sourceRevision: 1,
+      snapshotSchemaVersion: 1,
+      snapshotHash: "a".repeat(64),
+      formulaVersionId: "formula-1",
+      publishedAt: "2026-08-18T00:00:00Z",
+    };
+    vi.mocked(api).mockImplementation(async (path: string) => {
+      if (path === "/schedules") return { items: [summary], total: 1 };
+      if (path === "/dungeons") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1") return detail;
+      if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1/versions") return { items: [version], total: 1 };
+      if (path === "/schedule-versions/published-version-1/share-links") {
+        return {
+          items: [
+            {
+              id: "share-1",
+              scheduleVersionId: "published-version-1",
+              expiresAt: "2026-09-18T00:00:00Z",
+              revokedAt: null,
+              createdAt: "2026-08-18T00:00:00Z",
+              status: "ACTIVE",
+            },
+          ],
+          total: 1,
+        };
+      }
+      throw new Error(`unexpected API path: ${path}`);
+    });
+
+    render(<SchedulePage onError={vi.fn()} onSuccess={vi.fn()} />);
+    fireEvent.click(await screen.findByText("周六团"));
+    fireEvent.click(await screen.findByRole("button", { name: /发布历史/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /管理分享链接/ }));
+
+    expect(await screen.findByText("有效")).toBeInTheDocument();
+    expect(screen.getByText(/有效期至/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "撤 销" })).toBeEnabled();
+  });
+});
+
+describe("schedule drag operations", () => {
+  const occupiedDetail: ScheduleDetail = {
+    ...detail,
+    participants: [
+      ...detail.participants,
+      {
+        ...detail.participants[0],
+        id: "participant-2",
+        characterId: "character-2",
+        playerIdSnapshot: "player-2",
+        playerNameSnapshot: "玩家二",
+        characterNameSnapshot: "角色二",
+        damageScoreSnapshot: "300",
+      },
+    ],
+    waves: [
+      {
+        ...detail.waves[0],
+        teams: [
+          {
+            ...detail.waves[0].teams[0],
+            slots: [{ ...detail.waves[0].teams[0].slots[0], participantId: "participant-1" }],
+          },
+        ],
+      },
+    ],
+  };
+
+  it("replaces an occupied slot atomically when the dragged participant is unassigned", () => {
+    const operations = buildDropOperations(occupiedDetail, "participant-2", "slot-1");
+
+    expect(operations).toEqual([
+      { type: "UNASSIGN_PARTICIPANT", participantId: "participant-1" },
+      { type: "MOVE_PARTICIPANT", participantId: "participant-2", toSlotId: "slot-1" },
+    ]);
+
+    const optimistic = applyOptimisticAssignment(occupiedDetail, operations);
+    expect(optimistic.waves[0].teams[0].slots[0].participantId).toBe("participant-2");
+    expect(optimistic.waves[0].damageTotal).toBe("300");
+    expect(optimistic.participants[0].unassignedReason).toEqual({
+      code: "MANUALLY_UNASSIGNED",
+    });
   });
 });
