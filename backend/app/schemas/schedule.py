@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
@@ -323,3 +323,109 @@ class GenerationResponse(BaseModel):
 
     run: GenerationRunView
     schedule: ScheduleDetail
+
+
+class ScheduleOperation(BaseModel):
+    model_config = CFG
+
+    type: Literal[
+        "MOVE_PARTICIPANT",
+        "SWAP_PARTICIPANTS",
+        "UNASSIGN_PARTICIPANT",
+        "SET_WAVE_CORE",
+        "CLEAR_WAVE_CORE",
+        "LOCK_PARTICIPANT",
+        "LOCK_SLOT",
+        "LOCK_WAVE",
+    ]
+    participant_id: uuid.UUID | None = None
+    other_participant_id: uuid.UUID | None = None
+    to_slot_id: uuid.UUID | None = None
+    slot_id: uuid.UUID | None = None
+    wave_id: uuid.UUID | None = None
+    rule_code: str | None = Field(default=None, max_length=40)
+    locked: bool | None = None
+
+
+class ScheduleCommandRequest(BaseModel):
+    model_config = CFG
+
+    operation_id: uuid.UUID
+    base_revision: int = Field(gt=0)
+    operations: list[ScheduleOperation] = Field(min_length=1, max_length=50)
+
+
+class ScheduleCommandResponse(BaseModel):
+    model_config = CFG
+
+    operation_id: uuid.UUID
+    revision: int
+    schedule: ScheduleDetail
+    inverse_operations: list[ScheduleOperation]
+
+
+class SchedulePublishRequest(BaseModel):
+    model_config = CFG
+
+    base_revision: int = Field(gt=0)
+    confirm_warnings: bool = False
+
+
+class ScheduleVersionSummary(BaseModel):
+    model_config = CFG
+
+    id: uuid.UUID
+    schedule_id: uuid.UUID
+    version_no: int
+    source_revision: int
+    snapshot_schema_version: int
+    snapshot_hash: str
+    formula_version_id: uuid.UUID
+    published_at: datetime
+
+
+class ScheduleVersionView(ScheduleVersionSummary):
+    snapshot: dict[str, Any]
+
+
+class ScheduleVersionList(BaseModel):
+    items: list[ScheduleVersionSummary]
+    total: int
+
+
+class SchedulePublishResponse(BaseModel):
+    model_config = CFG
+
+    version: ScheduleVersionView
+    schedule: ScheduleDetail
+    issues: list[IssueView]
+
+
+class ScheduleRestoreRequest(BaseModel):
+    model_config = CFG
+
+    base_revision: int = Field(gt=0)
+
+
+class ShareLinkCreate(BaseModel):
+    model_config = CFG
+
+    expires_in_days: int | None = Field(default=None, ge=1, le=365)
+
+
+class ShareLinkCreated(BaseModel):
+    model_config = CFG
+
+    id: uuid.UUID
+    schedule_version_id: uuid.UUID
+    token: str
+    expires_at: datetime | None
+
+
+class PublicScheduleVersion(BaseModel):
+    model_config = CFG
+
+    version_id: uuid.UUID
+    version_no: int
+    published_at: datetime
+    snapshot: dict[str, Any]

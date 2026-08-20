@@ -15,6 +15,7 @@ import {
 import { lazy, Suspense, useEffect, useState } from "react";
 import { api, type User } from "../api/client";
 import { LoginPage } from "../features/auth/LoginPage";
+import { PublicSchedulePage } from "../features/schedules/PublicSchedulePage";
 
 const DungeonPage = lazy(() =>
   import("../features/dungeons/DungeonPage").then((module) => ({
@@ -35,17 +36,22 @@ const SchedulePage = lazy(() =>
 const { Content, Header, Sider } = Layout;
 
 export function App() {
+  const shareToken = window.location.pathname.match(/^\/share\/([^/]+)$/)?.[1] ?? null;
   const [user, setUser] = useState<User | null>(null);
   const [checking, setChecking] = useState(true);
   const [loginLoading, setLoginLoading] = useState(false);
   const [section, setSection] = useState("dungeons");
   const [messageApi, contextHolder] = message.useMessage();
   useEffect(() => {
+    if (shareToken) {
+      setChecking(false);
+      return;
+    }
     api<User>("/auth/me")
       .then(setUser)
       .catch(() => setUser(null))
       .finally(() => setChecking(false));
-  }, []);
+  }, [shareToken]);
   const onError = (error: unknown) =>
     messageApi.error(error instanceof Error ? error.message : "操作失败");
   const login = async (username: string, password: string) => {
@@ -78,7 +84,9 @@ export function App() {
       }}
     >
       {contextHolder}
-      {checking ? (
+      {shareToken ? (
+        <PublicSchedulePage token={shareToken} />
+      ) : checking ? (
         <main className="loading-page">
           <Skeleton active />
         </main>
@@ -96,7 +104,7 @@ export function App() {
                   DNF 团长排表工具
                 </Typography.Text>
                 <Typography.Text className="app-subtitle">
-                  阶段 3 · 智能排表
+                  阶段 4 · 完整编辑与发布
                 </Typography.Text>
               </div>
             </div>
