@@ -38,16 +38,16 @@
 | 前端框架 | React + TypeScript + Vite | 适合高交互单页管理工具 |
 | UI 组件 | Ant Design | 人员表格、表单、上传、弹窗和状态提示 |
 | 拖拽 | dnd-kit | 跨队伍、跨波次移动和排序 |
-| 服务端状态 | TanStack Query | API 缓存、失效和请求状态 |
-| 编辑器状态 | Zustand | 排表草稿、选择状态、撤销恢复 |
+| HTTP 与服务端状态 | 原生 `fetch` 封装 + React state | 当前规模下直接管理请求、加载和刷新状态 |
+| 编辑器状态 | Zustand | 视图波次和撤销恢复命令栈 |
 | 后端 | FastAPI + Pydantic | HTTP API、数据校验和 OpenAPI |
 | ORM | SQLAlchemy 2 + Alembic | PostgreSQL 访问和 Schema 迁移 |
 | 智能排表 | OR-Tools CP-SAT | 约束满足和多目标优化 |
-| 数据库 | PostgreSQL | 事务、JSONB、约束、版本和编辑锁 |
+| 数据库 | PostgreSQL | 事务、JSONB、约束和不可变版本快照 |
 | Excel | openpyxl | `.xlsx` 模板、预览、导入和导出 |
 | 长图 | Pillow | 根据版本化副本结构直接绘制 PNG 长图 |
 | 容器 | Docker Compose | 本机和公网单机部署 |
-| 测试 | pytest、Vitest、Playwright | 单元、集成和端到端测试 |
+| 测试 | pytest、Vitest、隔离 Docker/PostgreSQL 冒烟测试 | 当前单元、集成和全栈验收；公网阶段补 Playwright E2E |
 
 依赖版本策略：初始化工程时选择兼容的稳定版本，并通过 `pnpm-lock.yaml`、`uv.lock` 和 Docker 镜像标签锁定。业务代码不依赖未固定的 `latest` 镜像。
 
@@ -192,32 +192,22 @@ dnf/
 
 内置 12 人团本使用同一数据结构和页面展示，不在前端写特殊页面分支。
 
-### 6.1 路由
+### 6.1 当前导航与公开路由
 
 ```text
-/login
-/dungeons
-/dungeons/:dungeonId
-/dungeons/:dungeonId/versions/:versionId
-/players
-/imports/characters/:batchId
-/schedules
-/schedules/new
-/schedules/:scheduleId/setup
-/schedules/:scheduleId/editor
-/schedules/:scheduleId/waves/:waveNo
-/schedules/:scheduleId/versions
+/
 /share/:token
-/print/schedules/:scheduleId/versions/:versionNo
 ```
 
-`/share` 和 `/print` 使用同一套只读排表组件；打印路由隐藏导航、按钮和交互层。
+当前管理端未引入 React Router：登录后在 `/` 内通过页签状态切换副本、人员和排表模块；
+`/share/:token` 根据 URL token 渲染公开只读排表。PNG、Excel 和文本由 API 直接生成下载，
+不存在前端打印路由。阶段 5 若增加更复杂的账号权限或深链接，再评估引入正式路由层。
 
 ### 6.2 状态分层
 
 #### 服务端状态
 
-TanStack Query 管理：
+统一 `api<T>` fetch 封装与页面 React state 管理：
 
 - 玩家和角色列表。
 - 排表列表、参团快照和历史版本。
@@ -226,13 +216,13 @@ TanStack Query 管理：
 
 #### 编辑器本地状态
 
-Zustand 管理：
+Zustand 当前管理：
 
-- 当前波次、筛选条件和选中角色。
-- 拖拽中的临时布局。
-- 未提交的命令批次。
-- 撤销/恢复命令栈。
-- 当前编辑锁和心跳状态。
+- 总览/单波视图模式和当前波次。
+- 已确认编辑命令的撤销/恢复栈。
+
+拖拽乐观布局和页面表单状态由页面组件管理；多用户单编辑会话锁与心跳属于阶段 5，
+当前 Zustand store 尚不维护这类状态。
 
 服务端保存成功后，以返回的 `revision` 和受影响波次覆盖本地确认态。
 

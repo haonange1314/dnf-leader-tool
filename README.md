@@ -65,7 +65,7 @@ flowchart LR
 | Excel | openpyxl |
 | 长图 | Pillow |
 | 部署 | Docker Compose |
-| 测试 | pytest、Vitest、Playwright |
+| 测试 | pytest、Vitest、隔离 Docker/PostgreSQL 冒烟测试 |
 
 MVP 采用模块化单体架构，不引入 Redis、消息队列或微服务。开发阶段在本机通过 Docker Compose 运行，后续复用同一容器结构部署到公网服务器。
 
@@ -110,7 +110,7 @@ make up
 ```bash
 make test          # 后端 pytest + 前端 Vitest
 make check         # 静态检查、前后端测试及隔离 PostgreSQL 全栈验收
-make test-stack    # 用独立临时数据卷验证迁移、种子、健康检查和反向代理
+make test-stack    # 验证迁移、种子、编辑、发布、导出、鉴权和反向代理
 make solver-poc    # 运行默认 12 波团本和自定义单队 4 人 CP-SAT PoC
 make migrate       # 本机对 DATABASE_URL 执行数据库迁移
 make seed          # 幂等写入内置 12 人团本及评分公式
@@ -144,8 +144,9 @@ cd backend && uv run uvicorn app.main:app --reload
 - [x] 开发 OR-Tools 自动排表、锁定保留、求解诊断和生成记录
 - [x] 开发拖拽编辑器、发布版本、只读分享和多格式导出
 - [x] 完善发布预检、历史版本预览/复制、分享管理和草稿水印导出
-- [ ] 完成多账号、编辑锁、部署、备份和审计
-- [ ] 完成公网部署与备份方案
+- [ ] 完成多账号、角色权限和单编辑会话锁（区别于现有角色/位置/波次锁定）
+- [ ] 完成 HTTPS、CSRF、限流、审计和生产部署配置
+- [ ] 完成 PostgreSQL 备份恢复演练、正式端到端测试和性能验收
 
 ## 建议实施顺序
 
@@ -155,9 +156,9 @@ cd backend && uv run uvicorn app.main:app --reload
 → 人员管理与 Excel 导入
 → 排表基础与预检查
 → OR-Tools 自动排表
-→ 拖拽微调与编辑锁
+→ 拖拽微调与角色/位置/波次锁定
 → 发布版本与导出
-→ 公网部署
+→ 多账号、单编辑会话锁与公网部署
 ```
 
 ## 当前目录结构
