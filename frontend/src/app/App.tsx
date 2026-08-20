@@ -104,7 +104,7 @@ export function App() {
                   DNF 团长排表工具
                 </Typography.Text>
                 <Typography.Text className="app-subtitle">
-                  阶段 4 · 完整编辑与发布
+                  阶段 4.2 · 编辑与导出收尾
                 </Typography.Text>
               </div>
             </div>
