@@ -1,0 +1,66 @@
+services:
+  db:
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the production env file}
+    ports: !reset []
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  api:
+    environment:
+      DATABASE_URL: ${CONTAINER_DATABASE_URL:?set CONTAINER_DATABASE_URL in the production env file}
+      ENVIRONMENT: production
+      CORS_ORIGINS: https://${PUBLIC_DOMAIN:?set PUBLIC_DOMAIN in the production env file}
+      COOKIE_SECURE: "true"
+      BOOTSTRAP_OWNER_USERNAME: ${BOOTSTRAP_OWNER_USERNAME:?set BOOTSTRAP_OWNER_USERNAME}
+      BOOTSTRAP_OWNER_PASSWORD: ${BOOTSTRAP_OWNER_PASSWORD:?set BOOTSTRAP_OWNER_PASSWORD}
+    command:
+      - sh
+      - -c
+      - >-
+        .venv/bin/alembic upgrade head &&
+        .venv/bin/python -m app.cli seed &&
+        .venv/bin/python -m app.cli init-owner &&
+        .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+        --proxy-headers --forwarded-allow-ips=*
+    ports: !reset []
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  web:
+    build:
+      args:
+        VITE_SHOW_DEV_LOGIN: "false"
+        VITE_DEV_LOGIN_ACCOUNT: ""
+        VITE_DEV_LOGIN_CODE: ""
+    ports: !reset []
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  gateway:
+    image: caddy:2.10.2-alpine
+    environment:
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?set PUBLIC_DOMAIN in the production env file}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./infra/production/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -1,11 +1,11 @@
 import time
 import uuid
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.api.dependencies import CurrentUser, DbSession
+from app.api.dependencies import CurrentUser, DbSession, ScheduleEditor
 from app.application.schedule_generation import (
     SOLVER_VERSION,
     apply_solver_result,
@@ -14,6 +14,7 @@ from app.application.schedule_generation import (
     objective_summary_payload,
     solver_input_hash,
 )
+from app.application.schedule_locks import require_edit_lock
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.core.security import utc_now
@@ -69,8 +70,9 @@ def _load_definition(db: DbSession, schedule: Schedule) -> tuple[DungeonVersion,
 def generate_schedule(
     schedule_id: uuid.UUID,
     payload: GenerationRequest,
+    request: Request,
     db: DbSession,
-    current_user: CurrentUser,
+    current_user: ScheduleEditor,
 ) -> GenerationResponse:
     schedule = _load_schedule(db, schedule_id)
     if schedule.status == "ARCHIVED":
@@ -131,6 +133,7 @@ def generate_schedule(
             db.commit()
         raise AppError(422, "SCHEDULE_GENERATION_FAILED", f"自动排表失败：{exc}") from exc
 
+    require_edit_lock(db, schedule_id, current_user.id, request.state.edit_lock_token)
     current = _load_schedule(db, schedule_id, for_update=True)
     stored_run = db.get(GenerationRun, run.id)
     if stored_run is None:

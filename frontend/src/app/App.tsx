@@ -1,6 +1,7 @@
 import {
   DatabaseOutlined,
   LogoutOutlined,
+  SafetyCertificateOutlined,
   TeamOutlined,
 } from "@ant-design/icons";
 import {
@@ -30,6 +31,11 @@ const PersonnelPage = lazy(() =>
 const SchedulePage = lazy(() =>
   import("../features/schedules/SchedulePage").then((module) => ({
     default: module.SchedulePage,
+  })),
+);
+const UserPage = lazy(() =>
+  import("../features/users/UserPage").then((module) => ({
+    default: module.UserPage,
   })),
 );
 
@@ -104,7 +110,7 @@ export function App() {
                   DNF 团长排表工具
                 </Typography.Text>
                 <Typography.Text className="app-subtitle">
-                  阶段 4.2 · 编辑与导出收尾
+                  阶段 5 · 公网化工程完成
                 </Typography.Text>
               </div>
             </div>
@@ -144,6 +150,15 @@ export function App() {
                     icon: <TeamOutlined />,
                     label: "排表管理",
                   },
+                  ...(user.role === "OWNER"
+                    ? [
+                        {
+                          key: "users",
+                          icon: <SafetyCertificateOutlined />,
+                          label: "账号与审计",
+                        },
+                      ]
+                    : []),
                 ]}
               />
             </Sider>
@@ -151,16 +166,25 @@ export function App() {
               <Suspense fallback={<Skeleton active />}>
                 {section === "dungeons" ? (
                   <DungeonPage
+                    userRole={user.role}
                     onError={onError}
                     onSuccess={messageApi.success}
                   />
                 ) : section === "personnel" ? (
                   <PersonnelPage
+                    userRole={user.role}
+                    onError={onError}
+                    onSuccess={messageApi.success}
+                  />
+                ) : section === "schedules" ? (
+                  <SchedulePage
+                    userRole={user.role}
                     onError={onError}
                     onSuccess={messageApi.success}
                   />
                 ) : (
-                  <SchedulePage
+                  <UserPage
+                    currentUserId={user.id}
                     onError={onError}
                     onSuccess={messageApi.success}
                   />

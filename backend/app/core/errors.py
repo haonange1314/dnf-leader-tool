@@ -22,7 +22,9 @@ class AppError(Exception):
 
 
 async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
-    trace_id = request.headers.get("X-Request-Id", "")
+    trace_id = getattr(request.state, "request_id", None) or request.headers.get(
+        "X-Request-Id", ""
+    )
     return JSONResponse(
         status_code=exc.status_code,
         content={

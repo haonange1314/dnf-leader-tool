@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
-from app.api.dependencies import CurrentUser, DbSession
+from app.api.dependencies import CurrentUser, DbSession, EditorUser
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.core.security import utc_now
@@ -28,7 +28,7 @@ def download_template(current_user: CurrentUser) -> StreamingResponse:
 
 @router.post("/preview", response_model=ImportBatchView, status_code=201)
 async def preview_import(
-    file: Annotated[UploadFile, File()], *, db: DbSession, current_user: CurrentUser
+    file: Annotated[UploadFile, File()], *, db: DbSession, current_user: EditorUser
 ) -> ImportBatch:
     settings = get_settings()
     filename = file.filename or ""
@@ -98,7 +98,7 @@ def get_import(batch_id: uuid.UUID, db: DbSession, current_user: CurrentUser) ->
 
 
 @router.post("/{batch_id}/commit", response_model=ImportBatchView)
-def commit_import(batch_id: uuid.UUID, db: DbSession, current_user: CurrentUser) -> ImportBatch:
+def commit_import(batch_id: uuid.UUID, db: DbSession, current_user: EditorUser) -> ImportBatch:
     del current_user
     batch = _load_batch(db, batch_id)
     if batch.status != "PREVIEWED":

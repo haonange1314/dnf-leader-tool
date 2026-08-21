@@ -2,11 +2,17 @@ import hashlib
 import json
 import uuid
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload
 
-from app.api.dependencies import CurrentUser, DbSession
+from app.api.dependencies import (
+    CurrentUser,
+    DbSession,
+    EditorUser,
+    ScheduleEditor,
+    enforce_schedule_edit_lock,
+)
 from app.core.errors import AppError
 from app.domain.schedule import (
     MAX_SCHEDULE_POSITIONS,
@@ -411,7 +417,7 @@ def list_schedules(db: DbSession, current_user: CurrentUser) -> ScheduleList:
 
 
 @router.post("", response_model=ScheduleDetail, status_code=201)
-def create_schedule(payload: ScheduleCreate, db: DbSession, current_user: CurrentUser) -> Schedule:
+def create_schedule(payload: ScheduleCreate, db: DbSession, current_user: EditorUser) -> Schedule:
     version = db.scalar(
         select(DungeonVersion)
         .where(DungeonVersion.id == payload.dungeon_version_id)
@@ -556,7 +562,7 @@ def copy_schedule(
     schedule_id: uuid.UUID,
     payload: ScheduleCopy,
     db: DbSession,
-    current_user: CurrentUser,
+    current_user: EditorUser,
 ) -> Schedule:
     source = _load(db, schedule_id, for_update=True)
     if source.revision != payload.base_revision:
@@ -742,7 +748,7 @@ def update_schedule(
     schedule_id: uuid.UUID,
     payload: ScheduleUpdate,
     db: DbSession,
-    current_user: CurrentUser,
+    current_user: ScheduleEditor,
 ) -> Schedule:
     item = _load(db, schedule_id)
     new_wave_count = payload.wave_count
@@ -821,7 +827,7 @@ def update_schedule_participants(
     schedule_id: uuid.UUID,
     payload: ScheduleParticipantsUpdate,
     db: DbSession,
-    current_user: CurrentUser,
+    current_user: ScheduleEditor,
 ) -> Schedule:
     item = _load(db, schedule_id)
     participant_by_id = {participant.id: participant for participant in item.participants}
@@ -856,7 +862,7 @@ def update_schedule_preferences(
     schedule_id: uuid.UUID,
     payload: SchedulePreferencesUpdate,
     db: DbSession,
-    current_user: CurrentUser,
+    current_user: ScheduleEditor,
 ) -> Schedule:
     item = _load(db, schedule_id)
     expected_player_ids = {
@@ -929,7 +935,7 @@ def commit_schedule_character_sync(
     schedule_id: uuid.UUID,
     payload: ScheduleSyncCommit,
     db: DbSession,
-    current_user: CurrentUser,
+    current_user: ScheduleEditor,
 ) -> Schedule:
     item = _load(db, schedule_id)
     characters, fingerprint = _sync_source_state(db, item)
@@ -1017,10 +1023,10 @@ def commit_schedule_character_sync(
 def validate_schedule(
     schedule_id: uuid.UUID,
     payload: ValidationRequest,
+    request: Request,
     db: DbSession,
     current_user: CurrentUser,
 ) -> ValidationReport:
-    del current_user
     item = _load(db, schedule_id)
     if item.revision != payload.base_revision:
         raise AppError(
@@ -1029,6 +1035,8 @@ def validate_schedule(
             "排表已被其他操作修改，请刷新后重试",
             details={"expected": payload.base_revision, "current": item.revision},
         )
+    if current_user.role != "VIEWER":
+        enforce_schedule_edit_lock(schedule_id, request, db, current_user)
     version = db.get(DungeonVersion, item.dungeon_version_id)
     if version is None:
         raise AppError(409, "DUNGEON_VERSION_MISSING", "排表引用的副本版本不存在")
@@ -1204,6 +1212,9 @@ def validate_schedule(
         "warning": sum(issue.severity == "WARNING" for issue in issues),
         "info": sum(issue.severity == "INFO" for issue in issues),
     }
+    report = ValidationReport(revision=item.revision, issues=issues, summary=summary)
+    if current_user.role == "VIEWER":
+        return report
     validated_revision = db.scalar(
         update(Schedule)
         .where(Schedule.id == item.id, Schedule.revision == payload.base_revision)
@@ -1220,4 +1231,4 @@ def validate_schedule(
             details={"expected": payload.base_revision, "current": current_revision},
         )
     db.commit()
-    return ValidationReport(revision=validated_revision, issues=issues, summary=summary)
+    return report

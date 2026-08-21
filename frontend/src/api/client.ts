@@ -1,8 +1,33 @@
 export interface User {
   id: string;
   username: string;
-  role: string;
+  role: "OWNER" | "EDITOR" | "VIEWER";
   is_active: boolean;
+}
+export interface AuditLog {
+  id: string;
+  actorUserId: string | null;
+  action: string;
+  outcome: "SUCCESS" | "FAILURE";
+  requestId: string;
+  ipAddress: string | null;
+  resourceType: string | null;
+  resourceId: string | null;
+  details: Record<string, unknown>;
+  createdAt: string;
+}
+export interface EditLock {
+  scheduleId: string;
+  held: boolean;
+  holderUserId: string | null;
+  holderUsername: string | null;
+  ownedByCurrentUser: boolean;
+  canTakeover: boolean;
+  acquiredAt: string | null;
+  heartbeatAt: string | null;
+  expiresAt: string | null;
+  heartbeatIntervalSeconds: number;
+  token: string | null;
 }
 export interface TeamDefinition {
   id?: string;
@@ -295,14 +320,36 @@ export class ApiError extends Error {
   }
 }
 
+const editLockTokens = new Map<string, string>();
+
+export function setScheduleEditLockToken(scheduleId: string, token: string | null): void {
+  const storageKey = `dnf_edit_lock:${scheduleId}`;
+  if (token) {
+    editLockTokens.set(scheduleId, token);
+    globalThis.sessionStorage?.setItem(storageKey, token);
+  } else {
+    editLockTokens.delete(scheduleId);
+    globalThis.sessionStorage?.removeItem(storageKey);
+  }
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+  if (!(init?.body instanceof FormData)) headers.set("Content-Type", "application/json");
+  if (init?.method && !["GET", "HEAD", "OPTIONS"].includes(init.method.toUpperCase())) {
+    const csrfToken = readCookie("dnf_csrf");
+    if (csrfToken) headers.set("X-CSRF-Token", csrfToken);
+    const scheduleId = path.match(/^\/schedules\/([^/]+)/)?.[1];
+    const editLockToken = scheduleId
+      ? (editLockTokens.get(scheduleId) ??
+        globalThis.sessionStorage?.getItem(`dnf_edit_lock:${scheduleId}`))
+      : null;
+    if (editLockToken) headers.set("X-Edit-Lock-Token", editLockToken);
+  }
   const response = await fetch(`/api/v1${path}`, {
     credentials: "include",
     ...init,
-    headers:
-      init?.body instanceof FormData
-        ? init.headers
-        : { "Content-Type": "application/json", ...init?.headers },
+    headers,
   });
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as {
@@ -321,4 +368,10 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
+}
+
+function readCookie(name: string): string | null {
+  const prefix = `${encodeURIComponent(name)}=`;
+  const item = document.cookie.split("; ").find((value) => value.startsWith(prefix));
+  return item ? decodeURIComponent(item.slice(prefix.length)) : null;
 }

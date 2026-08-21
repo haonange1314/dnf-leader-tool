@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
-from app.api.dependencies import CurrentUser, DbSession
+from app.api.dependencies import CurrentUser, DbSession, EditorUser, ScheduleEditor
 from app.application.schedule_editor import recompute_schedule
 from app.application.schedule_exports import snapshot_png, snapshot_text, snapshot_workbook
 from app.application.schedule_publication import (
@@ -114,7 +114,7 @@ def publish_schedule(
     schedule_id: uuid.UUID,
     payload: SchedulePublishRequest,
     db: DbSession,
-    current_user: CurrentUser,
+    current_user: ScheduleEditor,
 ) -> SchedulePublishResponse:
     schedule = _load_schedule(db, schedule_id, for_update=True)
     if schedule.status == "ARCHIVED":
@@ -236,7 +236,7 @@ def restore_schedule_version(
     version_no: int,
     payload: ScheduleRestoreRequest,
     db: DbSession,
-    current_user: CurrentUser,
+    current_user: ScheduleEditor,
 ) -> ScheduleDetail:
     schedule = _load_schedule(db, schedule_id, for_update=True)
     if schedule.status == "ARCHIVED":
@@ -275,7 +275,7 @@ def copy_schedule_version_as_draft(
     version_no: int,
     payload: ScheduleVersionCopyRequest,
     db: DbSession,
-    current_user: CurrentUser,
+    current_user: EditorUser,
 ) -> ScheduleDetail:
     version = db.scalar(
         select(ScheduleVersion).where(
@@ -323,7 +323,7 @@ def create_share_link(
     version_id: uuid.UUID,
     payload: ShareLinkCreate,
     db: DbSession,
-    current_user: CurrentUser,
+    current_user: EditorUser,
 ) -> ShareLinkCreated:
     if db.get(ScheduleVersion, version_id) is None:
         raise AppError(404, "SCHEDULE_VERSION_NOT_FOUND", "排表发布版本不存在")
@@ -392,12 +392,13 @@ def list_share_links(
 
 @router.delete("/share-links/{share_link_id}", status_code=204)
 def revoke_share_link(
-    share_link_id: uuid.UUID, db: DbSession, current_user: CurrentUser
+    share_link_id: uuid.UUID, db: DbSession, current_user: EditorUser
 ) -> Response:
-    del current_user
     link = db.get(ShareLink, share_link_id)
     if link is None:
         raise AppError(404, "SHARE_LINK_NOT_FOUND", "分享链接不存在")
+    if current_user.role != "OWNER" and link.created_by != current_user.id:
+        raise AppError(403, "PERMISSION_DENIED", "只能撤销自己创建的分享链接")
     link.revoked_at = utc_now()
     db.commit()
     return Response(status_code=204)

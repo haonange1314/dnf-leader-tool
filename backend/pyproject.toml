@@ -31,9 +31,12 @@ dev = [
 package = false
 
 [tool.pytest.ini_options]
-addopts = "-ra --strict-config --strict-markers"
+addopts = "-ra --strict-config --strict-markers -m 'not performance'"
 pythonpath = ["."]
 testpaths = ["tests"]
+markers = [
+  "performance: explicit solver and export performance acceptance",
+]
 
 [tool.ruff]
 target-version = "py312"

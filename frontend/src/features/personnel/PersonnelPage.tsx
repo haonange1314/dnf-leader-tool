@@ -19,14 +19,16 @@ import {
   Upload,
 } from "antd";
 import { useEffect, useState } from "react";
-import { api, type ImportBatch, type Player } from "../../api/client";
+import { api, type ImportBatch, type Player, type User } from "../../api/client";
 
 interface Props {
+  userRole: User["role"];
   onError: (error: unknown) => void;
   onSuccess: (message: string) => void;
 }
 
-export function PersonnelPage({ onError, onSuccess }: Props) {
+export function PersonnelPage({ userRole, onError, onSuccess }: Props) {
+  const canEdit = userRole !== "VIEWER";
   const [players, setPlayers] = useState<Player[]>([]);
   const [search, setSearch] = useState("");
   const [playerOpen, setPlayerOpen] = useState(false);
@@ -134,6 +136,7 @@ export function PersonnelPage({ onError, onSuccess }: Props) {
           <Button
             type="primary"
             icon={<PlusOutlined />}
+            disabled={!canEdit}
             onClick={() => setPlayerOpen(true)}
           >
             新增玩家
@@ -148,8 +151,8 @@ export function PersonnelPage({ onError, onSuccess }: Props) {
           >
             下载 Excel 模板
           </Button>
-          <Upload accept=".xlsx" showUploadList={false} beforeUpload={preview}>
-            <Button icon={<UploadOutlined />}>上传并预览</Button>
+          <Upload disabled={!canEdit} accept=".xlsx" showUploadList={false} beforeUpload={preview}>
+            <Button disabled={!canEdit} icon={<UploadOutlined />}>上传并预览</Button>
           </Upload>
           {batch && (
             <>
@@ -160,7 +163,7 @@ export function PersonnelPage({ onError, onSuccess }: Props) {
               <Button
                 type="primary"
                 disabled={
-                  batch.summary.error > 0 || batch.status !== "PREVIEWED"
+                  !canEdit || batch.summary.error > 0 || batch.status !== "PREVIEWED"
                 }
                 onClick={commit}
               >
@@ -191,6 +194,7 @@ export function PersonnelPage({ onError, onSuccess }: Props) {
           extra: (
             <Button
               size="small"
+              disabled={!canEdit}
               onClick={(event) => {
                 event.stopPropagation();
                 setCharacterPlayer(player);

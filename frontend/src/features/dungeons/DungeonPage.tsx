@@ -15,9 +15,10 @@ import {
   Typography,
 } from "antd";
 import { useEffect, useState } from "react";
-import { api, type Dungeon, type DungeonVersion } from "../../api/client";
+import { api, type Dungeon, type DungeonVersion, type User } from "../../api/client";
 
 interface Props {
+  userRole: User["role"];
   onError: (error: unknown) => void;
   onSuccess: (message: string) => void;
 }
@@ -27,7 +28,8 @@ const statusColor = {
   RETIRED: "default",
 } as const;
 
-export function DungeonPage({ onError, onSuccess }: Props) {
+export function DungeonPage({ userRole, onError, onSuccess }: Props) {
+  const canEdit = userRole !== "VIEWER";
   const [items, setItems] = useState<Dungeon[]>([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
@@ -101,6 +103,7 @@ export function DungeonPage({ onError, onSuccess }: Props) {
         <Button
           type="primary"
           icon={<PlusOutlined />}
+          disabled={!canEdit}
           onClick={() => setOpen(true)}
         >
           新建副本
@@ -171,6 +174,7 @@ export function DungeonPage({ onError, onSuccess }: Props) {
                         <Space>
                           <Button
                             icon={<CopyOutlined />}
+                            disabled={!canEdit}
                             onClick={() => clone(dungeon, latest)}
                           >
                             复制草稿
@@ -179,6 +183,7 @@ export function DungeonPage({ onError, onSuccess }: Props) {
                             <Button
                               type="primary"
                               icon={<RocketOutlined />}
+                              disabled={!canEdit}
                               onClick={() => publish(latest)}
                             >
                               发布
