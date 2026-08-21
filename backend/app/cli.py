@@ -4,7 +4,7 @@ import getpass
 from sqlalchemy import select
 
 from app.core.config import get_settings
-from app.core.security import hash_password
+from app.core.security import hash_password, normalize_username
 from app.db.seed import seed_builtin_dungeons
 from app.db.session import SessionLocal
 from app.models.identity import User
@@ -20,10 +20,10 @@ def seed() -> None:
 
 def init_owner(username: str | None, password: str | None) -> None:
     settings = get_settings()
-    resolved_username = (username or settings.bootstrap_owner_username or "").strip().casefold()
+    resolved_username = normalize_username(username or settings.bootstrap_owner_username or "")
     resolved_password = password or settings.bootstrap_owner_password
     if not resolved_username:
-        resolved_username = input("Owner 用户名: ").strip().casefold()
+        resolved_username = normalize_username(input("Owner 用户名: "))
     if not resolved_password:
         resolved_password = getpass.getpass("Owner 密码: ")
     if not resolved_username:

@@ -1,0 +1,10 @@
+services:
+  db:
+    ports: !reset []
+
+  api:
+    ports: !reset []
+
+  web:
+    ports:
+      - "127.0.0.1:15173:80"

@@ -25,8 +25,28 @@ def create_session_token() -> str:
     return secrets.token_urlsafe(32)
 
 
+def create_csrf_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def create_edit_lock_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
 def hash_session_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+def hash_csrf_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def hash_edit_lock_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def normalize_username(username: str) -> str:
+    return username.strip().casefold()
 
 
 def utc_now() -> datetime:

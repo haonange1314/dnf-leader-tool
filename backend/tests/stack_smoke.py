@@ -1,25 +1,53 @@
 import http.cookiejar
 import json
+import os
+import re
 import urllib.error
 import urllib.request
 import uuid
 
+import psycopg
+
 BASE_URL = "http://127.0.0.1:8000/api/v1"
 jar = http.cookiejar.CookieJar()
 opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+schedule_lock_tokens: dict[tuple[int, str], str] = {}
 
 
-def request(path: str, method: str = "GET", payload: dict[str, object] | None = None) -> object:
+def client_request(
+    client: urllib.request.OpenerDirector,
+    cookies: http.cookiejar.CookieJar,
+    path: str,
+    method: str = "GET",
+    payload: dict[str, object] | None = None,
+) -> object:
     data = json.dumps(payload).encode() if payload is not None else None
-    response = opener.open(
+    headers = {"Content-Type": "application/json"}
+    if method not in {"GET", "HEAD", "OPTIONS"} and path != "/auth/login":
+        csrf_cookie = next((cookie.value for cookie in cookies if cookie.name == "dnf_csrf"), None)
+        if csrf_cookie:
+            headers["X-CSRF-Token"] = csrf_cookie
+        schedule_match = re.match(r"^/schedules/([^/]+)", path)
+        edit_lock_token = (
+            schedule_lock_tokens.get((id(client), schedule_match.group(1)))
+            if schedule_match
+            else None
+        )
+        if edit_lock_token:
+            headers["X-Edit-Lock-Token"] = edit_lock_token
+    response = client.open(
         urllib.request.Request(
             f"{BASE_URL}{path}",
             data=data,
             method=method,
-            headers={"Content-Type": "application/json"},
+            headers=headers,
         )
     )
     return json.loads(response.read()) if response.status != 204 else None
+
+
+def request(path: str, method: str = "GET", payload: dict[str, object] | None = None) -> object:
+    return client_request(opener, jar, path, method, payload)
 
 
 def request_error(
@@ -28,8 +56,19 @@ def request_error(
     payload: dict[str, object],
     expected_status: int = 422,
 ) -> dict[str, object]:
+    return client_request_error(opener, jar, path, method, payload, expected_status)
+
+
+def client_request_error(
+    client: urllib.request.OpenerDirector,
+    cookies: http.cookiejar.CookieJar,
+    path: str,
+    method: str,
+    payload: dict[str, object],
+    expected_status: int,
+) -> dict[str, object]:
     try:
-        request(path, method, payload)
+        client_request(client, cookies, path, method, payload)
     except urllib.error.HTTPError as exc:
         assert exc.code == expected_status
         result = json.loads(exc.read())
@@ -38,8 +77,90 @@ def request_error(
     raise AssertionError(f"expected HTTP {expected_status}: {method} {path}")
 
 
+def acquire_schedule_lock(
+    client: urllib.request.OpenerDirector,
+    cookies: http.cookiejar.CookieJar,
+    schedule_id: str,
+) -> dict[str, object]:
+    result = client_request(client, cookies, f"/schedules/{schedule_id}/lock", "POST")
+    assert isinstance(result, dict) and result["ownedByCurrentUser"] is True
+    token = result.get("token")
+    assert isinstance(token, str) and token
+    schedule_lock_tokens[(id(client), schedule_id)] = token
+    return result
+
+
+limited_jar = http.cookiejar.CookieJar()
+limited_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(limited_jar))
+for _ in range(5):
+    invalid_login = client_request_error(
+        limited_opener,
+        limited_jar,
+        "/auth/login",
+        "POST",
+        {"username": "rate-limit-smoke", "password": "wrong-password"},
+        401,
+    )
+    assert invalid_login["error"]["code"] == "INVALID_CREDENTIALS"
+rate_limited = client_request_error(
+    limited_opener,
+    limited_jar,
+    "/auth/login",
+    "POST",
+    {"username": "rate-limit-smoke", "password": "wrong-password"},
+    429,
+)
+assert rate_limited["error"]["code"] == "LOGIN_RATE_LIMITED"
+
 user = request("/auth/login", "POST", {"username": "admin", "password": "change-me-now"})
 assert isinstance(user, dict) and user["role"] == "OWNER"
+assert any(cookie.name == "dnf_csrf" for cookie in jar)
+viewer = request(
+    "/users",
+    "POST",
+    {"username": "viewer-smoke", "password": "viewer-password", "role": "VIEWER"},
+)
+assert isinstance(viewer, dict) and viewer["role"] == "VIEWER"
+viewer_jar = http.cookiejar.CookieJar()
+viewer_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(viewer_jar))
+viewer_login = client_request(
+    viewer_opener,
+    viewer_jar,
+    "/auth/login",
+    "POST",
+    {"username": "viewer-smoke", "password": "viewer-password"},
+)
+assert isinstance(viewer_login, dict) and viewer_login["role"] == "VIEWER"
+assert isinstance(client_request(viewer_opener, viewer_jar, "/dungeons"), dict)
+try:
+    client_request(
+        viewer_opener,
+        viewer_jar,
+        "/players",
+        "POST",
+        {"displayName": "viewer 不应创建"},
+    )
+except urllib.error.HTTPError as exc:
+    assert exc.code == 403
+    assert json.loads(exc.read())["error"]["code"] == "PERMISSION_DENIED"
+else:
+    raise AssertionError("viewer write must be denied")
+
+try:
+    opener.open(
+        urllib.request.Request(
+            f"{BASE_URL}/players",
+            data=json.dumps({"displayName": "缺少 CSRF"}).encode(),
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+    )
+except urllib.error.HTTPError as exc:
+    assert exc.code == 403
+    assert json.loads(exc.read())["error"]["code"] == "CSRF_INVALID"
+else:
+    raise AssertionError("unsafe request without CSRF must be denied")
+
 dungeons = request("/dungeons")
 assert isinstance(dungeons, dict) and dungeons["total"] == 1
 dungeon = dungeons["items"][0]
@@ -128,6 +249,84 @@ schedule = request(
     {"name": "阶段2全栈验收", "dungeonVersionId": source_version["id"]},
 )
 assert isinstance(schedule, dict) and len(schedule["waves"]) == 12
+missing_lock = request_error(
+    f"/schedules/{schedule['id']}",
+    "PATCH",
+    {"baseRevision": 1, "waveCount": 2},
+    expected_status=423,
+)
+assert missing_lock["error"]["code"] == "EDIT_LOCK_TOKEN_REQUIRED"
+acquire_schedule_lock(opener, jar, schedule["id"])
+viewer_validation = client_request(
+    viewer_opener,
+    viewer_jar,
+    f"/schedules/{schedule['id']}/validate",
+    "POST",
+    {"baseRevision": 1},
+)
+assert isinstance(viewer_validation, dict) and viewer_validation["revision"] == 1
+viewer_schedule = client_request(
+    viewer_opener,
+    viewer_jar,
+    f"/schedules/{schedule['id']}",
+)
+assert isinstance(viewer_schedule, dict) and viewer_schedule["validationSummary"] is None
+second_owner_jar = http.cookiejar.CookieJar()
+second_owner_opener = urllib.request.build_opener(
+    urllib.request.HTTPCookieProcessor(second_owner_jar)
+)
+second_owner = client_request(
+    second_owner_opener,
+    second_owner_jar,
+    "/auth/login",
+    "POST",
+    {"username": "admin", "password": "change-me-now"},
+)
+assert isinstance(second_owner, dict) and second_owner["role"] == "OWNER"
+lock_conflict = client_request_error(
+    second_owner_opener,
+    second_owner_jar,
+    f"/schedules/{schedule['id']}/lock",
+    "POST",
+    {},
+    423,
+)
+assert lock_conflict["error"]["code"] == "EDIT_LOCKED"
+heartbeat = request(f"/schedules/{schedule['id']}/lock/heartbeat", "POST")
+assert isinstance(heartbeat, dict) and heartbeat["ownedByCurrentUser"] is True
+database_url = os.environ["DATABASE_URL"].replace("postgresql+psycopg://", "postgresql://", 1)
+with psycopg.connect(database_url) as lock_db:
+    result = lock_db.execute(
+        "UPDATE edit_locks SET expires_at = now() - interval '1 second' WHERE schedule_id = %s",
+        (schedule["id"],),
+    )
+    assert result.rowcount == 1
+takeover = client_request(
+    second_owner_opener,
+    second_owner_jar,
+    f"/schedules/{schedule['id']}/lock/takeover",
+    "POST",
+)
+assert isinstance(takeover, dict) and takeover["ownedByCurrentUser"] is True
+second_token = takeover.get("token")
+assert isinstance(second_token, str) and second_token
+schedule_lock_tokens[(id(second_owner_opener), schedule["id"])] = second_token
+stale_lock = request_error(
+    f"/schedules/{schedule['id']}",
+    "PATCH",
+    {"baseRevision": 1, "waveCount": 2},
+    expected_status=423,
+)
+assert stale_lock["error"]["code"] == "EDIT_LOCK_INVALID"
+client_request(
+    second_owner_opener,
+    second_owner_jar,
+    f"/schedules/{schedule['id']}/lock",
+    "DELETE",
+)
+schedule_lock_tokens.pop((id(second_owner_opener), schedule["id"]), None)
+schedule_lock_tokens.pop((id(opener), schedule["id"]), None)
+acquire_schedule_lock(opener, jar, schedule["id"])
 assert all(len(wave["teams"]) == 3 for wave in schedule["waves"])
 assert sum(len(team["slots"]) for team in schedule["waves"][0]["teams"]) == 12
 assert all(
@@ -241,6 +440,7 @@ copied_schedule = request(
     },
 )
 assert isinstance(copied_schedule, dict)
+acquire_schedule_lock(opener, jar, copied_schedule["id"])
 assert copied_schedule["revision"] == 1 and copied_schedule["status"] == "DRAFT"
 assert copied_schedule["waveCount"] == 2 and len(copied_schedule["waves"]) == 2
 assert len(copied_schedule["participants"]) == 3
@@ -383,6 +583,7 @@ damage_only_schedule = request(
     {"name": "纯 C 规则验收", "dungeonVersionId": published["id"], "waveCount": 1},
 )
 assert isinstance(damage_only_schedule, dict)
+acquire_schedule_lock(opener, jar, damage_only_schedule["id"])
 damage_only_report = request(
     f"/schedules/{damage_only_schedule['id']}/validate",
     "POST",
@@ -422,6 +623,7 @@ publishable_schedule = request(
     {"name": "阶段4发布验收", "dungeonVersionId": published["id"], "waveCount": 1},
 )
 assert isinstance(publishable_schedule, dict)
+acquire_schedule_lock(opener, jar, publishable_schedule["id"])
 damage_participant_ids = []
 selected_damage_players = set()
 for participant in publishable_schedule["participants"]:
@@ -616,5 +818,51 @@ player = request("/players", "POST", {"displayName": "全栈验收玩家", "char
 assert isinstance(player, dict) and player["displayName"] == "全栈验收玩家"
 players = request("/players?search=%E5%85%A8%E6%A0%88")
 assert isinstance(players, dict) and players["total"] == 1
+audit_logs = request("/audit-logs")
+assert isinstance(audit_logs, dict) and audit_logs["total"] > 0
+assert any(item["action"] == "AUTH_LOGIN" for item in audit_logs["items"])
+
+updated_admin = request(
+    f"/users/{user['id']}",
+    "PATCH",
+    {"password": "updated-admin-password"},
+)
+assert isinstance(updated_admin, dict) and updated_admin["id"] == user["id"]
+current_session = request("/auth/me")
+assert isinstance(current_session, dict) and current_session["id"] == user["id"]
+revoked_session = client_request_error(
+    second_owner_opener,
+    second_owner_jar,
+    "/auth/me",
+    "GET",
+    {},
+    401,
+)
+assert revoked_session["error"]["code"] == "SESSION_INVALID"
+
+source_limit_jar = http.cookiejar.CookieJar()
+source_limit_opener = urllib.request.build_opener(
+    urllib.request.HTTPCookieProcessor(source_limit_jar)
+)
+for index in range(20):
+    source_failure = client_request_error(
+        source_limit_opener,
+        source_limit_jar,
+        "/auth/login",
+        "POST",
+        {"username": f"source-limit-{index}", "password": "wrong-password"},
+        401,
+    )
+    assert source_failure["error"]["code"] == "INVALID_CREDENTIALS"
+source_limited = client_request_error(
+    source_limit_opener,
+    source_limit_jar,
+    "/auth/login",
+    "POST",
+    {"username": "source-limit-final", "password": "wrong-password"},
+    429,
+)
+assert source_limited["error"]["code"] == "LOGIN_RATE_LIMITED"
+assert "SOURCE" in source_limited["error"]["details"]["scopes"]
 request("/auth/logout", "POST")
-print("stage 4.2 editor, publication, PNG export and sharing workflow smoke passed")
+print("stage 5 identity, edit lease, publication, export and recovery smoke passed")

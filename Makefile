@@ -1,4 +1,4 @@
-.PHONY: bootstrap dev up down logs migrate seed init-owner solver-poc test test-backend test-frontend test-stack check
+.PHONY: bootstrap dev up down logs migrate seed init-owner solver-poc test test-backend test-frontend test-stack test-e2e test-performance prod-config prod-up prod-down prod-logs backup restore check
 
 export UV_CACHE_DIR ?= $(CURDIR)/.uv-cache
 
@@ -42,6 +42,31 @@ test-frontend:
 test-stack:
 	sh scripts/test-stack.sh
 
+test-e2e:
+	sh scripts/test-e2e.sh
+
+test-performance:
+	cd backend && uv run pytest -m performance -s
+
+prod-config:
+	docker compose --env-file .env.production -f compose.yaml -f compose.production.yaml config --quiet
+
+prod-up: prod-config
+	docker compose --env-file .env.production -f compose.yaml -f compose.production.yaml up --build -d --wait
+
+prod-down:
+	docker compose --env-file .env.production -f compose.yaml -f compose.production.yaml down
+
+prod-logs:
+	docker compose --env-file .env.production -f compose.yaml -f compose.production.yaml logs -f gateway api web db
+
+backup:
+	sh scripts/backup-db.sh
+
+restore:
+	@test -n "$(BACKUP_FILE)" || (echo "BACKUP_FILE is required" >&2; exit 1)
+	CONFIRM_RESTORE=dnf_leader sh scripts/restore-db.sh "$(BACKUP_FILE)"
+
 check:
 	cd backend && uv run ruff check app tests migrations
 	cd backend && uv run mypy app
@@ -51,3 +76,5 @@ check:
 	cd backend && uv run pytest
 	docker compose config --quiet
 	$(MAKE) test-stack
+	$(MAKE) test-performance
+	$(MAKE) test-e2e

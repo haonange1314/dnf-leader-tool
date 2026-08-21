@@ -2,7 +2,7 @@
 
 面向 DNF 国服 PC 端团长的人员管理与智能排表网站。项目通过版本化副本配置定义人数、队伍和分队规则，再结合玩家可用波次、角色强度及特殊角色标签自动生成多波排表。
 
-> 当前状态：阶段 4.2 编辑与导出收尾已完成。已支持拖拽/交换/占位替换、角色/位置/波次锁定、撤销恢复、总览/单波视图、发布预检、不可变发布版本、历史预览/恢复/复制、分享链接有效期和撤销管理，以及带草稿水印或基于发布版本的 PNG 长图、Excel 和文本导出；下一步进入阶段 5 公网化。
+> 当前状态：阶段 5 公网化工程基线已完成。项目已具备完整业务闭环、多账号权限、单编辑会话、Caddy 自动 HTTPS、生产环境强校验、备份恢复演练，以及 Playwright 浏览器闭环和 1/12/30/50 波性能回归；正式上线前仍需按实际域名和服务器完成生产配置、证书签发与运维交接。
 
 ## 核心能力
 
@@ -12,6 +12,8 @@
 - **人工微调**：支持拖拽、交换、锁定、撤销恢复和局部重新生成。
 - **版本历史**：发布不可变排表快照，支持复制旧排表开启全新次数周期。
 - **分享导出**：支持可过期、可撤销的只读链接，以及 PNG 长图、Excel 和纯文本；草稿导出强制显示水印。
+- **账号安全**：Owner 管理多账号和审计记录，Editor 可编辑业务数据，Viewer 仅允许读取；写请求使用会话绑定 CSRF 令牌，登录失败按账号和来源限流。
+- **单编辑会话**：进入排表时申请独立租约并自动续期；其他会话只读查看，租约过期后可接管，写操作仍同时校验 revision。
 
 ## 默认 12 人团本规则
 
@@ -65,14 +67,16 @@ flowchart LR
 | Excel | openpyxl |
 | 长图 | Pillow |
 | 部署 | Docker Compose |
-| 测试 | pytest、Vitest、隔离 Docker/PostgreSQL 冒烟测试 |
+| 测试 | pytest、Vitest、Playwright、隔离 Docker/PostgreSQL 冒烟与恢复测试 |
 
-MVP 采用模块化单体架构，不引入 Redis、消息队列或微服务。开发阶段在本机通过 Docker Compose 运行，后续复用同一容器结构部署到公网服务器。
+MVP 采用模块化单体架构，不引入 Redis、消息队列或微服务。开发阶段在本机通过 Docker Compose 运行，生产环境通过 Caddy 和 Compose 叠加配置部署到公网服务器。
 
 ## 项目文档
 
 - [需求设计文档](docs/design.md)：产品范围、业务规则、页面流程和验收标准。
 - [技术设计文档](docs/technical-design.md)：系统架构、PostgreSQL、API、求解器、测试和部署方案。
+- [生产部署与数据恢复](docs/deployment.md)：HTTPS、生产配置、备份、恢复、升级和日常运维。
+- [阶段 5 性能基线](docs/performance-baseline.md)：1/12/30/50 波求解结果、浏览器和全栈验收范围。
 
 当前文档版本均为 v0.2。
 
@@ -105,18 +109,33 @@ make up
 本地 Compose 默认会在登录页展示并预填这组账号；设置
 `VITE_SHOW_DEV_LOGIN=false` 后重新构建 Web 即可关闭，公网环境必须关闭。
 
+Owner 登录后可从“账号与审计”创建 Editor 或 Viewer，并查看最近写操作与登录结果。
+`LOGIN_RATE_LIMIT_ATTEMPTS`、`LOGIN_RATE_LIMIT_SOURCE_ATTEMPTS`、
+`LOGIN_RATE_LIMIT_WINDOW_SECONDS` 和 `LOGIN_RATE_LIMIT_LOCK_SECONDS` 分别控制账号来源
+组合、单一来源的登录失败阈值、统计窗口及封禁时间；过期限流记录会自动清理。前端会自动把可读的
+`dnf_csrf` Cookie 作为 `X-CSRF-Token` 请求头发送；会话 Cookie 始终保持 HttpOnly。
+`EDIT_LOCK_LEASE_SECONDS` 和 `EDIT_LOCK_HEARTBEAT_SECONDS` 控制排表编辑租约；默认
+90 秒租期、30 秒心跳。租约令牌仅在当前浏览器标签页的 `sessionStorage` 中保存，
+服务端只保存哈希。
+
 常用命令：
 
 ```bash
 make test          # 后端 pytest + 前端 Vitest
-make check         # 静态检查、前后端测试及隔离 PostgreSQL 全栈验收
+make check         # 静态检查、前后端、全栈恢复、性能及浏览器完整验收
 make test-stack    # 验证迁移、种子、编辑、发布、导出、鉴权和反向代理
+make test-e2e      # 在隔离容器栈上运行 Playwright Chromium 闭环
+make test-performance # 运行显式 1/12/30/50 波性能基线
 make solver-poc    # 运行默认 12 波团本和自定义单队 4 人 CP-SAT PoC
 make migrate       # 本机对 DATABASE_URL 执行数据库迁移
 make seed          # 幂等写入内置 12 人团本及评分公式
 make init-owner    # 交互式创建首个 Owner（未使用环境变量时提示输入）
 make logs          # 跟踪三个容器日志
 make down          # 停止容器，保留 PostgreSQL 数据卷
+make prod-config   # 校验 .env.production 和生产 Compose 叠加配置
+make prod-up       # 通过 Caddy HTTPS 启动生产容器
+make backup        # 生成 PostgreSQL 自定义格式备份
+make restore BACKUP_FILE=/path/to/backup.dump  # 显式恢复生产数据库
 ```
 
 本地 `.env` 中的 `DATABASE_URL` 供宿主机命令使用，连接 `localhost`；`CONTAINER_DATABASE_URL` 供 API 容器使用，连接 Compose 服务名 `db`。两者的用户名、密码和数据库名必须与 PostgreSQL 配置保持一致；用于公网环境前必须替换示例密码。数据库端口只绑定到 `127.0.0.1`。
@@ -144,9 +163,11 @@ cd backend && uv run uvicorn app.main:app --reload
 - [x] 开发 OR-Tools 自动排表、锁定保留、求解诊断和生成记录
 - [x] 开发拖拽编辑器、发布版本、只读分享和多格式导出
 - [x] 完善发布预检、历史版本预览/复制、分享管理和草稿水印导出
-- [ ] 完成多账号、角色权限和单编辑会话锁（区别于现有角色/位置/波次锁定）
-- [ ] 完成 HTTPS、CSRF、限流、审计和生产部署配置
-- [ ] 完成 PostgreSQL 备份恢复演练、正式端到端测试和性能验收
+- [x] 完成多账号、Owner/Editor/Viewer 权限、CSRF、登录限流和审计基线
+- [x] 完成单编辑会话锁、心跳、超时接管和 Viewer 前端只读降级
+- [x] 完成 HTTPS 入口、生产安全配置和部署文档
+- [x] 完成隔离 PostgreSQL 备份恢复演练和生产恢复脚本
+- [x] 完成 Playwright 浏览器端到端测试和 1/12/30/50 波性能验收
 
 ## 建议实施顺序
 
@@ -159,6 +180,7 @@ cd backend && uv run uvicorn app.main:app --reload
 → 拖拽微调与角色/位置/波次锁定
 → 发布版本与导出
 → 多账号、单编辑会话锁与公网部署
+→ 浏览器闭环、备份恢复和性能验收
 ```
 
 ## 当前目录结构

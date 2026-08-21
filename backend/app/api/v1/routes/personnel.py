@@ -7,7 +7,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
-from app.api.dependencies import CurrentUser, DbSession
+from app.api.dependencies import CurrentUser, DbSession, EditorUser
 from app.core.errors import AppError
 from app.domain.personnel import normalize_key
 from app.models.personnel import Character, Player
@@ -75,7 +75,7 @@ def list_players(
 
 
 @router.post("/players", response_model=PlayerView, status_code=201)
-def create_player(payload: PlayerCreate, db: DbSession, current_user: CurrentUser) -> Player:
+def create_player(payload: PlayerCreate, db: DbSession, current_user: EditorUser) -> Player:
     del current_user
     player = Player(
         display_name=payload.display_name.strip(),
@@ -104,7 +104,7 @@ def get_player(player_id: uuid.UUID, db: DbSession, current_user: CurrentUser) -
 
 @router.patch("/players/{player_id}", response_model=PlayerView)
 def update_player(
-    player_id: uuid.UUID, payload: PlayerUpdate, db: DbSession, current_user: CurrentUser
+    player_id: uuid.UUID, payload: PlayerUpdate, db: DbSession, current_user: EditorUser
 ) -> Player:
     del current_user
     player = db.get(Player, player_id)
@@ -120,7 +120,7 @@ def update_player(
 
 @router.post("/players/{player_id}/characters", response_model=CharacterView, status_code=201)
 def create_character(
-    player_id: uuid.UUID, payload: CharacterCreate, db: DbSession, current_user: CurrentUser
+    player_id: uuid.UUID, payload: CharacterCreate, db: DbSession, current_user: EditorUser
 ) -> Character:
     del current_user
     if db.get(Player, player_id) is None:
@@ -134,7 +134,7 @@ def create_character(
 
 @router.patch("/characters/{character_id}", response_model=CharacterView)
 def update_character(
-    character_id: uuid.UUID, payload: CharacterUpdate, db: DbSession, current_user: CurrentUser
+    character_id: uuid.UUID, payload: CharacterUpdate, db: DbSession, current_user: EditorUser
 ) -> Character:
     del current_user
     character = db.get(Character, character_id)
@@ -148,7 +148,7 @@ def update_character(
 
 @router.post("/characters/{character_id}/deactivate", response_model=CharacterView)
 def deactivate_character(
-    character_id: uuid.UUID, db: DbSession, current_user: CurrentUser
+    character_id: uuid.UUID, db: DbSession, current_user: EditorUser
 ) -> Character:
     del current_user
     character = db.get(Character, character_id)
@@ -162,7 +162,7 @@ def deactivate_character(
 
 @router.post("/characters/batch-update", response_model=BatchUpdateResult)
 def batch_update_characters(
-    payload: CharacterBatchUpdate, db: DbSession, current_user: CurrentUser
+    payload: CharacterBatchUpdate, db: DbSession, current_user: EditorUser
 ) -> BatchUpdateResult:
     del current_user
     values: dict[str, bool] = {}

@@ -47,9 +47,11 @@ import {
   Tag,
   Typography,
 } from "antd";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ApiError,
   api,
+  type EditLock,
   type Dungeon,
   type GenerationResponse,
   type GenerationRun,
@@ -72,10 +74,13 @@ import {
   type ShareLinkCreated,
   type ValidationIssue,
   type ValidationReport,
+  type User,
+  setScheduleEditLockToken,
 } from "../../api/client";
 import { useScheduleEditorStore } from "./scheduleEditorStore";
 
 interface Props {
+  userRole: User["role"];
   onError: (error: unknown) => void;
   onSuccess: (message: string) => void;
 }
@@ -102,7 +107,7 @@ const ISSUE_LABELS: Record<string, string> = {
   UNASSIGNED_SELECTED_PARTICIPANTS: "仍有已选角色未分配",
 };
 
-export function SchedulePage({ onError, onSuccess }: Props) {
+export function SchedulePage({ userRole, onError, onSuccess }: Props) {
   const [schedules, setSchedules] = useState<ScheduleSummary[]>([]);
   const [dungeons, setDungeons] = useState<Dungeon[]>([]);
   const [detail, setDetail] = useState<ScheduleDetail | null>(null);
@@ -141,6 +146,8 @@ export function SchedulePage({ onError, onSuccess }: Props) {
   const [sharePending, setSharePending] = useState(false);
   const [shareUrl, setShareUrl] = useState("");
   const [waveCount, setWaveCount] = useState(1);
+  const [editLock, setEditLock] = useState<EditLock | null>(null);
+  const editLockRef = useRef<{ scheduleId: string; token: string } | null>(null);
   const [createForm] = Form.useForm();
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -214,8 +221,68 @@ export function SchedulePage({ onError, onSuccess }: Props) {
     setLatestGeneration(null);
   };
 
+  const rememberEditLock = (lock: EditLock) => {
+    setEditLock(lock);
+    if (lock.ownedByCurrentUser && lock.token) {
+      setScheduleEditLockToken(lock.scheduleId, lock.token);
+      editLockRef.current = { scheduleId: lock.scheduleId, token: lock.token };
+    }
+  };
+
+  const releaseCurrentEditLock = async () => {
+    const current = editLockRef.current;
+    if (!current) {
+      setEditLock(null);
+      return;
+    }
+    editLockRef.current = null;
+    setScheduleEditLockToken(current.scheduleId, null);
+    setEditLock(null);
+    try {
+      await api<void>(`/schedules/${current.scheduleId}/lock`, {
+        method: "DELETE",
+        headers: { "X-Edit-Lock-Token": current.token },
+      });
+    } catch {
+      // The short server lease remains the recovery path if navigation interrupts release.
+    }
+  };
+
+  const establishEditLock = async (scheduleId: string) => {
+    if (userRole === "VIEWER") {
+      setEditLock(await api<EditLock>(`/schedules/${scheduleId}/lock`));
+      return;
+    }
+    try {
+      rememberEditLock(
+        await api<EditLock>(`/schedules/${scheduleId}/lock`, { method: "POST" }),
+      );
+    } catch (error) {
+      if (!(error instanceof ApiError) || error.status !== 423) throw error;
+      if (error.details.canTakeover === true) {
+        rememberEditLock(
+          await api<EditLock>(`/schedules/${scheduleId}/lock/takeover`, {
+            method: "POST",
+          }),
+        );
+        return;
+      }
+      setEditLock(await api<EditLock>(`/schedules/${scheduleId}/lock`));
+    }
+  };
+
+  const leaveSchedule = async () => {
+    await releaseCurrentEditLock();
+    setDetail(null);
+    setLatestGeneration(null);
+    setVersions([]);
+    setShareUrl("");
+    resetEditor();
+  };
+
   const openSchedule = async (scheduleId: string) => {
     try {
+      await releaseCurrentEditLock();
       const [schedule, runs, versionResult] = await Promise.all([
         api<ScheduleDetail>(`/schedules/${scheduleId}`),
         api<{ items: GenerationRun[] }>(`/schedules/${scheduleId}/generation-runs`),
@@ -225,10 +292,49 @@ export function SchedulePage({ onError, onSuccess }: Props) {
       resetEditor();
       setLatestGeneration(runs.items[0] ?? null);
       setVersions(versionResult.items);
+      await establishEditLock(scheduleId);
     } catch (error) {
       onError(error);
     }
   };
+
+  useEffect(() => {
+    const token = editLock?.token;
+    if (!editLock?.ownedByCurrentUser || !token) return;
+    const interval = window.setInterval(() => {
+      void api<EditLock>(`/schedules/${editLock.scheduleId}/lock/heartbeat`, {
+        method: "POST",
+        headers: { "X-Edit-Lock-Token": token },
+      })
+        .then(rememberEditLock)
+        .catch(async () => {
+          setScheduleEditLockToken(editLock.scheduleId, null);
+          editLockRef.current = null;
+          try {
+            setEditLock(await api<EditLock>(`/schedules/${editLock.scheduleId}/lock`));
+          } catch {
+            setEditLock(null);
+          }
+          onError(new Error("编辑锁已失效，当前排表已切换为只读"));
+        });
+    }, editLock.heartbeatIntervalSeconds * 1000);
+    return () => window.clearInterval(interval);
+  }, [editLock?.scheduleId, editLock?.token, editLock?.ownedByCurrentUser]);
+
+  useEffect(
+    () => () => {
+      const current = editLockRef.current;
+      if (!current) return;
+      editLockRef.current = null;
+      setScheduleEditLockToken(current.scheduleId, null);
+      void api<void>(`/schedules/${current.scheduleId}/lock`, {
+        method: "DELETE",
+        headers: { "X-Edit-Lock-Token": current.token },
+        keepalive: true,
+      }).catch(() => undefined);
+    },
+    [],
+  );
 
   const executeEditorOperations = async (
     operations: ScheduleOperation[],
@@ -306,9 +412,11 @@ export function SchedulePage({ onError, onSuccess }: Props) {
       setCreateOpen(false);
       createForm.resetFields();
       await loadList();
+      await releaseCurrentEditLock();
       applyDetail(created);
       resetEditor();
       setVersions([]);
+      await establishEditLock(created.id);
       onSuccess("排表已创建");
     } catch (error) {
       onError(error);
@@ -429,7 +537,9 @@ export function SchedulePage({ onError, onSuccess }: Props) {
       setCopyOpen(false);
       setCopyPreview(null);
       await loadList();
+      await releaseCurrentEditLock();
       applyDetail(copied);
+      await establishEditLock(copied.id);
       onSuccess("排表已复制，角色次数和队伍位置已重置");
     } catch (error) {
       onError(error);
@@ -588,10 +698,12 @@ export function SchedulePage({ onError, onSuccess }: Props) {
       );
       setCopyVersionTarget(null);
       setHistoryOpen(false);
+      await releaseCurrentEditLock();
       applyDetail(copied);
       resetEditor();
       setVersions([]);
       await loadList();
+      await establishEditLock(copied.id);
       onSuccess(`已从发布版本 v${copyVersionTarget.versionNo} 创建新草稿`);
     } catch (error) {
       onError(error);
@@ -699,7 +811,12 @@ export function SchedulePage({ onError, onSuccess }: Props) {
               创建排表、选择参团角色并进行生成前预检查
             </Typography.Text>
           </div>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            disabled={userRole === "VIEWER"}
+            onClick={() => setCreateOpen(true)}
+          >
             新建排表
           </Button>
         </div>
@@ -799,6 +916,8 @@ export function SchedulePage({ onError, onSuccess }: Props) {
     viewMode === "overview"
       ? detail.waves
       : detail.waves.filter((wave) => wave.waveNo === selectedWaveNo);
+  const canEditSchedule = userRole !== "VIEWER" && Boolean(editLock?.ownedByCurrentUser);
+  const canCreateContent = userRole !== "VIEWER";
 
   return (
     <section>
@@ -807,13 +926,7 @@ export function SchedulePage({ onError, onSuccess }: Props) {
           <Button
             type="link"
             className="schedule-back"
-            onClick={() => {
-              setDetail(null);
-              setLatestGeneration(null);
-              setVersions([]);
-              setShareUrl("");
-              resetEditor();
-            }}
+            onClick={() => void leaveSchedule()}
           >
             ← 返回排表列表
           </Button>
@@ -831,7 +944,10 @@ export function SchedulePage({ onError, onSuccess }: Props) {
             icon={<SendOutlined />}
             loading={publishPending}
             disabled={
-              hasUnsavedChanges || detail.status === "ARCHIVED" || detail.status === "PUBLISHED"
+              !canEditSchedule ||
+              hasUnsavedChanges ||
+              detail.status === "ARCHIVED" ||
+              detail.status === "PUBLISHED"
             }
             onClick={() => void openPublish()}
           >
@@ -861,7 +977,7 @@ export function SchedulePage({ onError, onSuccess }: Props) {
           ) : null}
           <Button
             icon={<CopyOutlined />}
-            disabled={hasUnsavedChanges}
+            disabled={!canCreateContent || hasUnsavedChanges}
             onClick={() => {
               setCopyName(`${detail.name} - 副本`);
               setCopyTargetVersionId(detail.dungeonVersionId);
@@ -872,12 +988,16 @@ export function SchedulePage({ onError, onSuccess }: Props) {
           >
             复制排表
           </Button>
-          <Button icon={<SettingOutlined />} disabled={hasUnsavedChanges} onClick={openPreferences}>
+          <Button
+            icon={<SettingOutlined />}
+            disabled={!canEditSchedule || hasUnsavedChanges}
+            onClick={openPreferences}
+          >
             玩家偏好
           </Button>
           <Button
             icon={<ReloadOutlined />}
-            disabled={hasUnsavedChanges}
+            disabled={!canEditSchedule || hasUnsavedChanges}
             onClick={() => void previewSync()}
           >
             同步角色
@@ -893,7 +1013,7 @@ export function SchedulePage({ onError, onSuccess }: Props) {
           <Button
             type="primary"
             icon={<PlayCircleOutlined />}
-            disabled={hasUnsavedChanges || detail.status === "ARCHIVED"}
+            disabled={!canEditSchedule || hasUnsavedChanges || detail.status === "ARCHIVED"}
             onClick={() => setGenerationOpen(true)}
           >
             {detail.waves.some((wave) =>
@@ -904,6 +1024,34 @@ export function SchedulePage({ onError, onSuccess }: Props) {
           </Button>
         </Space>
       </div>
+
+      {!canEditSchedule ? (
+        <Alert
+          className="schedule-panel"
+          type="info"
+          showIcon
+          title={
+            userRole === "VIEWER"
+              ? "Viewer 账号以只读方式查看排表"
+              : editLock?.held
+                ? `当前由 ${editLock.holderUsername ?? "其他账号"} 编辑`
+                : "当前未持有编辑锁"
+          }
+          description={
+            editLock?.expiresAt && editLock.held
+              ? `租约预计于 ${new Date(editLock.expiresAt).toLocaleTimeString()} 到期；到期后重新进入可自动接管。`
+              : "查看、预检查、历史预览和导出仍可使用。"
+          }
+        />
+      ) : (
+        <Alert
+          className="schedule-panel"
+          type="success"
+          showIcon
+          title="已获得此排表的单编辑会话锁"
+          description="页面会自动发送心跳；离开排表或租约失效后，写操作将立即切换为只读。"
+        />
+      )}
 
       {hasUnsavedChanges ? (
         <Alert
@@ -928,8 +1076,20 @@ export function SchedulePage({ onError, onSuccess }: Props) {
         <Col xs={12} md={6}>
           <Card>
             <Space.Compact block>
-              <InputNumber min={1} max={50} value={waveCount} onChange={(value) => setWaveCount(value ?? 1)} />
-              <Button icon={<SettingOutlined />} onClick={() => void updateWaves()}>更新波数</Button>
+              <InputNumber
+                min={1}
+                max={50}
+                disabled={!canEditSchedule}
+                value={waveCount}
+                onChange={(value) => setWaveCount(value ?? 1)}
+              />
+              <Button
+                icon={<SettingOutlined />}
+                disabled={!canEditSchedule}
+                onClick={() => void updateWaves()}
+              >
+                更新波数
+              </Button>
             </Space.Compact>
           </Card>
         </Col>
@@ -968,9 +1128,17 @@ export function SchedulePage({ onError, onSuccess }: Props) {
       <Card
         title="参团角色"
         className="schedule-panel"
-        extra={<Button onClick={() => void saveParticipants()}>保存选择</Button>}
+        extra={
+          <Button disabled={!canEditSchedule} onClick={() => void saveParticipants()}>
+            保存选择
+          </Button>
+        }
       >
-        <Checkbox.Group value={selectedIds} onChange={(values) => setSelectedIds(values as string[])}>
+        <Checkbox.Group
+          disabled={!canEditSchedule}
+          value={selectedIds}
+          onChange={(values) => setSelectedIds(values as string[])}
+        >
           <div className="participant-grid">
             {detail.participants.map((participant) => (
               <Checkbox value={participant.id} key={participant.id} className="participant-option">
@@ -1004,14 +1172,14 @@ export function SchedulePage({ onError, onSuccess }: Props) {
           ) : null}
           <Button
             icon={<UndoOutlined />}
-            disabled={!undoStack.length || editorPending}
+            disabled={!canEditSchedule || !undoStack.length || editorPending}
             onClick={() => void undo()}
           >
             撤销
           </Button>
           <Button
             icon={<RedoOutlined />}
-            disabled={!redoStack.length || editorPending}
+            disabled={!canEditSchedule || !redoStack.length || editorPending}
             onClick={() => void redo()}
           >
             恢复
@@ -1028,7 +1196,7 @@ export function SchedulePage({ onError, onSuccess }: Props) {
                 <DraggableParticipant
                   key={participant.id}
                   participant={participant}
-                  disabled={participant.isLocked || editorPending}
+                  disabled={!canEditSchedule || participant.isLocked || editorPending}
                 />
               ))
             ) : (
@@ -1042,7 +1210,7 @@ export function SchedulePage({ onError, onSuccess }: Props) {
               key={wave.id}
               wave={wave}
               participantsById={participantsById}
-              disabled={editorPending}
+              disabled={!canEditSchedule || editorPending}
               onOperation={(operation) => void executeEditorOperations([operation])}
             />
           ))}
@@ -1061,6 +1229,7 @@ export function SchedulePage({ onError, onSuccess }: Props) {
         confirmLoading={publishPending}
         okButtonProps={{
           disabled:
+            !canEditSchedule ||
             !publicationCheck?.publishable ||
             Boolean(publicationCheck.summary.warning && !confirmPublishWarnings),
         }}
@@ -1131,6 +1300,7 @@ export function SchedulePage({ onError, onSuccess }: Props) {
                   <Button
                     size="small"
                     icon={<HistoryOutlined />}
+                    disabled={!canEditSchedule}
                     onClick={() => confirmRestoreVersion(version.versionNo)}
                   >
                     恢复为草稿
@@ -1138,6 +1308,7 @@ export function SchedulePage({ onError, onSuccess }: Props) {
                   <Button
                     size="small"
                     icon={<CopyOutlined />}
+                    disabled={!canCreateContent}
                     onClick={() => {
                       setCopyVersionTarget(version);
                       setCopyVersionName(`${detail.name} · v${version.versionNo} 副本`);
@@ -1202,7 +1373,7 @@ export function SchedulePage({ onError, onSuccess }: Props) {
         onOk={() => void copyPublishedVersion()}
         okText="创建新草稿"
         confirmLoading={versionActionPending}
-        okButtonProps={{ disabled: !copyVersionName.trim() }}
+        okButtonProps={{ disabled: !canCreateContent || !copyVersionName.trim() }}
       >
         <Typography.Paragraph type="secondary">
           新草稿会完整复制该不可变版本的人员快照、队伍位置、核心角色和锁定状态，原版本不会改变。
@@ -1241,7 +1412,12 @@ export function SchedulePage({ onError, onSuccess }: Props) {
             ]}
             style={{ width: 150 }}
           />
-          <Button type="primary" loading={sharePending} onClick={() => void createShare()}>
+          <Button
+            type="primary"
+            loading={sharePending}
+            disabled={!canCreateContent}
+            onClick={() => void createShare()}
+          >
             创建只读链接
           </Button>
         </Space>
@@ -1273,7 +1449,7 @@ export function SchedulePage({ onError, onSuccess }: Props) {
                     <Button
                       danger
                       size="small"
-                      disabled={sharePending}
+                      disabled={!canCreateContent || sharePending}
                       onClick={() => void revokeShare(link.id)}
                     >
                       撤销
@@ -1301,6 +1477,7 @@ export function SchedulePage({ onError, onSuccess }: Props) {
         onOk={() => void generate()}
         okText="开始生成"
         confirmLoading={generationPending}
+        okButtonProps={{ disabled: !canEditSchedule }}
       >
         <Typography.Paragraph type="secondary">
           求解器会优先安排更多角色、填满前面波次并优化队伍组成、核心秘宝、跨波平衡和强度顺序。
@@ -1348,7 +1525,9 @@ export function SchedulePage({ onError, onSuccess }: Props) {
         onOk={() => void (copyPreview ? copySchedule() : previewCopy())}
         okText={copyPreview ? "确认创建" : "预览迁移"}
         confirmLoading={copyPending}
-        okButtonProps={{ disabled: !copyName.trim() || !copyTargetVersionId }}
+        okButtonProps={{
+          disabled: !canCreateContent || !copyName.trim() || !copyTargetVersionId,
+        }}
       >
         <Typography.Paragraph type="secondary">
           将复制副本版本、波数、参团选择和玩家偏好；角色使用最新档案数据，队伍位置与锁定状态会清空。
@@ -1416,7 +1595,7 @@ export function SchedulePage({ onError, onSuccess }: Props) {
         onCancel={() => setSyncPreview(null)}
         onOk={() => void commitSync()}
         okText="确认同步"
-        okButtonProps={{ disabled: !syncPreview?.changes.length }}
+        okButtonProps={{ disabled: !canEditSchedule || !syncPreview?.changes.length }}
       >
         {syncPreview ? (
           <>
@@ -1452,6 +1631,7 @@ export function SchedulePage({ onError, onSuccess }: Props) {
         onCancel={() => setPreferencesOpen(false)}
         onOk={() => void savePreferences()}
         okText="保存偏好"
+        okButtonProps={{ disabled: !canEditSchedule }}
       >
         <Typography.Paragraph type="secondary">
           可用波次留空表示全程可用；最大出场次数为空表示不额外限制。

@@ -47,7 +47,7 @@
 | Excel | openpyxl | `.xlsx` 模板、预览、导入和导出 |
 | 长图 | Pillow | 根据版本化副本结构直接绘制 PNG 长图 |
 | 容器 | Docker Compose | 本机和公网单机部署 |
-| 测试 | pytest、Vitest、隔离 Docker/PostgreSQL 冒烟测试 | 当前单元、集成和全栈验收；公网阶段补 Playwright E2E |
+| 测试 | pytest、Vitest、Playwright、隔离 Docker/PostgreSQL 冒烟与恢复测试 | 单元、集成、浏览器和全栈验收 |
 
 依赖版本策略：初始化工程时选择兼容的稳定版本，并通过 `pnpm-lock.yaml`、`uv.lock` 和 Docker 镜像标签锁定。业务代码不依赖未固定的 `latest` 镜像。
 
@@ -986,6 +986,10 @@ POST   /schedules/{scheduleId}/lock/takeover
 ```
 
 写请求通过 `X-Edit-Lock-Token` 传递锁令牌，并在请求体中带 `baseRevision`。
+当前实现使用 90 秒默认租期和 30 秒默认心跳。令牌明文只返回给获取或接管租约的
+浏览器标签页，数据库仅保存 SHA-256 哈希；排表写依赖在同一事务中锁定租约行，
+自动排表求解提交结果前会再次验证租约。Viewer 以及未持有租约的 Owner/Editor
+仍可查看排表、历史、预检查和导出，但前端禁用修改控件。
 
 ## 10. 排表并发与事务
 
@@ -1426,9 +1430,12 @@ class SolverResult:
 ### 17.1 本地阶段
 
 - 初始化命令创建 Owner。
+- Owner 可创建、停用和调整 Editor/Viewer 账号，并查看最近审计记录。
 - 使用用户名和密码登录。
 - 密码采用 Argon2id 等现代密码哈希。
 - 会话令牌存入 HttpOnly、SameSite Cookie。
+- 每个会话绑定独立 CSRF 令牌；写请求同时校验 Cookie、请求头和服务端哈希。
+- 登录失败计数和短期封禁存入 PostgreSQL，不依赖单进程内存状态。
 
 ### 17.2 公网阶段
 
@@ -1452,6 +1459,11 @@ class SolverResult:
 | 归档/删除分享链接 | 是 | 可撤销自己创建的链接 | 否 |
 
 首期可以只创建 Owner 账号，但表结构和权限依赖按此设计实现，避免公网化时重构核心表。
+
+当前接口实现为：`POST /auth/login`、`POST /auth/logout`、`GET /auth/me`；Owner
+专用的 `GET/POST/PATCH /users` 和 `GET /audit-logs`；业务写接口统一依赖
+Owner/Editor 权限。`user_sessions.csrf_token_hash` 将 CSRF 令牌绑定到会话，
+`login_rate_limits` 保存登录失败窗口，`audit_logs` 保存登录与已认证写请求结果。
 
 ## 18. 可观测性
 
@@ -1558,6 +1570,10 @@ MVP 先通过数据库和日志记录：
 → 复制为新排表
 ```
 
+当前自动化以 Playwright Chromium 覆盖 Owner 登录、人员/角色创建，以及两个独立浏览器
+会话争用同一排表编辑租约时的只读降级。完整 API 业务闭环、导出一致性、迁移和恢复由
+隔离 Docker/PostgreSQL 全栈测试覆盖，两者共同纳入 `make check`。
+
 ### 19.6 性能基线
 
 使用内置 12 人团本建立 1、12、30、50 波模拟数据集，并增加若干自定义队伍数和人数的副本数据集，记录：
@@ -1570,6 +1586,9 @@ MVP 先通过数据库和日志记录：
 - 长图尺寸和导出耗时。
 
 性能结果用于确定最终求解时限和波数安全上限。
+
+当前基线显示 1/12 波可在配置时限内完整求解；30/50 波能够在时限内返回至少 70% 已安排
+的 PARTIAL 结果，不承诺一次填满。实测环境和回归门槛见 `docs/performance-baseline.md`。
 
 ## 20. Docker 和部署
 
@@ -1672,7 +1691,7 @@ flowchart TD
 ### 阶段 4：完整编辑与发布
 
 - dnd-kit 拖拽、交换、锁定和未分配角色池。
-- 命令接口、revision、撤销恢复和单编辑锁。
+- 命令接口、revision、撤销恢复和角色/位置/波次约束锁。
 - 总览、单波视图和实时 issue。
 - 发布快照、恢复草稿和归档。
 - 只读分享链接。
@@ -1680,9 +1699,11 @@ flowchart TD
 
 ### 阶段 5：公网化
 
-- HTTPS、权限、限流、备份和恢复演练。
-- 完整端到端及性能测试。
-- 部署和运维文档。
+- 多账号、Owner/Editor/Viewer 权限、CSRF、登录限流和审计基线（已完成）。
+- 单编辑会话锁、心跳、超时接管和 Viewer 前端只读降级（已完成）。
+- HTTPS、生产配置、备份和隔离恢复演练（已完成）。
+- Playwright 浏览器闭环和 1/12/30/50 波性能回归（已完成）。
+- 部署、备份恢复和运维文档（已完成）。
 
 ## 24. 技术验收条件
 
@@ -1721,7 +1742,8 @@ flowchart TD
 | 导入文件上限 | 10 MB | 服务端配置 |
 | 导入行数上限 | 10,000 | 服务端配置 |
 
-性能 PoC 完成后，应优先复核波数安全上限和求解时限。
+当前性能基线保留 50 波结构安全上限；30/50 波允许返回可用的 PARTIAL 结果，默认 12 波
+必须完整求解。变更求解器、时限或生产规格后应重新执行 `make test-performance`。
 
 ## 26. 关键技术决策记录
 

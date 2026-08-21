@@ -4,7 +4,7 @@ from fastapi import APIRouter
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.api.dependencies import CurrentUser, DbSession
+from app.api.dependencies import DbSession, ScheduleEditor
 from app.application.schedule_editor import apply_schedule_operations
 from app.core.errors import AppError
 from app.core.security import utc_now
@@ -43,7 +43,7 @@ def apply_commands(
     schedule_id: uuid.UUID,
     payload: ScheduleCommandRequest,
     db: DbSession,
-    current_user: CurrentUser,
+    current_user: ScheduleEditor,
 ) -> ScheduleCommandResponse:
     existing = db.get(ScheduleEditOperation, payload.operation_id)
     if existing is not None:

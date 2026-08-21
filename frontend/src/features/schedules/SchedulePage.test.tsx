@@ -3,7 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, type ScheduleDetail } from "../../api/client";
 import { applyOptimisticAssignment, buildDropOperations, SchedulePage } from "./SchedulePage";
 
-vi.mock("../../api/client", () => ({ api: vi.fn() }));
+vi.mock("../../api/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../api/client")>()),
+  api: vi.fn(),
+}));
 
 const summary = {
   id: "schedule-1",
@@ -70,6 +73,24 @@ const detail = {
     },
   ],
 };
+const editLock = {
+  scheduleId: "schedule-1",
+  held: true,
+  holderUserId: "user-1",
+  holderUsername: "admin",
+  ownedByCurrentUser: true,
+  canTakeover: false,
+  acquiredAt: "2026-08-18T00:00:00Z",
+  heartbeatAt: "2026-08-18T00:00:00Z",
+  expiresAt: "2026-08-18T00:01:30Z",
+  heartbeatIntervalSeconds: 30,
+  token: "edit-lock-token",
+};
+
+function editLockResponse(path: string) {
+  const scheduleId = path.match(/^\/schedules\/([^/]+)/)?.[1] ?? "schedule-1";
+  return { ...editLock, scheduleId };
+}
 
 describe("SchedulePage", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -77,6 +98,7 @@ describe("SchedulePage", () => {
 
   it("opens the readonly wave layout from the schedule list", async () => {
     vi.mocked(api).mockImplementation(async (path: string) => {
+      if (path.endsWith("/lock")) return editLockResponse(path);
       if (path === "/schedules") return { items: [summary], total: 1 };
       if (path === "/dungeons") return { items: [], total: 0 };
       if (path === "/schedules/schedule-1") return detail;
@@ -86,7 +108,7 @@ describe("SchedulePage", () => {
     });
 
     render(
-      <SchedulePage onError={vi.fn()} onSuccess={vi.fn()} />,
+      <SchedulePage userRole="OWNER" onError={vi.fn()} onSuccess={vi.fn()} />,
     );
 
     fireEvent.click(await screen.findByText("周六团"));
@@ -96,8 +118,31 @@ describe("SchedulePage", () => {
     expect(screen.getByText("位置 1 · 待排")).toBeInTheDocument();
   });
 
+  it("keeps Viewer accounts in read-only mode", async () => {
+    vi.mocked(api).mockImplementation(async (path: string) => {
+      if (path === "/schedules") return { items: [summary], total: 1 };
+      if (path === "/dungeons") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1") return detail;
+      if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1/versions") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1/lock") {
+        return { ...editLock, ownedByCurrentUser: false, token: null };
+      }
+      throw new Error(`unexpected API path: ${path}`);
+    });
+
+    render(<SchedulePage userRole="VIEWER" onError={vi.fn()} onSuccess={vi.fn()} />);
+    expect(await screen.findByRole("button", { name: /新建排表/ })).toBeDisabled();
+    fireEvent.click(screen.getByText("周六团"));
+
+    expect(await screen.findByText("Viewer 账号以只读方式查看排表")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /自动排表/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /保存选择/ })).toBeDisabled();
+  });
+
   it("marks participant selection as unsaved and blocks stale actions", async () => {
     vi.mocked(api).mockImplementation(async (path: string) => {
+      if (path.endsWith("/lock")) return editLockResponse(path);
       if (path === "/schedules") return { items: [summary], total: 1 };
       if (path === "/dungeons") return { items: [], total: 0 };
       if (path === "/schedules/schedule-1") return detail;
@@ -106,7 +151,7 @@ describe("SchedulePage", () => {
       throw new Error(`unexpected API path: ${path}`);
     });
 
-    render(<SchedulePage onError={vi.fn()} onSuccess={vi.fn()} />);
+    render(<SchedulePage userRole="OWNER" onError={vi.fn()} onSuccess={vi.fn()} />);
     fireEvent.click(await screen.findByText("周六团"));
     fireEvent.click(await screen.findByRole("checkbox"));
 
@@ -123,6 +168,7 @@ describe("SchedulePage", () => {
 
   it("applies an editor lock command and exposes undo", async () => {
     vi.mocked(api).mockImplementation(async (path: string) => {
+      if (path.endsWith("/lock")) return editLockResponse(path);
       if (path === "/schedules") return { items: [summary], total: 1 };
       if (path === "/dungeons") return { items: [], total: 0 };
       if (path === "/schedules/schedule-1") return detail;
@@ -143,7 +189,7 @@ describe("SchedulePage", () => {
       throw new Error(`unexpected API path: ${path}`);
     });
 
-    render(<SchedulePage onError={vi.fn()} onSuccess={vi.fn()} />);
+    render(<SchedulePage userRole="OWNER" onError={vi.fn()} onSuccess={vi.fn()} />);
     fireEvent.click(await screen.findByText("周六团"));
     fireEvent.click(await screen.findByRole("button", { name: /锁定波次/ }));
 
@@ -153,6 +199,7 @@ describe("SchedulePage", () => {
 
   it("previews copy configuration before creating the new schedule", async () => {
     vi.mocked(api).mockImplementation(async (path: string) => {
+      if (path.endsWith("/lock")) return editLockResponse(path);
       if (path === "/schedules") return { items: [summary], total: 1 };
       if (path === "/dungeons") {
         return {
@@ -193,7 +240,7 @@ describe("SchedulePage", () => {
       throw new Error(`unexpected API path: ${path}`);
     });
 
-    render(<SchedulePage onError={vi.fn()} onSuccess={vi.fn()} />);
+    render(<SchedulePage userRole="OWNER" onError={vi.fn()} onSuccess={vi.fn()} />);
     fireEvent.click(await screen.findByText("周六团"));
     await screen.findByText("第 1 波");
     fireEvent.click(screen.getByRole("button", { name: /复制排表/ }));
@@ -216,6 +263,7 @@ describe("SchedulePage", () => {
 
   it("generates a schedule and displays the persisted solver summary", async () => {
     vi.mocked(api).mockImplementation(async (path: string) => {
+      if (path.endsWith("/lock")) return editLockResponse(path);
       if (path === "/schedules") return { items: [summary], total: 1 };
       if (path === "/dungeons") return { items: [], total: 0 };
       if (path === "/schedules/schedule-1") return detail;
@@ -278,7 +326,7 @@ describe("SchedulePage", () => {
       throw new Error(`unexpected API path: ${path}`);
     });
 
-    render(<SchedulePage onError={vi.fn()} onSuccess={vi.fn()} />);
+    render(<SchedulePage userRole="OWNER" onError={vi.fn()} onSuccess={vi.fn()} />);
     fireEvent.click(await screen.findByText("周六团"));
     fireEvent.click(await screen.findByRole("button", { name: /自动排表/ }));
     fireEvent.click(screen.getByRole("button", { name: "开始生成" }));
@@ -290,6 +338,7 @@ describe("SchedulePage", () => {
 
   it("shows server publication issues before enabling publish", async () => {
     vi.mocked(api).mockImplementation(async (path: string) => {
+      if (path.endsWith("/lock")) return editLockResponse(path);
       if (path === "/schedules") return { items: [summary], total: 1 };
       if (path === "/dungeons") return { items: [], total: 0 };
       if (path === "/schedules/schedule-1") return detail;
@@ -312,7 +361,7 @@ describe("SchedulePage", () => {
       throw new Error(`unexpected API path: ${path}`);
     });
 
-    render(<SchedulePage onError={vi.fn()} onSuccess={vi.fn()} />);
+    render(<SchedulePage userRole="OWNER" onError={vi.fn()} onSuccess={vi.fn()} />);
     fireEvent.click(await screen.findByText("周六团"));
     fireEvent.click(await screen.findByRole("button", { name: /发布排表/ }));
 
@@ -333,6 +382,7 @@ describe("SchedulePage", () => {
       publishedAt: "2026-08-18T00:00:00Z",
     };
     vi.mocked(api).mockImplementation(async (path: string) => {
+      if (path.endsWith("/lock")) return editLockResponse(path);
       if (path === "/schedules") return { items: [summary], total: 1 };
       if (path === "/dungeons") return { items: [], total: 0 };
       if (path === "/schedules/schedule-1") return detail;
@@ -356,7 +406,7 @@ describe("SchedulePage", () => {
       throw new Error(`unexpected API path: ${path}`);
     });
 
-    render(<SchedulePage onError={vi.fn()} onSuccess={vi.fn()} />);
+    render(<SchedulePage userRole="OWNER" onError={vi.fn()} onSuccess={vi.fn()} />);
     fireEvent.click(await screen.findByText("周六团"));
     fireEvent.click(await screen.findByRole("button", { name: /发布历史/ }));
     fireEvent.click(await screen.findByRole("button", { name: /管理分享链接/ }));

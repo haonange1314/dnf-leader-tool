@@ -2,9 +2,13 @@
 
 ## Project status
 
-- The project targets the DNF China PC client and is currently at the end of phase 4.2.
+- The project targets the DNF China PC client and is currently at the end of phase 5.
 - Phases 0 through 4 are implemented: project baseline, dungeon/personnel management, schedule foundations, CP-SAT generation, manual editing, publication, sharing, and exports.
-- Phase 5 is not implemented yet. It covers multi-account authorization, a single-editor lease, production security and rate limiting, auditability, HTTPS deployment, backup/restore drills, and end-to-end/performance acceptance.
+- Phase 5.1 is implemented: multi-account Owner/Editor/Viewer authorization, session-bound CSRF, database-backed login rate limiting, and audit records.
+- Phase 5.2 is implemented: a per-schedule single-editor lease, heartbeat, timeout takeover, stale-token rejection, and Viewer/read-only UI degradation.
+- Phase 5.3 is implemented: Caddy HTTPS, a production Compose overlay with fail-fast security validation, backup/restore scripts, and an isolated pg_dump/pg_restore drill.
+- Phase 5.4 is implemented: Playwright Chromium browser acceptance and explicit 1/12/30/50-wave solver performance baselines are part of `make check`.
+- Production rollout still requires real domain, secret, certificate, monitoring, and operator-specific configuration; these are deployment activities rather than missing product phases.
 - Existing editor locks are participant, slot, and wave constraints used by manual editing and regeneration. Do not describe them as a multi-user editor lease.
 
 ## Required reading
@@ -34,7 +38,7 @@
 - Backend changes: run Ruff, Mypy, and relevant pytest tests from `backend`.
 - Frontend changes: run TypeScript type checking, Vitest, and a production build.
 - Database, API contract, publication, export, auth, proxy, or container changes: additionally run `make test-stack`.
-- `make check` is the full repository acceptance command. The current test stack uses pytest, Vitest, and an isolated Docker/PostgreSQL smoke workflow; a formal Playwright E2E suite is phase 5 work.
+- `make check` is the full repository acceptance command. It includes pytest, Vitest, production build, isolated Docker/PostgreSQL smoke and restore, explicit performance baselines, and Playwright Chromium E2E.
 - Keep the default 12-person raid and the custom single-team 4-person dungeon covered so generic solver/export behavior remains verified.
 
 ## Git commit conventions

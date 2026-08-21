@@ -2,6 +2,8 @@
 set -eu
 
 project_name="dnf-leader-tool-test-$$"
+backup_file=""
+invalid_backup_file=""
 
 compose() {
     docker compose \
@@ -12,6 +14,12 @@ compose() {
 }
 
 cleanup() {
+    if [ -n "$backup_file" ]; then
+        rm -f "$backup_file"
+    fi
+    if [ -n "$invalid_backup_file" ]; then
+        rm -f "$invalid_backup_file"
+    fi
     compose down --volumes --remove-orphans >/dev/null 2>&1 || true
 }
 
@@ -41,7 +49,7 @@ database_state="$(
         "'
 )"
 
-if [ "$database_state" != "20260820_0006|1|1|3|12" ]; then
+if [ "$database_state" != "20260821_0009|1|1|3|12" ]; then
     echo "unexpected database state: $database_state" >&2
     exit 1
 fi
@@ -71,4 +79,46 @@ if compose exec -T db psql -v ON_ERROR_STOP=1 -U dnf -d dnf_leader \
     exit 1
 fi
 
-echo "isolated stack check passed: migration, editor, publication, exports, auth and proxy"
+backup_file="$(mktemp)"
+compose exec -T db sh -c \
+    'pg_dump --format=custom --no-owner --no-privileges -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+    >"$backup_file"
+test -s "$backup_file"
+compose exec -T db sh -c 'createdb -U "$POSTGRES_USER" dnf_restore_check'
+compose exec -T db sh -c \
+    'pg_restore --exit-on-error --no-owner --no-privileges -U "$POSTGRES_USER" -d dnf_restore_check' \
+    <"$backup_file"
+source_state="$(
+    compose exec -T db psql -At -U dnf -d dnf_leader -c \
+        "SELECT (SELECT count(*) FROM users) || '|' || (SELECT count(*) FROM schedules) || '|' || (SELECT count(*) FROM schedule_versions);"
+)"
+restored_state="$(
+    compose exec -T db psql -At -U dnf -d dnf_restore_check -c \
+        "SELECT (SELECT count(*) FROM users) || '|' || (SELECT count(*) FROM schedules) || '|' || (SELECT count(*) FROM schedule_versions);"
+)"
+if [ "$source_state" != "$restored_state" ]; then
+    echo "restored database state differs: source=$source_state restored=$restored_state" >&2
+    exit 1
+fi
+compose exec -T db sh -c 'dropdb --force -U "$POSTGRES_USER" dnf_restore_check'
+
+COMPOSE_PROJECT_NAME="$project_name" \
+COMPOSE_OVERRIDE_FILE=compose.test.yaml \
+ENV_FILE=.env.example \
+CONFIRM_RESTORE=dnf_leader \
+    sh scripts/restore-db.sh "$backup_file"
+
+invalid_backup_file="$(mktemp)"
+printf 'not-a-postgresql-backup\n' >"$invalid_backup_file"
+if COMPOSE_PROJECT_NAME="$project_name" \
+    COMPOSE_OVERRIDE_FILE=compose.test.yaml \
+    ENV_FILE=.env.example \
+    CONFIRM_RESTORE=dnf_leader \
+        sh scripts/restore-db.sh "$invalid_backup_file" >/dev/null 2>&1; then
+    echo "invalid backup unexpectedly passed restore preflight" >&2
+    exit 1
+fi
+compose exec -T api .venv/bin/python -c \
+    "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready')"
+
+echo "isolated stack check passed: migration, security, edit leases, publication, exports, proxy and backup restore"
