@@ -204,7 +204,6 @@ inactive_player = request(
         "isActive": False,
         "characters": [
             {
-                "name": "不应进入排表",
                 "profession": "测试职业",
                 "roleType": "DAMAGE",
                 "damageScore": 100,
@@ -223,7 +222,6 @@ workflow_player = request(
         "displayName": "排表工作流玩家",
         "characters": [
             {
-                "name": "工作流主 C",
                 "profession": "测试职业",
                 "roleType": "DAMAGE",
                 "damageScore": 500,
@@ -232,7 +230,6 @@ workflow_player = request(
                 "isActive": True,
             },
             {
-                "name": "工作流奶",
                 "profession": "测试奶系",
                 "roleType": "BUFFER",
                 "bufferScore": 50,
@@ -243,6 +240,20 @@ workflow_player = request(
     },
 )
 assert isinstance(workflow_player, dict)
+duplicate_profession = request_error(
+    f"/players/{workflow_player['id']}/characters",
+    "POST",
+    {
+        "profession": "测试职业",
+        "roleType": "DAMAGE",
+        "damageScore": 450,
+        "isTreasureDamage": False,
+        "defaultRaidParticipant": True,
+        "isActive": True,
+    },
+    409,
+)
+assert duplicate_profession["error"]["code"] == "PERSONNEL_DUPLICATE"
 schedule = request(
     "/schedules",
     "POST",
@@ -386,8 +397,7 @@ new_character = request(
     f"/players/{workflow_player['id']}/characters",
     "POST",
     {
-        "name": "同步新增 C",
-        "profession": "测试职业",
+        "profession": "测试职业二",
         "roleType": "DAMAGE",
         "damageScore": 450,
         "isTreasureDamage": False,

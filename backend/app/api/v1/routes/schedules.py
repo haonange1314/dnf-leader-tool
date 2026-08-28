@@ -317,7 +317,7 @@ def _sync_source_state(
             "playerId": str(character.player_id),
             "playerName": character.player.display_name,
             "playerActive": character.player.is_active,
-            "name": character.name,
+            "name": character.profession,
             "profession": character.profession,
             "roleType": character.role_type,
             "damageScore": (
@@ -355,7 +355,7 @@ def _sync_changes(
                         action="ADD",
                         character_id=character.id,
                         player_name=character.player.display_name,
-                        character_name=character.name,
+                        character_name=character.profession,
                         changed_fields=[],
                     )
                 )
@@ -367,7 +367,7 @@ def _sync_changes(
                         action="DESELECT",
                         character_id=character.id,
                         player_name=character.player.display_name,
-                        character_name=character.name,
+                        character_name=character.profession,
                         changed_fields=["isSelected"],
                     )
                 )
@@ -383,7 +383,7 @@ def _sync_changes(
         }
         source_values = {
             "playerName": character.player.display_name,
-            "characterName": character.name,
+            "characterName": character.profession,
             "profession": character.profession,
             "roleType": character.role_type,
             "damageScore": character.damage_score,
@@ -399,7 +399,7 @@ def _sync_changes(
                     action="UPDATE",
                     character_id=character.id,
                     player_name=character.player.display_name,
-                    character_name=character.name,
+                    character_name=character.profession,
                     changed_fields=changed_fields,
                 )
             )
@@ -474,7 +474,7 @@ def create_schedule(payload: ScheduleCreate, db: DbSession, current_user: Editor
                 character_id=character.id,
                 player_id_snapshot=character.player_id,
                 player_name_snapshot=character.player.display_name,
-                character_name_snapshot=character.name,
+                character_name_snapshot=character.profession,
                 profession_snapshot=character.profession,
                 role_type_snapshot=character.role_type,
                 damage_score_snapshot=character.damage_score,
@@ -616,7 +616,7 @@ def copy_schedule(
                 character_id=character.id,
                 player_id_snapshot=character.player_id,
                 player_name_snapshot=character.player.display_name,
-                character_name_snapshot=character.name,
+                character_name_snapshot=character.profession,
                 profession_snapshot=character.profession,
                 role_type_snapshot=character.role_type,
                 damage_score_snapshot=character.damage_score,
@@ -973,7 +973,7 @@ def commit_schedule_character_sync(
                 character_id=character.id,
                 player_id_snapshot=character.player_id,
                 player_name_snapshot=character.player.display_name,
-                character_name_snapshot=character.name,
+                character_name_snapshot=character.profession,
                 profession_snapshot=character.profession,
                 role_type_snapshot=character.role_type,
                 damage_score_snapshot=character.damage_score,
@@ -1000,7 +1000,7 @@ def commit_schedule_character_sync(
             deselected_participant_ids.add(participant.id)
         elif participant is not None and change.action == "UPDATE":
             participant.player_name_snapshot = character.player.display_name
-            participant.character_name_snapshot = character.name
+            participant.character_name_snapshot = character.profession
             participant.profession_snapshot = character.profession
             participant.role_type_snapshot = character.role_type
             participant.damage_score_snapshot = character.damage_score

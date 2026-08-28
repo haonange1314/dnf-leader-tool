@@ -130,7 +130,7 @@ export function PersonnelPage({ userRole, onError, onSuccess }: Props) {
         <Space>
           <Input.Search
             allowClear
-            placeholder="搜索玩家或角色"
+            placeholder="搜索玩家或职业"
             onSearch={setSearch}
           />
           <Button
@@ -220,13 +220,13 @@ export function PersonnelPage({ userRole, onError, onSuccess }: Props) {
                       >
                         {character.roleType === "DAMAGE" ? "C" : "奶"}
                       </Tag>
-                      <Typography.Text strong>{character.name}</Typography.Text>
+                      <Typography.Text strong>{character.profession}</Typography.Text>
                       {character.isTreasureDamage && (
                         <Tag color="gold">秘宝</Tag>
                       )}
                     </Space>
                     <Typography.Text type="secondary">
-                      {character.profession} ·{" "}
+                      {character.roleType === "DAMAGE" ? "伤害" : "奶评分"} ·{" "}
                       {character.damageScore || character.bufferScore}
                     </Typography.Text>
                     <Typography.Text type="secondary">
@@ -284,9 +284,6 @@ export function PersonnelPage({ userRole, onError, onSuccess }: Props) {
           }}
           onFinish={addCharacter}
         >
-          <Form.Item label="角色名" name="name" rules={[{ required: true }]}>
-            <Input />
-          </Form.Item>
           <Form.Item
             label="职业"
             name="profession"

@@ -16,7 +16,6 @@ class CharacterRole(StrEnum):
 class CharacterFields(BaseModel):
     model_config = API_CONFIG
 
-    name: str = Field(min_length=1, max_length=120)
     profession: str = Field(min_length=1, max_length=80)
     role_type: CharacterRole
     damage_score: Decimal | None = Field(default=None, ge=0, decimal_places=2)

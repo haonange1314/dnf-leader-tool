@@ -12,7 +12,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from app.domain.personnel import normalize_key
 from app.schemas.personnel import CharacterCreate, CharacterRole
 
-HEADERS = ("玩家称呼", "角色名", "职业", "类型", "伤害/增益量", "秘宝C", "默认参团", "备注")
+HEADERS = ("玩家称呼", "职业", "类型", "伤害/增益量", "秘宝C", "默认参团", "备注")
 
 
 @dataclass(frozen=True)
@@ -28,21 +28,21 @@ def build_template() -> bytes:
     assert sheet is not None
     sheet.title = "角色数据"
     sheet.append(HEADERS)
-    sheet.append(("示例玩家", "示例C", "剑魂", "C", 120.5, "是", "是", "可删除示例行"))
+    sheet.append(("示例玩家", "剑魂", "C", 120.5, "是", "是", "可删除示例行"))
     sheet.freeze_panes = "A2"
-    sheet.auto_filter.ref = "A1:H2"
+    sheet.auto_filter.ref = "A1:G2"
     for cell in sheet[1]:
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = PatternFill("solid", fgColor="1F2937")
-    widths = (18, 20, 16, 10, 18, 12, 12, 28)
+    widths = (18, 16, 10, 18, 12, 12, 28)
     for index, width in enumerate(widths, start=1):
         sheet.column_dimensions[chr(64 + index)].width = width
     role_validation = DataValidation(type="list", formula1='"C,奶"')
     bool_validation = DataValidation(type="list", formula1='"是,否"')
     sheet.add_data_validation(role_validation)
     sheet.add_data_validation(bool_validation)
-    role_validation.add("D2:D10001")
-    bool_validation.add("F2:G10001")
+    role_validation.add("C2:C10001")
+    bool_validation.add("E2:F10001")
     notes = workbook.create_sheet("填写说明")
     notes.append(("字段", "说明"))
     notes.append(("类型", "填写 C 或 奶"))
@@ -74,10 +74,10 @@ def parse_character_workbook(content: bytes, max_rows: int) -> list[ParsedRow]:
         if len(rows) >= max_rows:
             raise ValueError(f"导入行数不能超过 {max_rows}")
         payload, errors = _parse_row(values)
-        key = (payload.get("player_key", ""), payload.get("character_key", ""))
+        key = (payload.get("player_key", ""), payload.get("profession_key", ""))
         if all(key):
             if key in seen:
-                errors.append({"code": "DUPLICATE_ROW", "message": "文件内玩家与角色重复"})
+                errors.append({"code": "DUPLICATE_ROW", "message": "文件内玩家与职业重复"})
             seen.add(key)
         rows.append(ParsedRow(row_no=row_no, payload=payload, errors=errors))
     return rows
@@ -85,44 +85,40 @@ def parse_character_workbook(content: bytes, max_rows: int) -> list[ParsedRow]:
 
 def _parse_row(values: tuple[Any, ...]) -> tuple[dict[str, Any], list[dict[str, str]]]:
     player_name = _text(values[0])
-    character_name = _text(values[1])
-    profession = _text(values[2])
-    role_raw = _text(values[3]).upper()
+    profession = _text(values[1])
+    role_raw = _text(values[2]).upper()
     errors: list[dict[str, str]] = []
     role_type = {"C": "DAMAGE", "DAMAGE": "DAMAGE", "奶": "BUFFER", "BUFFER": "BUFFER"}.get(
         role_raw
     )
     for field, value in (
         ("玩家称呼", player_name),
-        ("角色名", character_name),
         ("职业", profession),
     ):
         if not value:
             errors.append({"code": "REQUIRED", "message": f"{field}不能为空"})
     if role_type is None:
         errors.append({"code": "INVALID_ROLE", "message": "类型必须为 C 或 奶"})
-    score = _decimal(values[4], errors)
-    treasure = _boolean(values[5], "秘宝C", errors)
-    default_participant = _boolean(values[6], "默认参团", errors)
+    score = _decimal(values[3], errors)
+    treasure = _boolean(values[4], "秘宝C", errors)
+    default_participant = _boolean(values[5], "默认参团", errors)
     payload: dict[str, Any] = {
         "player_name": player_name,
         "player_key": normalize_key(player_name),
-        "character_name": character_name,
-        "character_key": normalize_key(character_name),
         "profession": profession,
+        "profession_key": normalize_key(profession),
         "role_type": role_type,
         "damage_score": str(score) if score is not None and role_type == "DAMAGE" else None,
         "buffer_score": str(score) if score is not None and role_type == "BUFFER" else None,
         "is_treasure_damage": treasure,
         "default_raid_participant": default_participant,
-        "note": _text(values[7]) or None,
+        "note": _text(values[6]) or None,
         "is_active": True,
     }
     if not errors:
         assert role_type is not None
         try:
             CharacterCreate(
-                name=character_name,
                 profession=profession,
                 role_type=CharacterRole(role_type),
                 damage_score=payload["damage_score"],
@@ -175,7 +171,6 @@ def build_error_workbook(rows: list[tuple[int, dict[str, Any], list[dict[str, An
             (
                 row_no,
                 payload.get("player_name"),
-                payload.get("character_name"),
                 payload.get("profession"),
                 role,
                 score,
