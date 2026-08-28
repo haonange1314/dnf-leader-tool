@@ -9,7 +9,9 @@
 - Phase 5.3 is implemented: Caddy HTTPS, a production Compose overlay with fail-fast security validation, backup/restore scripts, and an isolated pg_dump/pg_restore drill.
 - Phase 5.4 is implemented: Playwright Chromium browser acceptance and explicit 1/12/30/50-wave solver performance baselines are part of `make check`.
 - Production rollout still requires real domain, secret, certificate, monitoring, and operator-specific configuration; these are deployment activities rather than missing product phases.
-- Current work should prioritize stability, real-usage feedback, usability improvements for the existing 12-person raid workflow, and production rollout readiness.
+- Current work has two primary tracks for the existing 12-person raid workflow: a compact Apple-inspired UI/UX refresh, and smarter automatic scheduling with strict objective priorities and clearer result explanations.
+- UI work should use system fonts, restrained neutral surfaces, a blue interactive accent, subtle depth, compact controls, and accessible status colors. Optimize information density without hiding critical actions or weakening keyboard/read-only behavior.
+- Solver upgrades must preserve generic dungeon definitions and solver independence. Improve the default 12-person raid through versioned/configurable objectives rather than hard-coded RED/YELLOW/GREEN branches.
 - Legion-raid-specific grouping and carry rules are a long-term TODO, not the current priority. Do not start or describe that work as the default next phase unless the user explicitly promotes it.
 - Existing editor locks are participant, slot, and wave constraints used by manual editing and regeneration. Do not describe them as a multi-user editor lease.
 

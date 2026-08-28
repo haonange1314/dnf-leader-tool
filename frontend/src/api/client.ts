@@ -217,6 +217,8 @@ export interface GenerationRun {
     specialRuleSatisfiedCount: number;
     damageSpread: number;
     bufferSpread: number;
+    damageSpreadDisplay?: string;
+    bufferSpreadDisplay?: string;
     strengthOrderViolationCount: number;
   } | null;
   diagnostics: {

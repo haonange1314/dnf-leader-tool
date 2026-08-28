@@ -28,7 +28,7 @@ from app.solver import (
     SolverResult,
 )
 
-SOLVER_VERSION = "cp-sat-v1"
+SOLVER_VERSION = "cp-sat-v2"
 
 
 def build_solver_input(
@@ -278,7 +278,9 @@ def clear_regeneratable_assignments(
                     slot.participant_id = None
 
 
-def objective_summary_payload(result: SolverResult) -> dict[str, object]:
+def objective_summary_payload(
+    result: SolverResult, formula: FormulaDefinition
+) -> dict[str, object]:
     summary = result.objective_summary
     return {
         "assignedCount": summary.assigned_count,
@@ -289,6 +291,8 @@ def objective_summary_payload(result: SolverResult) -> dict[str, object]:
         "specialRuleSatisfiedCount": summary.special_rule_satisfied_count,
         "damageSpread": summary.damage_spread,
         "bufferSpread": summary.buffer_spread,
+        "damageSpreadDisplay": str(Decimal(summary.damage_spread) / formula.damage_scale),
+        "bufferSpreadDisplay": str(Decimal(summary.buffer_spread) / formula.buffer_scale),
         "strengthOrderViolationCount": summary.strength_order_violation_count,
     }
 

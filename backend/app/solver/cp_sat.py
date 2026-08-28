@@ -234,7 +234,7 @@ def solve(solver_input: SolverInput) -> SolverResult:
                 )
                 metric_totals[metric, wave_no, team_index] = total
 
-    final_penalties: list[cp_model.LinearExpr] = [*preference_penalties]
+    strength_order_penalties: list[cp_model.LinearExpr] = []
     for order_index, order in enumerate(solver_input.dungeon.strength_order_rules.orders):
         for wave_no in waves:
             for pair_index, (stronger_key, weaker_key) in enumerate(
@@ -249,8 +249,9 @@ def solve(solver_input: SolverInput) -> SolverResult:
                 )
                 model.add(slack >= weaker - stronger).only_enforce_if(wave_full[wave_no])
                 model.add(slack == 0).only_enforce_if(~wave_full[wave_no])
-                final_penalties.append(slack)
+                strength_order_penalties.append(slack)
 
+    balance_penalties: list[cp_model.LinearExpr] = []
     for metric in solver_input.dungeon.optimization_rules.balance_across_waves:
         wave_totals: dict[int, cp_model.LinearExpr] = {}
         for wave_no in waves:
@@ -268,8 +269,9 @@ def solve(solver_input: SolverInput) -> SolverResult:
         for wave_no in waves:
             model.add(maximum >= wave_totals[wave_no]).only_enforce_if(wave_full[wave_no])
             model.add(minimum <= wave_totals[wave_no]).only_enforce_if(wave_full[wave_no])
-        final_penalties.append(spread)
+        balance_penalties.append(spread)
 
+    companion_penalties: list[cp_model.LinearExpr] = []
     for rule_index, special_rule in enumerate(solver_input.dungeon.special_role_rules.rules):
         if (
             special_rule.companion_policy is None
@@ -296,7 +298,7 @@ def solve(solver_input: SolverInput) -> SolverResult:
                     if candidate_rule == rule_index and candidate_wave == wave_no
                 ]
             )
-            final_penalties.append(target_damage - selected_core_score)
+            companion_penalties.append(target_damage - selected_core_score)
 
     assigned_total = cp_model.LinearExpr.sum(assigned)
     hint_variables = [*x.values(), *special_variables.values()]
@@ -439,18 +441,31 @@ def solve(solver_input: SolverInput) -> SolverResult:
         else:
             can_continue = False
 
-    if can_continue and final_penalties:
-        final_penalty = cp_model.LinearExpr.sum(final_penalties)
-        final_solver, final_status = _solve_stage(
+    final_stages = (
+        (strength_order_penalties, 0.10),
+        (balance_penalties, 0.08),
+        (companion_penalties, 0.01),
+        (preference_penalties, 0.01),
+    )
+    for penalties, budget_ratio in final_stages:
+        if not can_continue or not penalties:
+            continue
+        stage_objective = cp_model.LinearExpr.sum(penalties)
+        stage_solver, stage_status = _solve_stage(
             model,
-            final_penalty,
+            stage_objective,
             maximize=False,
-            time_limit_seconds=_stage_budget(solver_input.time_limit_seconds, 0.20),
+            time_limit_seconds=_stage_budget(solver_input.time_limit_seconds, budget_ratio),
             random_seed=solver_input.random_seed,
         )
-        elapsed += final_solver.wall_time
-        if final_status in (SolverStatus.OPTIMAL, SolverStatus.FEASIBLE):
-            best_solver, best_status = final_solver, final_status
+        elapsed += stage_solver.wall_time
+        if stage_status not in (SolverStatus.OPTIMAL, SolverStatus.FEASIBLE):
+            can_continue = False
+            continue
+        best_solver, best_status = stage_solver, stage_status
+        best_stage_value = round(stage_solver.value(stage_objective))
+        model.add(stage_objective == best_stage_value)
+        _replace_hints(model, hint_variables, stage_solver)
 
     solver = best_solver
     status = best_status

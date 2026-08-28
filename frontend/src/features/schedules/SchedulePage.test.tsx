@@ -292,6 +292,8 @@ describe("SchedulePage", () => {
               specialRuleSatisfiedCount: 1,
               damageSpread: 0,
               bufferSpread: 0,
+              damageSpreadDisplay: "0.00",
+              bufferSpreadDisplay: "0.0",
               strengthOrderViolationCount: 0,
             },
             diagnostics: { solverStatus: "OPTIMAL", unassigned: [], issues: [] },
@@ -333,6 +335,9 @@ describe("SchedulePage", () => {
 
     expect(await screen.findByText("最近一次自动排表")).toBeInTheDocument();
     expect(screen.getByText("已安排 1/1")).toBeInTheDocument();
+    expect(screen.getByText("优先组成 1")).toBeInTheDocument();
+    expect(screen.getByText("C 跨波差 0.00 亿")).toBeInTheDocument();
+    expect(screen.getByText("奶跨波差 0.0")).toBeInTheDocument();
     expect(screen.getByText("本波核心")).toBeInTheDocument();
   });
 

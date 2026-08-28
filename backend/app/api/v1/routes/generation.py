@@ -140,7 +140,7 @@ def generate_schedule(
         raise AppError(500, "GENERATION_RUN_MISSING", "生成记录不存在")
     stored_run.duration_ms = round((time.perf_counter() - started) * 1000)
     stored_run.finished_at = utc_now()
-    stored_run.objective_summary = objective_summary_payload(result)
+    stored_run.objective_summary = objective_summary_payload(result, solver_input.dungeon.formula)
     stored_run.diagnostics = {
         "solverStatus": result.status.value,
         "unassigned": [
