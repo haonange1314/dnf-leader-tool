@@ -65,7 +65,6 @@ export interface Dungeon {
 export interface Character {
   id: string;
   playerId: string;
-  name: string;
   profession: string;
   roleType: "DAMAGE" | "BUFFER";
   damageScore: string | null;

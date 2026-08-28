@@ -13,6 +13,7 @@ from app.api.dependencies import CurrentUser, DbSession, EditorUser
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.core.security import utc_now
+from app.domain.personnel import normalize_key
 from app.imports import build_error_workbook, build_template, parse_character_workbook
 from app.models.imports import ImportBatch, ImportRow
 from app.models.personnel import Character, Player
@@ -55,20 +56,24 @@ async def preview_import(
         created_at=utc_now(),
     )
     for parsed in parsed_rows:
-        action = "ERROR" if parsed.errors else "CREATE"
+        action = "CREATE"
         player = player_by_key.get(parsed.payload.get("player_key", ""))
         character = None
         if player is not None:
-            character = next(
-                (
-                    item
-                    for item in player.characters
-                    if item.name_key == parsed.payload.get("character_key")
-                ),
-                None,
-            )
+            matches = _profession_matches(player.characters, parsed.payload)
+            if len(matches) > 1:
+                parsed.errors.append(
+                    {
+                        "code": "AMBIGUOUS_CHARACTER",
+                        "message": "该玩家下存在多个相同职业，无法自动匹配",
+                    }
+                )
+            elif matches:
+                character = matches[0]
         change_summary = None
-        if not parsed.errors and character is not None:
+        if parsed.errors:
+            action = "ERROR"
+        elif character is not None:
             changes = _changes(character, parsed.payload)
             action = "UPDATE" if changes else "IGNORE"
             change_summary = "、".join(changes) if changes else "无变化"
@@ -129,13 +134,21 @@ def commit_import(batch_id: uuid.UUID, db: DbSession, current_user: EditorUser) 
         if row.matched_character_id:
             character = db.get(Character, row.matched_character_id)
         if character is None:
-            character = db.scalar(
-                select(Character).where(
-                    Character.player_id == player.id, Character.name_key == payload["character_key"]
-                )
+            candidates = list(
+                db.scalars(select(Character).where(Character.player_id == player.id))
             )
+            matches = _profession_matches(candidates, payload)
+            if len(matches) > 1:
+                raise AppError(409, "IMPORT_DATA_CHANGED", "同玩家同职业角色不唯一，请重新预览")
+            character = matches[0] if matches else None
         if character is None:
-            character = Character(player_id=player.id)
+            character_id = uuid.uuid4()
+            character = Character(
+                id=character_id,
+                player_id=player.id,
+                name=str(payload["profession"]),
+                name_key=str(payload["profession_key"]),
+            )
             db.add(character)
         _apply_payload(character, payload)
     batch.status = "COMMITTED"
@@ -189,10 +202,22 @@ def _changes(character: Character, payload: dict[str, object]) -> list[str]:
     return [name for name, (old, new) in fields.items() if old != new]
 
 
+def _profession_matches(
+    characters: list[Character], payload: dict[str, object]
+) -> list[Character]:
+    profession_key = str(payload["profession_key"])
+    return [
+        character
+        for character in characters
+        if normalize_key(character.profession) == profession_key
+    ]
+
+
 def _apply_payload(character: Character, payload: dict[str, object]) -> None:
-    character.name = str(payload["character_name"])
-    character.name_key = str(payload["character_key"])
-    character.profession = str(payload["profession"])
+    profession = str(payload["profession"])
+    character.name = profession
+    character.name_key = str(payload["profession_key"])
+    character.profession = profession
     character.role_type = str(payload["role_type"])
     character.damage_score = payload["damage_score"]  # type: ignore[assignment]
     character.buffer_score = payload["buffer_score"]  # type: ignore[assignment]

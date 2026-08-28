@@ -12,7 +12,6 @@ def test_normalize_key_uses_nfkc_casefold_and_trim() -> None:
 def test_buffer_cannot_be_treasure_damage() -> None:
     with pytest.raises(ValidationError, match="只有 C"):
         CharacterCreate(
-            name="奶妈",
             profession="炽天使",
             roleType="BUFFER",
             bufferScore="5.1",

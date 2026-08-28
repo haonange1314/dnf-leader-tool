@@ -51,7 +51,7 @@ def list_players(
         pattern = f"%{normalize_key(search)}%"
         stmt = stmt.join(Player.characters, isouter=True)
         filters.append(
-            or_(Player.display_name_key.ilike(pattern), Character.name_key.ilike(pattern))
+            or_(Player.display_name_key.ilike(pattern), Character.profession.ilike(pattern))
         )
     if is_active is not None:
         filters.append(Player.is_active == is_active)
@@ -85,7 +85,7 @@ def create_player(payload: PlayerCreate, db: DbSession, current_user: EditorUser
     for item in payload.characters:
         player.characters.append(_new_character(item))
     db.add(player)
-    _commit(db, "玩家称呼或同玩家角色名已存在")
+    _commit(db, "玩家称呼或同玩家相同职业已存在")
     db.refresh(player)
     return player
 
@@ -127,7 +127,7 @@ def create_character(
         raise AppError(404, "PLAYER_NOT_FOUND", "玩家不存在")
     character = _new_character(payload, player_id)
     db.add(character)
-    _commit(db, "该玩家下角色名已存在")
+    _commit(db, "同一玩家不能存在相同职业")
     db.refresh(character)
     return character
 
@@ -141,7 +141,7 @@ def update_character(
     if character is None:
         raise AppError(404, "CHARACTER_NOT_FOUND", "角色不存在")
     _apply_character(character, payload)
-    _commit(db, "该玩家下角色名已存在")
+    _commit(db, "同一玩家不能存在相同职业")
     db.refresh(character)
     return character
 
@@ -182,7 +182,12 @@ def batch_update_characters(
 
 
 def _new_character(payload: CharacterCreate, player_id: uuid.UUID | None = None) -> Character:
-    character = Character()
+    character_id = uuid.uuid4()
+    character = Character(
+        id=character_id,
+        name=payload.profession.strip(),
+        name_key=normalize_key(payload.profession),
+    )
     if player_id is not None:
         character.player_id = player_id
     _apply_character(character, payload)
@@ -190,9 +195,10 @@ def _new_character(payload: CharacterCreate, player_id: uuid.UUID | None = None)
 
 
 def _apply_character(character: Character, payload: CharacterCreate | CharacterUpdate) -> None:
-    character.name = payload.name.strip()
-    character.name_key = normalize_key(payload.name)
-    character.profession = payload.profession.strip()
+    profession = payload.profession.strip()
+    character.name = profession
+    character.name_key = normalize_key(profession)
+    character.profession = profession
     character.role_type = payload.role_type.value
     character.damage_score = payload.damage_score
     character.buffer_score = payload.buffer_score

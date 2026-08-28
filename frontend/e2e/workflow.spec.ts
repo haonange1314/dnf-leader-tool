@@ -11,7 +11,6 @@ test("Owner can create a player and character through the browser", async ({ pag
   await login(page);
   const suffix = Date.now().toString(36);
   const playerName = `E2E 玩家 ${suffix}`;
-  const characterName = `E2E 角色 ${suffix}`;
 
   await page.getByRole("menuitem", { name: "人员管理" }).click();
   await page.getByRole("button", { name: "新增玩家" }).click();
@@ -24,12 +23,11 @@ test("Owner can create a player and character through the browser", async ({ pag
   const characterModal = page
     .locator(".ant-modal")
     .filter({ hasText: `为 ${playerName} 添加角色` });
-  await characterModal.getByLabel("角色名").fill(characterName);
   await characterModal.getByLabel("职业").fill("测试职业");
   await characterModal.getByLabel("伤害 / 增益评分").fill("500");
   await characterModal.locator(".ant-btn-primary").click();
   await page.locator(".ant-collapse-header").filter({ hasText: playerName }).click();
-  await expect(page.getByText(characterName)).toBeVisible();
+  await expect(page.getByText("测试职业")).toBeVisible();
 });
 
 test("a second browser session is downgraded while the first holds the edit lease", async ({

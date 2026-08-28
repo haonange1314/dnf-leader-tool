@@ -537,8 +537,8 @@ unique `(dungeon_version_id, team_key)` 和 `(dungeon_version_id, display_order)
 | --- | --- | --- |
 | `id` | uuid | PK |
 | `player_id` | uuid | FK players, not null |
-| `name` | varchar(120) | not null |
-| `name_key` | varchar(120) | not null |
+| `name` | varchar(120) | not null，历史兼容内部字段，不对外录入或展示 |
+| `name_key` | varchar(120) | not null，保存规范化职业键 |
 | `profession` | varchar(80) | not null |
 | `role_type` | varchar(16) | `DAMAGE/BUFFER` |
 | `damage_score` | numeric(14,2) | 可空，单位亿 |
@@ -552,7 +552,7 @@ unique `(dungeon_version_id, team_key)` 和 `(dungeon_version_id, display_order)
 
 约束：
 
-- unique `(player_id, name_key)`。
+- unique `(player_id, name_key)`；`name_key` 使用规范化职业，确保同一玩家不能拥有重复职业。
 - `DAMAGE` 必须有 `damage_score`，且 `buffer_score` 为空。
 - `BUFFER` 必须有 `buffer_score`，且 `damage_score` 为空。
 - 只有 `DAMAGE` 可以设置 `is_treasure_damage=true`。
@@ -1332,7 +1332,7 @@ class SolverResult:
 工作表名：`角色数据`。
 
 ```text
-玩家称呼 | 角色名 | 职业 | 类型 | 伤害/增益量 | 秘宝C | 默认参团 | 备注
+玩家称呼 | 职业 | 类型 | 伤害/增益量 | 秘宝C | 默认参团 | 备注
 ```
 
 模板包含：
@@ -1351,6 +1351,7 @@ class SolverResult:
 - 布尔值兼容 `是/否`、`Y/N`、`1/0`。
 - 不执行 Excel 公式；公式单元格必须有可读取的缓存值，否则报错。
 - 文件大小、行数和单元格文本长度使用配置限制。
+- 预览按规范化后的“玩家称呼 + 职业”匹配；文件内重复职业直接报错，历史重复数据会阻止迁移并要求先清理，禁止静默覆盖。
 
 ### 14.3 预览和确认
 
