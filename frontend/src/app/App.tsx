@@ -1,4 +1,6 @@
 import {
+  CalendarOutlined,
+  CrownOutlined,
   DatabaseOutlined,
   LogoutOutlined,
   SafetyCertificateOutlined,
@@ -12,6 +14,7 @@ import {
   Skeleton,
   Typography,
   message,
+  theme as antdTheme,
 } from "antd";
 import { lazy, Suspense, useEffect, useState } from "react";
 import { api, type User } from "../api/client";
@@ -81,11 +84,59 @@ export function App() {
   };
   return (
     <ConfigProvider
+      componentSize="small"
       theme={{
+        algorithm: antdTheme.compactAlgorithm,
         token: {
-          colorPrimary: "#d44a3a",
-          borderRadius: 12,
-          colorBgLayout: "#f2f0eb",
+          colorPrimary: "#0071e3",
+          colorInfo: "#0071e3",
+          colorText: "#1d1d1f",
+          colorTextSecondary: "#6e6e73",
+          colorBorder: "#d2d2d7",
+          colorBorderSecondary: "#e5e5ea",
+          colorBgLayout: "#f5f5f7",
+          colorBgContainer: "rgba(255, 255, 255, 0.92)",
+          borderRadius: 10,
+          borderRadiusLG: 14,
+          controlHeight: 32,
+          controlHeightSM: 28,
+          fontFamily:
+            '-apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", Arial, sans-serif',
+          boxShadowTertiary: "0 8px 28px rgb(0 0 0 / 5%)",
+        },
+        components: {
+          Button: {
+            borderRadius: 9,
+            defaultShadow: "none",
+            primaryShadow: "none",
+          },
+          Card: {
+            bodyPadding: 14,
+            bodyPaddingSM: 10,
+            headerHeight: 40,
+            headerFontSize: 14,
+          },
+          Layout: {
+            bodyBg: "#f5f5f7",
+            headerBg: "rgba(250, 250, 252, 0.86)",
+            siderBg: "rgba(250, 250, 252, 0.88)",
+          },
+          Menu: {
+            itemHeight: 34,
+            itemBorderRadius: 9,
+            itemSelectedBg: "#e8f2ff",
+            itemSelectedColor: "#0066cc",
+          },
+          Table: {
+            cellPaddingBlock: 8,
+            cellPaddingBlockSM: 6,
+            cellPaddingInline: 10,
+            cellPaddingInlineSM: 8,
+            headerBg: "#f5f5f7",
+          },
+          Segmented: {
+            itemSelectedBg: "#ffffff",
+          },
         },
       }}
     >
@@ -103,14 +154,14 @@ export function App() {
           <Header className="app-header">
             <div className="brand">
               <span className="brand-mark">
-                <TeamOutlined />
+                <CrownOutlined />
               </span>
               <div>
                 <Typography.Text className="app-title">
                   DNF 团长排表工具
                 </Typography.Text>
                 <Typography.Text className="app-subtitle">
-                  阶段 5 · 公网化工程完成
+                  12 人团本 · 智能排表工作台
                 </Typography.Text>
               </div>
             </div>
@@ -127,7 +178,7 @@ export function App() {
             <Sider
               breakpoint="lg"
               collapsedWidth="0"
-              width={220}
+              width={188}
               className="app-sider"
             >
               <Menu
@@ -147,7 +198,7 @@ export function App() {
                   },
                   {
                     key: "schedules",
-                    icon: <TeamOutlined />,
+                    icon: <CalendarOutlined />,
                     label: "排表管理",
                   },
                   ...(user.role === "OWNER"

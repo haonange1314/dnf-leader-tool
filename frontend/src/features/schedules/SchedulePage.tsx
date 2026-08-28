@@ -2048,7 +2048,14 @@ function GenerationSummary({
             </Tag>
             <Tag color="cyan">完整波次 {summary.completeWaveCount}</Tag>
             <Tag color="purple">完整队伍 {summary.completeTeamCount}</Tag>
+            <Tag color="geekblue">优先组成 {summary.preferredCompositionCount}</Tag>
             <Tag color="gold">核心满足 {summary.specialRuleSatisfiedCount}</Tag>
+            {summary.damageSpreadDisplay !== undefined ? (
+              <Tag>C 跨波差 {summary.damageSpreadDisplay} 亿</Tag>
+            ) : null}
+            {summary.bufferSpreadDisplay !== undefined ? (
+              <Tag>奶跨波差 {summary.bufferSpreadDisplay}</Tag>
+            ) : null}
             <Tag color={summary.strengthOrderViolationCount ? "orange" : "green"}>
               强度顺序冲突 {summary.strengthOrderViolationCount}
             </Tag>

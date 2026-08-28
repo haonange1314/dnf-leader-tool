@@ -4,7 +4,7 @@ async function login(page: Page) {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "团长工作台" })).toBeVisible();
   await page.getByRole("button", { name: "进入工作台" }).click();
-  await expect(page.getByText("阶段 5 · 公网化工程完成")).toBeVisible();
+  await expect(page.getByText("12 人团本 · 智能排表工作台")).toBeVisible();
 }
 
 test("Owner can create a player and character through the browser", async ({ page }) => {
