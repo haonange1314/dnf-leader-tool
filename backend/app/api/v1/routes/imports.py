@@ -1,6 +1,7 @@
 import uuid
 from io import BytesIO
 from typing import Annotated
+from urllib.parse import quote
 
 from fastapi import APIRouter, File, UploadFile
 from fastapi.responses import StreamingResponse
@@ -202,8 +203,18 @@ def _apply_payload(character: Character, payload: dict[str, object]) -> None:
 
 
 def _xlsx_response(content: bytes, filename: str) -> StreamingResponse:
+    ascii_filename = filename.encode("ascii", errors="ignore").decode("ascii") or "download.xlsx"
+    ascii_filename = (
+        ascii_filename.replace("\\", "_").replace('"', "_").replace("\r", "").replace("\n", "")
+    )
+    encoded_filename = quote(filename, safe="")
     return StreamingResponse(
         BytesIO(content),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{ascii_filename}"; '
+                f"filename*=UTF-8''{encoded_filename}"
+            )
+        },
     )
