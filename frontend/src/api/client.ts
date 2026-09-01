@@ -65,11 +65,14 @@ export interface Dungeon {
 export interface Character {
   id: string;
   playerId: string;
+  sortOrder: number;
   profession: string;
   roleType: "DAMAGE" | "BUFFER";
   damageScore: string | null;
   bufferScore: string | null;
   isTreasureDamage: boolean;
+  isFixedLeadTeamBuffer: boolean;
+  isGroupHunt: boolean;
   defaultRaidParticipant: boolean;
   note: string | null;
   isActive: boolean;
@@ -78,6 +81,7 @@ export interface Player {
   id: string;
   displayName: string;
   isActive: boolean;
+  sortOrder: number;
   characters: Character[];
 }
 export interface ImportBatch {
@@ -109,6 +113,8 @@ export interface ScheduleParticipant {
   damageScoreSnapshot: string | null;
   bufferScoreSnapshot: string | null;
   isTreasureSnapshot: boolean;
+  isFixedLeadTeamBufferSnapshot: boolean;
+  isGroupHuntSnapshot: boolean;
   isSelected: boolean;
   isLocked: boolean;
   unassignedReason: Record<string, unknown> | null;

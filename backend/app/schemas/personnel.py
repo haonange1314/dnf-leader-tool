@@ -19,8 +19,10 @@ class CharacterFields(BaseModel):
     profession: str = Field(min_length=1, max_length=80)
     role_type: CharacterRole
     damage_score: Decimal | None = Field(default=None, ge=0, decimal_places=2)
-    buffer_score: Decimal | None = Field(default=None, ge=0, decimal_places=1)
+    buffer_score: Decimal | None = Field(default=None, ge=0, decimal_places=2)
     is_treasure_damage: bool = False
+    is_fixed_lead_team_buffer: bool = False
+    is_group_hunt: bool = False
     default_raid_participant: bool = False
     note: str | None = Field(default=None, max_length=2000)
     is_active: bool = True
@@ -34,6 +36,10 @@ class CharacterFields(BaseModel):
             raise ValueError("奶必须填写增益评分且不能填写伤害")
         if self.is_treasure_damage and self.role_type != CharacterRole.DAMAGE:
             raise ValueError("只有 C 可以标记为秘宝 C")
+        if self.is_fixed_lead_team_buffer and self.role_type != CharacterRole.BUFFER:
+            raise ValueError("只有奶可以标记为固定红队奶")
+        if self.is_group_hunt and self.role_type != CharacterRole.DAMAGE:
+            raise ValueError("只有 C 可以标记为群猎")
         return self
 
 
@@ -48,6 +54,7 @@ class CharacterUpdate(CharacterFields):
 class CharacterView(CharacterFields):
     id: uuid.UUID
     player_id: uuid.UUID
+    sort_order: int = Field(ge=0)
 
 
 class PlayerCreate(BaseModel):
@@ -71,6 +78,7 @@ class PlayerView(BaseModel):
     id: uuid.UUID
     display_name: str
     is_active: bool
+    sort_order: int = Field(ge=0)
     characters: list[CharacterView]
 
 
@@ -97,3 +105,15 @@ class CharacterBatchUpdate(BaseModel):
 
 class BatchUpdateResult(BaseModel):
     updated: int
+
+
+class PersonnelReorder(BaseModel):
+    model_config = API_CONFIG
+
+    ordered_ids: list[uuid.UUID] = Field(min_length=1, max_length=10_000)
+
+    @model_validator(mode="after")
+    def require_unique_ids(self) -> "PersonnelReorder":
+        if len(self.ordered_ids) != len(set(self.ordered_ids)):
+            raise ValueError("排序 ID 不能重复")
+        return self

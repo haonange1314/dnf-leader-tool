@@ -15,6 +15,7 @@ from app.schemas.dungeon import (
 )
 
 TEAM_SCORE_V1 = FormulaDefinition(code="TEAM_SCORE", version=1)
+TEAM_SCORE_V2 = FormulaDefinition(code="TEAM_SCORE", version=2, buffer_scale=100)
 
 
 def builtin_raid_12_definition() -> DungeonVersionDefinition:
@@ -23,10 +24,11 @@ def builtin_raid_12_definition() -> DungeonVersionDefinition:
         dungeon_code="BUILTIN_RAID_12",
         dungeon_name="12 人团本",
         description="内置 12 人团本：红黄绿三队，优先 3C1奶，每波一个红队秘宝 C。",
+        version_no=2,
         default_wave_count=12,
         min_wave_count=1,
         max_wave_count=50,
-        formula=TEAM_SCORE_V1,
+        formula=TEAM_SCORE_V2,
         teams=(
             TeamDefinition(
                 team_key="RED",

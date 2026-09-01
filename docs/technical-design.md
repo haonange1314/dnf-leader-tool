@@ -526,6 +526,7 @@ unique `(dungeon_version_id, team_key)` 和 `(dungeon_version_id, display_order)
 | `display_name` | varchar(120) | not null |
 | `display_name_key` | varchar(120) | unique, not null |
 | `is_active` | boolean | default true |
+| `sort_order` | integer | not null，持久化玩家显示顺序 |
 | `created_at` | timestamptz | not null |
 | `updated_at` | timestamptz | not null |
 
@@ -542,11 +543,14 @@ unique `(dungeon_version_id, team_key)` 和 `(dungeon_version_id, display_order)
 | `profession` | varchar(80) | not null |
 | `role_type` | varchar(16) | `DAMAGE/BUFFER` |
 | `damage_score` | numeric(14,2) | 可空，单位亿 |
-| `buffer_score` | numeric(8,1) | 可空 |
+| `buffer_score` | numeric(8,2) | 可空 |
 | `is_treasure_damage` | boolean | default false |
+| `is_fixed_lead_team_buffer` | boolean | default false，仅奶可设置 |
+| `is_group_hunt` | boolean | default false，仅 C 可设置 |
 | `default_raid_participant` | boolean | default false |
 | `note` | text | 可空 |
 | `is_active` | boolean | default true |
+| `sort_order` | integer | not null，持久化所属玩家内的角色显示顺序 |
 | `created_at` | timestamptz | not null |
 | `updated_at` | timestamptz | not null |
 
@@ -556,7 +560,11 @@ unique `(dungeon_version_id, team_key)` 和 `(dungeon_version_id, display_order)
 - `DAMAGE` 必须有 `damage_score`，且 `buffer_score` 为空。
 - `BUFFER` 必须有 `buffer_score`，且 `damage_score` 为空。
 - 只有 `DAMAGE` 可以设置 `is_treasure_damage=true`。
+- 只有 `BUFFER` 可以设置 `is_fixed_lead_team_buffer=true`。
+- 只有 `DAMAGE` 可以设置 `is_group_hunt=true`。
 - 两类评分都必须大于等于 0。
+
+人员列表先按 `sort_order` 排序，再使用规范化名称或创建时间和 ID 保证旧数据及并列值的稳定顺序。新建和 Excel 导入的玩家、角色追加到各自作用域末尾；迁移旧数据时分别保留原玩家名称顺序和角色创建顺序。
 
 ### 8.6 公式版本
 
@@ -638,8 +646,10 @@ DRAFT 或 PUBLISHED 归档 → ARCHIVED
 | `profession_snapshot` | varchar(80) | 职业快照 |
 | `role_type_snapshot` | varchar(16) | 类型快照 |
 | `damage_score_snapshot` | numeric(14,2) | C 评分快照 |
-| `buffer_score_snapshot` | numeric(8,1) | 奶评分快照 |
+| `buffer_score_snapshot` | numeric(8,2) | 奶评分快照 |
 | `is_treasure_snapshot` | boolean | 秘宝 C 快照 |
+| `is_fixed_lead_team_buffer_snapshot` | boolean | 固定最高强度队伍奶快照 |
+| `is_group_hunt_snapshot` | boolean | 群猎标记快照 |
 | `is_selected` | boolean | 当前是否参加该排表 |
 | `is_locked` | boolean | 重新生成时锁定角色 |
 | `unassigned_reason` | jsonb | 最近一次未分配诊断 |
@@ -851,15 +861,17 @@ GET    /auth/me
 ```text
 GET    /players
 POST   /players
+PUT    /players/reorder
 GET    /players/{playerId}
 PATCH  /players/{playerId}
 POST   /players/{playerId}/characters
+PUT    /players/{playerId}/characters/reorder
 PATCH  /characters/{characterId}
 POST   /characters/{characterId}/deactivate
 POST   /characters/batch-update
 ```
 
-列表接口支持分页、搜索和 `roleType/isTreasure/defaultParticipant/isActive` 筛选。
+列表接口支持分页、搜索和 `roleType/isTreasure/defaultParticipant/isActive` 筛选。玩家和角色分别使用持久化的 `sort_order` 升序返回；两个排序接口接收当前作用域的完整 ID 顺序并在事务中更新，列表集合已变化时返回 409，避免局部或过期页面覆盖顺序。
 
 ### 9.4 Excel 导入
 
@@ -1105,15 +1117,17 @@ class ScoringFormula(Protocol):
     def team_buffer(self, members: Sequence[ParticipantInput]) -> int: ...
 ```
 
-### 12.2 V1
+### 12.2 V1 / V2
 
 - C 伤害：亿单位数值乘 100 转换为整数。
-- 奶评分：数值乘 10 转换为整数。
+- 奶评分：V1 数值乘 10，内置 12 人团本 V2 数值乘 100，以保留两位小数。
 - 队伍 C 强度：所有 C 整数分之和。
 - 队伍奶强度：所有奶整数分之和。
 - 展示时按公式配置还原小数和单位。
 
 公式代码、版本和配置一起写入生成记录和发布快照，保证历史可重现。
+
+固定红队奶在进入求解器时转换为通用 `allowed_team_keys` 约束：应用层从副本版本中选择 `strength_rank` 最小的队伍键，求解器只校验和执行允许队伍集合，不依赖 `RED/YELLOW/GREEN` 常量。群猎当前仅作为结构化角色及排表快照标记保存，待业务规则确认后再通过版本化目标启用。
 
 进入 CP-SAT 前必须检查评分缩放后的上界，确保所有变量、加权目标和中间和不会超过有符号 64 位整数范围。角色评分的业务输入上限由配置控制，超出时在保存角色阶段直接拒绝。
 
@@ -1329,26 +1343,27 @@ class SolverResult:
 
 ### 14.1 模板
 
-工作表名：`角色数据`。
+下载模板的工作表名为 `角色数据`；上传时会在工作簿中查找包含必要列的工作表，因此可直接使用实际统计页名称。
 
 ```text
-玩家称呼 | 职业 | 类型 | 伤害/增益量 | 秘宝C | 默认参团 | 备注
+序号 | 玩家昵称 | 职业 | 类型 | 模拟伤害亿/增益量万 | 是否秘宝C | 固定红队奶 | 是否群猎 | 是否参与团本
 ```
 
 模板包含：
 
 - 冻结首行和筛选。
-- 类型、秘宝 C、默认参团的数据验证下拉。
+- 类型及四个布尔标记的数据验证下拉。
 - 示例行和说明工作表。
-- C 使用亿为单位；奶使用一位小数。
+- C 使用亿为单位；奶支持两位小数。
 
 ### 14.2 解析规则
 
 - 首期只接受 `.xlsx`。
 - 字符串统一去除首尾空格。
 - C 数值接受 `120`、`120.5`、`120亿`，统一存为亿单位 Decimal。
-- 奶数值接受 `4.1`、`5.2` 等 Decimal。
-- 布尔值兼容 `是/否`、`Y/N`、`1/0`。
+- 奶数值接受 `4.1`、`4.75` 等 Decimal。
+- 布尔值兼容 `是/否`、`Y/N`、`1/0`，空白按“否”处理。
+- 继续兼容旧七列模板的列名；未提供的新增标记在新建角色时按“否”处理，更新已有角色时保持原值。
 - 不执行 Excel 公式；公式单元格必须有可读取的缓存值，否则报错。
 - 文件大小、行数和单元格文本长度使用配置限制。
 - 预览按规范化后的“玩家称呼 + 职业”匹配；文件内重复职业直接报错，历史重复数据会阻止迁移并要求先清理，禁止静默覆盖。
@@ -1743,7 +1758,7 @@ flowchart TD
 | 参数 | 建议默认值 | 调整方式 |
 | --- | --- | --- |
 | C 伤害精度 | 2 位小数 | 配置和公式版本 |
-| 奶评分精度 | 1 位小数 | 公式版本 |
+| 奶评分精度 | 2 位小数 | 公式版本 |
 | 2C2奶 奶评分 | 两奶求和 | 公式版本 |
 | 内置 12 人团本默认波数 | 12 | 副本版本 |
 | 波数安全上限 | 50 | 服务端配置 |

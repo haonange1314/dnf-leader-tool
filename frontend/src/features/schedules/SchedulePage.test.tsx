@@ -34,6 +34,8 @@ const detail = {
       damageScoreSnapshot: "500",
       bufferScoreSnapshot: null,
       isTreasureSnapshot: true,
+      isFixedLeadTeamBufferSnapshot: false,
+      isGroupHuntSnapshot: false,
       isSelected: true,
       isLocked: false,
       unassignedReason: null,

@@ -120,8 +120,12 @@ class ScheduleParticipant(Base):
     profession_snapshot: Mapped[str] = mapped_column(String(80), nullable=False)
     role_type_snapshot: Mapped[str] = mapped_column(String(16), nullable=False)
     damage_score_snapshot: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
-    buffer_score_snapshot: Mapped[Decimal | None] = mapped_column(Numeric(8, 1))
+    buffer_score_snapshot: Mapped[Decimal | None] = mapped_column(Numeric(8, 2))
     is_treasure_snapshot: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    is_fixed_lead_team_buffer_snapshot: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    is_group_hunt_snapshot: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_selected: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     is_locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     unassigned_reason: Mapped[dict[str, Any] | None] = mapped_column(JSONB)

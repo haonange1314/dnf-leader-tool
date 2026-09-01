@@ -73,6 +73,12 @@ export function PublicSchedulePage({ token }: { token: string }) {
                                 {participant.playerNameSnapshot} · {participant.characterNameSnapshot}
                               </span>
                               {participant.isTreasureSnapshot ? <Tag color="gold">秘宝</Tag> : null}
+                              {participant.isFixedLeadTeamBufferSnapshot ? (
+                                <Tag color="red">固定红奶</Tag>
+                              ) : null}
+                              {participant.isGroupHuntSnapshot ? (
+                                <Tag color="green">群猎</Tag>
+                              ) : null}
                               {core ? <Tag color="gold">本波核心</Tag> : null}
                             </Space>
                           ) : (

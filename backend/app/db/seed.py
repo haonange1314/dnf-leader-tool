@@ -26,6 +26,13 @@ def seed_builtin_dungeons(session: Session) -> tuple[SeedResult, ...]:
         .where(Dungeon.code == definition.dungeon_code)
     )
     if existing is not None:
+        if not any(
+            version.version_no == definition.version_no for version in existing.versions
+        ):
+            formula = _get_or_create_formula(session, definition)
+            existing.versions.append(_build_version(definition, formula))
+            session.flush()
+            return (SeedResult(dungeon_code=definition.dungeon_code, created=True),)
         _validate_existing_builtin(existing, definition)
         return (SeedResult(dungeon_code=definition.dungeon_code, created=False),)
 
@@ -36,6 +43,15 @@ def seed_builtin_dungeons(session: Session) -> tuple[SeedResult, ...]:
         description=definition.description,
         is_active=True,
     )
+    dungeon.versions = [_build_version(definition, formula)]
+    session.add(dungeon)
+    session.flush()
+    return (SeedResult(dungeon_code=definition.dungeon_code, created=True),)
+
+
+def _build_version(
+    definition: DungeonVersionDefinition, formula: FormulaVersion
+) -> DungeonVersion:
     version = DungeonVersion(
         version_no=definition.version_no,
         status="PUBLISHED",
@@ -61,10 +77,7 @@ def seed_builtin_dungeons(session: Session) -> tuple[SeedResult, ...]:
         )
         for team in definition.teams
     ]
-    dungeon.versions = [version]
-    session.add(dungeon)
-    session.flush()
-    return (SeedResult(dungeon_code=definition.dungeon_code, created=True),)
+    return version
 
 
 def _get_or_create_formula(

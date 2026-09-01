@@ -240,6 +240,42 @@ workflow_player = request(
     },
 )
 assert isinstance(workflow_player, dict)
+players_before_reorder = request("/players")
+assert isinstance(players_before_reorder, dict)
+reordered_player_ids = [
+    item["id"] for item in reversed(players_before_reorder["items"])
+]
+player_reorder = request(
+    "/players/reorder",
+    "PUT",
+    {"orderedIds": reordered_player_ids},
+)
+assert isinstance(player_reorder, dict) and player_reorder["updated"] == 2
+players_after_reorder = request("/players")
+assert isinstance(players_after_reorder, dict)
+assert [item["id"] for item in players_after_reorder["items"]] == reordered_player_ids
+partial_reorder = request_error(
+    "/players/reorder",
+    "PUT",
+    {"orderedIds": reordered_player_ids[:1]},
+    409,
+)
+assert partial_reorder["error"]["code"] == "PERSONNEL_ORDER_CHANGED"
+
+reordered_character_ids = [
+    item["id"] for item in reversed(workflow_player["characters"])
+]
+character_reorder = request(
+    f"/players/{workflow_player['id']}/characters/reorder",
+    "PUT",
+    {"orderedIds": reordered_character_ids},
+)
+assert isinstance(character_reorder, dict) and character_reorder["updated"] == 2
+workflow_player_after_reorder = request(f"/players/{workflow_player['id']}")
+assert isinstance(workflow_player_after_reorder, dict)
+assert [
+    item["id"] for item in workflow_player_after_reorder["characters"]
+] == reordered_character_ids
 duplicate_profession = request_error(
     f"/players/{workflow_player['id']}/characters",
     "POST",
@@ -728,7 +764,7 @@ assert isinstance(published_schedule, dict)
 assert published_schedule["schedule"]["status"] == "PUBLISHED"
 assert published_schedule["schedule"]["revision"] == 6
 assert published_schedule["version"]["versionNo"] == 1
-assert published_schedule["version"]["snapshot"]["schemaVersion"] == 1
+assert published_schedule["version"]["snapshot"]["schemaVersion"] == 2
 assert published_schedule["version"]["snapshot"]["dungeon"]["versionId"] == published["id"]
 assert published_schedule["version"]["snapshot"]["formula"]["code"]
 assert "issues" in published_schedule["version"]["snapshot"]

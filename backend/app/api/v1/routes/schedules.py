@@ -327,6 +327,8 @@ def _sync_source_state(
                 str(character.buffer_score) if character.buffer_score is not None else None
             ),
             "treasure": character.is_treasure_damage,
+            "fixedLeadTeamBuffer": character.is_fixed_lead_team_buffer,
+            "groupHunt": character.is_group_hunt,
             "defaultParticipant": character.default_raid_participant,
             "active": character.is_active,
         }
@@ -380,6 +382,8 @@ def _sync_changes(
             "damageScore": participant.damage_score_snapshot,
             "bufferScore": participant.buffer_score_snapshot,
             "isTreasure": participant.is_treasure_snapshot,
+            "isFixedLeadTeamBuffer": participant.is_fixed_lead_team_buffer_snapshot,
+            "isGroupHunt": participant.is_group_hunt_snapshot,
         }
         source_values = {
             "playerName": character.player.display_name,
@@ -389,6 +393,8 @@ def _sync_changes(
             "damageScore": character.damage_score,
             "bufferScore": character.buffer_score,
             "isTreasure": character.is_treasure_damage,
+            "isFixedLeadTeamBuffer": character.is_fixed_lead_team_buffer,
+            "isGroupHunt": character.is_group_hunt,
         }
         changed_fields = [
             field for field, current in current_values.items() if current != source_values[field]
@@ -480,6 +486,8 @@ def create_schedule(payload: ScheduleCreate, db: DbSession, current_user: Editor
                 damage_score_snapshot=character.damage_score,
                 buffer_score_snapshot=character.buffer_score,
                 is_treasure_snapshot=character.is_treasure_damage,
+                is_fixed_lead_team_buffer_snapshot=character.is_fixed_lead_team_buffer,
+                is_group_hunt_snapshot=character.is_group_hunt,
                 is_selected=True,
                 is_locked=False,
             )
@@ -622,6 +630,8 @@ def copy_schedule(
                 damage_score_snapshot=character.damage_score,
                 buffer_score_snapshot=character.buffer_score,
                 is_treasure_snapshot=character.is_treasure_damage,
+                is_fixed_lead_team_buffer_snapshot=character.is_fixed_lead_team_buffer,
+                is_group_hunt_snapshot=character.is_group_hunt,
                 is_selected=source_participant.is_selected and is_active,
                 is_locked=False,
                 unassigned_reason=(
@@ -979,6 +989,8 @@ def commit_schedule_character_sync(
                 damage_score_snapshot=character.damage_score,
                 buffer_score_snapshot=character.buffer_score,
                 is_treasure_snapshot=character.is_treasure_damage,
+                is_fixed_lead_team_buffer_snapshot=character.is_fixed_lead_team_buffer,
+                is_group_hunt_snapshot=character.is_group_hunt,
                 is_selected=True,
                 is_locked=False,
             )
@@ -1006,6 +1018,8 @@ def commit_schedule_character_sync(
             participant.damage_score_snapshot = character.damage_score
             participant.buffer_score_snapshot = character.buffer_score
             participant.is_treasure_snapshot = character.is_treasure_damage
+            participant.is_fixed_lead_team_buffer_snapshot = character.is_fixed_lead_team_buffer
+            participant.is_group_hunt_snapshot = character.is_group_hunt
     if deselected_participant_ids:
         for wave in item.waves:
             for team in wave.teams:

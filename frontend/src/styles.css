@@ -196,7 +196,41 @@ body {
   background: rgb(255 255 255 / 82%);
 }
 .personnel-list {
+  display: grid;
+  gap: 6px;
+}
+.personnel-sort-hint {
+  display: block;
+  margin: 0 2px 8px;
+  font-size: 12px;
+}
+.personnel-player-collapse {
   background: white;
+}
+.sortable-player,
+.sortable-character {
+  position: relative;
+  min-width: 0;
+}
+.sortable-player.is-dragging,
+.sortable-character.is-dragging {
+  z-index: 10;
+  opacity: 0.82;
+}
+.sortable-player.is-dragging .personnel-player-collapse,
+.sortable-character.is-dragging .character-card {
+  box-shadow: 0 10px 28px rgb(0 0 0 / 14%);
+}
+.sort-handle {
+  color: #86868b;
+  cursor: grab;
+  touch-action: none;
+}
+.sort-handle:active {
+  cursor: grabbing;
+}
+.sort-handle:disabled {
+  cursor: not-allowed;
 }
 .character-grid {
   display: grid;
@@ -204,6 +238,7 @@ body {
   gap: 8px;
 }
 .character-card {
+  height: 100%;
   background: #fafafa;
   border-color: #e5e5ea;
 }

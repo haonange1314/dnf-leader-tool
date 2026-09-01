@@ -20,6 +20,7 @@ class SolverParticipant:
     score: int
     is_treasure_damage: bool = False
     allowed_waves: tuple[int, ...] | None = None
+    allowed_team_keys: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
