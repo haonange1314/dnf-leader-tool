@@ -2,7 +2,7 @@ from collections import Counter, defaultdict
 
 import pytest
 
-from app.schemas.dungeon import OptimizationRules, RoleType
+from app.schemas.dungeon import MissingSlotPolicy, OptimizationRules, RoleType
 from app.solver import SolverInput, SolverParticipant, SolverStatus, solve
 from app.solver.fixtures import custom_party_4_input, default_raid_12_input
 
@@ -154,6 +154,38 @@ def test_complete_team_priority_cannot_be_overridden_by_balance_scores() -> None
         for summary in result.team_summaries
         if summary.composition_code is not None
     ] == ["3D1B"]
+
+
+def test_spread_evenly_balances_missing_slots_across_waves() -> None:
+    base_definition = custom_party_4_input().dungeon
+    spread_definition = base_definition.model_copy(
+        update={"missing_slot_policy": MissingSlotPolicy(mode="SPREAD_EVENLY")}
+    )
+    participants = tuple(
+        [
+            SolverParticipant(
+                f"damage-{index}", f"damage-player-{index}", RoleType.DAMAGE, 1_000
+            )
+            for index in range(4)
+        ]
+        + [
+            SolverParticipant(
+                f"buffer-{index}", f"buffer-player-{index}", RoleType.BUFFER, 1_000
+            )
+            for index in range(2)
+        ]
+    )
+
+    result = solve(
+        SolverInput(
+            dungeon=spread_definition,
+            wave_count=2,
+            participants=participants,
+            time_limit_seconds=2,
+        )
+    )
+
+    assert Counter(assignment.wave_no for assignment in result.assignments) == {1: 3, 2: 3}
 
 
 def test_solver_rejects_score_that_exceeds_int64_range() -> None:

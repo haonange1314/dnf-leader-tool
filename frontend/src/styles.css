@@ -172,6 +172,114 @@ body {
   border: 1px solid rgb(0 0 0 / 8%);
   box-shadow: 0 8px 28px rgb(0 0 0 / 5%);
 }
+.dungeon-card .ant-card-body {
+  position: relative;
+  padding-bottom: 34px;
+}
+.dungeon-statistics .ant-statistic-title {
+  margin-bottom: 0;
+  font-size: 11px;
+}
+.dungeon-statistics .ant-statistic-content {
+  font-size: 21px;
+}
+.dungeon-version-row {
+  align-items: center;
+}
+.dungeon-empty-version {
+  min-height: 150px;
+  display: grid;
+  place-items: center;
+}
+.dungeon-history-button {
+  position: absolute;
+  bottom: 5px;
+  left: 9px;
+}
+.dungeon-version-editor .ant-drawer-header,
+.dungeon-version-editor .ant-drawer-body {
+  padding: 14px 16px;
+}
+.dungeon-editor-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(110px, 1fr)) minmax(180px, 1.4fr);
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid #e5e5ea;
+  border-radius: 10px;
+  background: #fafafa;
+}
+.dungeon-editor-summary .ant-statistic-title {
+  margin-bottom: 0;
+  font-size: 11px;
+}
+.dungeon-editor-summary .ant-statistic-content {
+  font-size: 20px;
+}
+.dungeon-formula-summary {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.dungeon-editor-alert,
+.dungeon-editor-section {
+  margin-bottom: 10px;
+}
+.dungeon-editor-section .ant-card-head {
+  min-height: 38px;
+}
+.dungeon-editor-section .ant-card-body {
+  padding: 12px;
+}
+.dungeon-editor-section .ant-form-item {
+  margin-bottom: 10px;
+}
+.dungeon-strength-orders {
+  padding-bottom: 2px;
+}
+.dungeon-rule-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.dungeon-rule-heading > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dungeon-team-row {
+  display: flex;
+  gap: 4px;
+  padding: 8px 0 0;
+  border-bottom: 1px solid #ededf0;
+}
+.dungeon-team-row:last-of-type {
+  border-bottom: 0;
+}
+.dungeon-team-order {
+  width: 36px;
+  flex: 0 0 36px;
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  padding-top: 24px;
+}
+.dungeon-team-fields {
+  min-width: 0;
+  flex: 1;
+}
+.dungeon-team-delete {
+  display: flex;
+  align-items: center;
+  padding-top: 17px;
+}
+.compact-issue-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
 .code-badge {
   padding: 3px 8px;
   color: #0055a4;
@@ -474,5 +582,11 @@ body {
   .version-row {
     align-items: flex-start;
     flex-direction: column;
+  }
+  .dungeon-editor-summary {
+    grid-template-columns: repeat(2, minmax(110px, 1fr));
+  }
+  .dungeon-formula-summary {
+    grid-column: 1 / -1;
   }
 }

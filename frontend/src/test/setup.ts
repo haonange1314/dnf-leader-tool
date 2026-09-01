@@ -13,3 +13,18 @@ Object.defineProperty(window, "matchMedia", {
     dispatchEvent: () => false,
   }),
 });
+
+class TestResizeObserver implements ResizeObserver {
+  disconnect() {}
+  observe() {}
+  unobserve() {}
+}
+
+Object.defineProperty(window, "ResizeObserver", {
+  writable: true,
+  value: TestResizeObserver,
+});
+Object.defineProperty(globalThis, "ResizeObserver", {
+  writable: true,
+  value: TestResizeObserver,
+});
