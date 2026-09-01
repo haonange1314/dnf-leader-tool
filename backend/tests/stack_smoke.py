@@ -5,8 +5,10 @@ import re
 import urllib.error
 import urllib.request
 import uuid
+from io import BytesIO
 
 import psycopg
+from openpyxl import Workbook
 
 BASE_URL = "http://127.0.0.1:8000/api/v1"
 jar = http.cookiejar.CookieJar()
@@ -48,6 +50,30 @@ def client_request(
 
 def request(path: str, method: str = "GET", payload: dict[str, object] | None = None) -> object:
     return client_request(opener, jar, path, method, payload)
+
+
+def upload_xlsx(path: str, filename: str, content: bytes) -> object:
+    boundary = f"----dnf-smoke-{uuid.uuid4().hex}"
+    body = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+        "Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\r\n"
+        "\r\n"
+    ).encode() + content + f"\r\n--{boundary}--\r\n".encode()
+    csrf_cookie = next((cookie.value for cookie in jar if cookie.name == "dnf_csrf"), None)
+    assert csrf_cookie is not None
+    response = opener.open(
+        urllib.request.Request(
+            f"{BASE_URL}{path}",
+            data=body,
+            method="POST",
+            headers={
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+                "X-CSRF-Token": csrf_cookie,
+            },
+        )
+    )
+    return json.loads(response.read())
 
 
 def request_error(
@@ -290,6 +316,53 @@ duplicate_profession = request_error(
     409,
 )
 assert duplicate_profession["error"]["code"] == "PERSONNEL_DUPLICATE"
+
+workbook = Workbook()
+sheet = workbook.active
+assert sheet is not None
+sheet.title = "角色数据"
+sheet.append(
+    (
+        "序号",
+        "玩家昵称",
+        "职业",
+        "类型",
+        "模拟伤害亿/增益量万",
+        "是否秘宝C",
+        "固定红队奶",
+        "是否群猎",
+        "是否参与团本",
+    )
+)
+sheet.append((1, "已停用验收玩家", "测试职业", "C", "100.00", "否", "否", "否", "是"))
+sheet.append((2, "排表工作流玩家", "测试职业", "C", "500.00", "是", "否", "否", "是"))
+sheet.append((3, "排表工作流玩家", "测试奶系", "奶", "50.00", "否", "否", "否", "是"))
+workbook_stream = BytesIO()
+workbook.save(workbook_stream)
+import_preview = upload_xlsx(
+    "/imports/characters/preview",
+    "人员排序验收.xlsx",
+    workbook_stream.getvalue(),
+)
+assert isinstance(import_preview, dict)
+assert import_preview["summary"] == {"create": 0, "update": 0, "ignore": 3, "error": 0}
+import_commit = request(
+    f"/imports/characters/{import_preview['id']}/commit",
+    "POST",
+)
+assert isinstance(import_commit, dict) and import_commit["status"] == "COMMITTED"
+players_after_import = request("/players")
+assert isinstance(players_after_import, dict)
+assert [item["id"] for item in players_after_import["items"][:2]] == [
+    inactive_player["id"],
+    workflow_player["id"],
+]
+workflow_player_after_import = request(f"/players/{workflow_player['id']}")
+assert isinstance(workflow_player_after_import, dict)
+assert [
+    item["profession"] for item in workflow_player_after_import["characters"]
+] == ["测试职业", "测试奶系"]
+
 schedule = request(
     "/schedules",
     "POST",
