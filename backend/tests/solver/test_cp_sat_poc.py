@@ -45,6 +45,43 @@ def test_custom_single_team_four_person_dungeon() -> None:
     assert result.special_assignments == ()
 
 
+def test_participant_can_be_restricted_to_definition_team_keys() -> None:
+    definition = default_raid_12_input().dungeon
+    participants = tuple(
+        [
+            SolverParticipant(
+                f"damage-{index}", f"damage-player-{index}", RoleType.DAMAGE, 1000
+            )
+            for index in range(3)
+        ]
+        + [
+            SolverParticipant(
+                "fixed-buffer",
+                "buffer-player",
+                RoleType.BUFFER,
+                500,
+                allowed_team_keys=("RED",),
+            )
+        ]
+    )
+
+    result = solve(
+        SolverInput(
+            dungeon=definition,
+            wave_count=1,
+            participants=participants,
+            time_limit_seconds=1,
+        )
+    )
+
+    fixed_assignment = next(
+        assignment
+        for assignment in result.assignments
+        if assignment.participant_id == "fixed-buffer"
+    )
+    assert fixed_assignment.team_key == "RED"
+
+
 def test_same_player_is_never_assigned_twice_in_a_wave() -> None:
     solver_input = custom_party_4_input(include_player_conflict=True)
     result = solve(solver_input)

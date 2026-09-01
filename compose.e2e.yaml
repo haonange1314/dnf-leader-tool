@@ -6,5 +6,5 @@ services:
     ports: !reset []
 
   web:
-    ports:
+    ports: !override
       - "127.0.0.1:15173:80"

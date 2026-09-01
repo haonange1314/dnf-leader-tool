@@ -5,7 +5,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, File, UploadFile
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
@@ -112,6 +112,9 @@ def commit_import(batch_id: uuid.UUID, db: DbSession, current_user: EditorUser) 
     if any(row.action == "ERROR" for row in batch.rows):
         raise AppError(409, "IMPORT_HAS_ERRORS", "请先修正错误行后重新预览")
     player_cache: dict[str, Player] = {}
+    current_player_order = db.scalar(select(func.max(Player.sort_order)))
+    next_player_order = int(current_player_order) + 1 if current_player_order is not None else 0
+    next_character_order: dict[uuid.UUID, int] = {}
     for row in batch.rows:
         if row.action == "IGNORE":
             continue
@@ -126,7 +129,9 @@ def commit_import(batch_id: uuid.UUID, db: DbSession, current_user: EditorUser) 
                     display_name=payload["player_name"],
                     display_name_key=payload["player_key"],
                     is_active=True,
+                    sort_order=next_player_order,
                 )
+                next_player_order += 1
                 db.add(player)
                 db.flush()
             player_cache[payload["player_key"]] = player
@@ -142,13 +147,26 @@ def commit_import(batch_id: uuid.UUID, db: DbSession, current_user: EditorUser) 
                 raise AppError(409, "IMPORT_DATA_CHANGED", "同玩家同职业角色不唯一，请重新预览")
             character = matches[0] if matches else None
         if character is None:
+            if player.id not in next_character_order:
+                current_character_order = db.scalar(
+                    select(func.max(Character.sort_order)).where(
+                        Character.player_id == player.id
+                    )
+                )
+                next_character_order[player.id] = (
+                    int(current_character_order) + 1
+                    if current_character_order is not None
+                    else 0
+                )
             character_id = uuid.uuid4()
             character = Character(
                 id=character_id,
                 player_id=player.id,
                 name=str(payload["profession"]),
                 name_key=str(payload["profession_key"]),
+                sort_order=next_character_order[player.id],
             )
+            next_character_order[player.id] += 1
             db.add(character)
         _apply_payload(character, payload)
     batch.status = "COMMITTED"
@@ -184,7 +202,7 @@ def _load_batch(db: DbSession, batch_id: uuid.UUID) -> ImportBatch:
 
 
 def _changes(character: Character, payload: dict[str, object]) -> list[str]:
-    fields = {
+    fields: dict[str, tuple[object, object]] = {
         "职业": (character.profession, payload["profession"]),
         "类型": (character.role_type, payload["role_type"]),
         "伤害": (
@@ -195,10 +213,23 @@ def _changes(character: Character, payload: dict[str, object]) -> list[str]:
             str(character.buffer_score) if character.buffer_score is not None else None,
             payload["buffer_score"],
         ),
-        "秘宝C": (character.is_treasure_damage, payload["is_treasure_damage"]),
-        "默认参团": (character.default_raid_participant, payload["default_raid_participant"]),
-        "备注": (character.note, payload["note"]),
     }
+    if _field_was_provided(payload, "is_treasure_damage"):
+        fields["秘宝C"] = (character.is_treasure_damage, payload["is_treasure_damage"])
+    if _field_was_provided(payload, "is_fixed_lead_team_buffer"):
+        fields["固定红队奶"] = (
+            character.is_fixed_lead_team_buffer,
+            payload["is_fixed_lead_team_buffer"],
+        )
+    if _field_was_provided(payload, "is_group_hunt"):
+        fields["群猎"] = (character.is_group_hunt, payload["is_group_hunt"])
+    if _field_was_provided(payload, "note"):
+        fields["备注"] = (character.note, payload["note"])
+    if _field_was_provided(payload, "default_raid_participant"):
+        fields["默认参团"] = (
+            character.default_raid_participant,
+            payload["default_raid_participant"],
+        )
     return [name for name, (old, new) in fields.items() if old != new]
 
 
@@ -221,10 +252,27 @@ def _apply_payload(character: Character, payload: dict[str, object]) -> None:
     character.role_type = str(payload["role_type"])
     character.damage_score = payload["damage_score"]  # type: ignore[assignment]
     character.buffer_score = payload["buffer_score"]  # type: ignore[assignment]
-    character.is_treasure_damage = bool(payload["is_treasure_damage"])
-    character.default_raid_participant = bool(payload["default_raid_participant"])
-    character.note = str(payload["note"]) if payload["note"] else None
+    if _field_was_provided(payload, "is_treasure_damage"):
+        character.is_treasure_damage = bool(payload["is_treasure_damage"])
+    if _field_was_provided(payload, "is_fixed_lead_team_buffer"):
+        character.is_fixed_lead_team_buffer = bool(payload["is_fixed_lead_team_buffer"])
+    if _field_was_provided(payload, "is_group_hunt"):
+        character.is_group_hunt = bool(payload["is_group_hunt"])
+    if character.role_type == "DAMAGE":
+        character.is_fixed_lead_team_buffer = False
+    else:
+        character.is_treasure_damage = False
+        character.is_group_hunt = False
+    if _field_was_provided(payload, "default_raid_participant"):
+        character.default_raid_participant = bool(payload["default_raid_participant"])
+    if _field_was_provided(payload, "note"):
+        character.note = str(payload["note"]) if payload["note"] else None
     character.is_active = True
+
+
+def _field_was_provided(payload: dict[str, object], field: str) -> bool:
+    provided = payload.get("provided_fields")
+    return isinstance(provided, list) and field in provided
 
 
 def _xlsx_response(content: bytes, filename: str) -> StreamingResponse:

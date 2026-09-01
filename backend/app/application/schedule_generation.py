@@ -87,6 +87,11 @@ def build_solver_input(
             ),
             is_treasure_damage=participant.is_treasure_snapshot,
             allowed_waves=_allowed_waves(participant.player_id_snapshot, preference_by_player),
+            allowed_team_keys=(
+                _lead_team_keys(definition)
+                if participant.is_fixed_lead_team_buffer_snapshot
+                else None
+            ),
         )
         for participant in schedule.participants
         if participant.is_selected
@@ -303,6 +308,16 @@ def _allowed_waves(
     preference = preferences.get(player_id)
     allowed_waves = preference.allowed_waves if preference is not None else None
     return tuple(allowed_waves) if allowed_waves is not None else None
+
+
+def _lead_team_keys(definition: DungeonVersionDefinition) -> tuple[str, ...] | None:
+    ranked_teams = [team for team in definition.teams if team.strength_rank is not None]
+    if not ranked_teams:
+        return None
+    lead_rank = min(
+        team.strength_rank for team in ranked_teams if team.strength_rank is not None
+    )
+    return tuple(team.team_key for team in ranked_teams if team.strength_rank == lead_rank)
 
 
 def _participant_score(participant: ScheduleParticipant) -> int:

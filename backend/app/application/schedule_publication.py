@@ -21,7 +21,7 @@ from app.models.schedule import (
 from app.schemas.dungeon import SpecialRoleRules, StrengthOrderRules
 from app.schemas.schedule import IssueView, ScheduleDetail
 
-SNAPSHOT_SCHEMA_VERSION = 1
+SNAPSHOT_SCHEMA_VERSION = 2
 
 
 def create_schedule_snapshot(
@@ -264,6 +264,10 @@ def restore_snapshot(
                 damage_score_snapshot=_decimal_or_none(row.get("damageScoreSnapshot")),
                 buffer_score_snapshot=_decimal_or_none(row.get("bufferScoreSnapshot")),
                 is_treasure_snapshot=bool(row["isTreasureSnapshot"]),
+                is_fixed_lead_team_buffer_snapshot=bool(
+                    row.get("isFixedLeadTeamBufferSnapshot", False)
+                ),
+                is_group_hunt_snapshot=bool(row.get("isGroupHuntSnapshot", False)),
                 is_selected=bool(row["isSelected"]),
                 is_locked=bool(row["isLocked"]),
                 unassigned_reason=row.get("unassignedReason"),

@@ -239,6 +239,8 @@ class ParticipantView(BaseModel):
     damage_score_snapshot: Any | None
     buffer_score_snapshot: Any | None
     is_treasure_snapshot: bool
+    is_fixed_lead_team_buffer_snapshot: bool
+    is_group_hunt_snapshot: bool
     is_selected: bool
     is_locked: bool
     unassigned_reason: dict[str, Any] | None

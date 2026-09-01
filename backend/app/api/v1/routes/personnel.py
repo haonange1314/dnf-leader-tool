@@ -2,7 +2,7 @@ import uuid
 from typing import Any, cast
 
 from fastapi import APIRouter, Query
-from sqlalchemy import or_, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
@@ -17,6 +17,7 @@ from app.schemas.personnel import (
     CharacterCreate,
     CharacterUpdate,
     CharacterView,
+    PersonnelReorder,
     PlayerCreate,
     PlayerList,
     PlayerUpdate,
@@ -45,7 +46,11 @@ def list_players(
     is_active: bool | None = Query(default=None, alias="isActive"),
 ) -> PlayerList:
     del current_user
-    stmt = select(Player).options(selectinload(Player.characters)).order_by(Player.display_name_key)
+    stmt = (
+        select(Player)
+        .options(selectinload(Player.characters))
+        .order_by(Player.sort_order, Player.display_name_key, Player.id)
+    )
     filters = []
     if search:
         pattern = f"%{normalize_key(search)}%"
@@ -81,13 +86,29 @@ def create_player(payload: PlayerCreate, db: DbSession, current_user: EditorUser
         display_name=payload.display_name.strip(),
         display_name_key=normalize_key(payload.display_name),
         is_active=payload.is_active,
+        sort_order=_next_player_sort_order(db),
     )
-    for item in payload.characters:
-        player.characters.append(_new_character(item))
+    for sort_order, item in enumerate(payload.characters):
+        player.characters.append(_new_character(item, sort_order=sort_order))
     db.add(player)
     _commit(db, "玩家称呼或同玩家相同职业已存在")
     db.refresh(player)
     return player
+
+
+@router.put("/players/reorder", response_model=BatchUpdateResult)
+def reorder_players(
+    payload: PersonnelReorder, db: DbSession, current_user: EditorUser
+) -> BatchUpdateResult:
+    del current_user
+    players = list(db.scalars(select(Player)))
+    players_by_id = {player.id: player for player in players}
+    if set(payload.ordered_ids) != set(players_by_id):
+        raise AppError(409, "PERSONNEL_ORDER_CHANGED", "玩家列表已变化，请刷新后重试")
+    for sort_order, player_id in enumerate(payload.ordered_ids):
+        players_by_id[player_id].sort_order = sort_order
+    db.commit()
+    return BatchUpdateResult(updated=len(players))
 
 
 @router.get("/players/{player_id}", response_model=PlayerView)
@@ -125,11 +146,33 @@ def create_character(
     del current_user
     if db.get(Player, player_id) is None:
         raise AppError(404, "PLAYER_NOT_FOUND", "玩家不存在")
-    character = _new_character(payload, player_id)
+    character = _new_character(
+        payload, player_id, sort_order=_next_character_sort_order(db, player_id)
+    )
     db.add(character)
     _commit(db, "同一玩家不能存在相同职业")
     db.refresh(character)
     return character
+
+
+@router.put("/players/{player_id}/characters/reorder", response_model=BatchUpdateResult)
+def reorder_characters(
+    player_id: uuid.UUID,
+    payload: PersonnelReorder,
+    db: DbSession,
+    current_user: EditorUser,
+) -> BatchUpdateResult:
+    del current_user
+    if db.get(Player, player_id) is None:
+        raise AppError(404, "PLAYER_NOT_FOUND", "玩家不存在")
+    characters = list(db.scalars(select(Character).where(Character.player_id == player_id)))
+    characters_by_id = {character.id: character for character in characters}
+    if set(payload.ordered_ids) != set(characters_by_id):
+        raise AppError(409, "PERSONNEL_ORDER_CHANGED", "角色列表已变化，请刷新后重试")
+    for sort_order, character_id in enumerate(payload.ordered_ids):
+        characters_by_id[character_id].sort_order = sort_order
+    db.commit()
+    return BatchUpdateResult(updated=len(characters))
 
 
 @router.patch("/characters/{character_id}", response_model=CharacterView)
@@ -181,12 +224,30 @@ def batch_update_characters(
     return BatchUpdateResult(updated=result.rowcount)
 
 
-def _new_character(payload: CharacterCreate, player_id: uuid.UUID | None = None) -> Character:
+def _next_player_sort_order(db: DbSession) -> int:
+    current = db.scalar(select(func.max(Player.sort_order)))
+    return int(current) + 1 if current is not None else 0
+
+
+def _next_character_sort_order(db: DbSession, player_id: uuid.UUID) -> int:
+    current = db.scalar(
+        select(func.max(Character.sort_order)).where(Character.player_id == player_id)
+    )
+    return int(current) + 1 if current is not None else 0
+
+
+def _new_character(
+    payload: CharacterCreate,
+    player_id: uuid.UUID | None = None,
+    *,
+    sort_order: int = 0,
+) -> Character:
     character_id = uuid.uuid4()
     character = Character(
         id=character_id,
         name=payload.profession.strip(),
         name_key=normalize_key(payload.profession),
+        sort_order=sort_order,
     )
     if player_id is not None:
         character.player_id = player_id
@@ -203,6 +264,8 @@ def _apply_character(character: Character, payload: CharacterCreate | CharacterU
     character.damage_score = payload.damage_score
     character.buffer_score = payload.buffer_score
     character.is_treasure_damage = payload.is_treasure_damage
+    character.is_fixed_lead_team_buffer = payload.is_fixed_lead_team_buffer
+    character.is_group_hunt = payload.is_group_hunt
     character.default_raid_participant = payload.default_raid_participant
     character.note = payload.note.strip() if payload.note else None
     character.is_active = payload.is_active

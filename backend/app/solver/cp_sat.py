@@ -37,10 +37,15 @@ def solve(solver_input: SolverInput) -> SolverResult:
     for participant_index, participant in enumerate(participants):
         allowed = set(waves if participant.allowed_waves is None else participant.allowed_waves)
         for wave_no in waves:
-            for team_index, _team in enumerate(teams):
+            for team_index, team in enumerate(teams):
                 variable = model.new_bool_var(f"x_{participant_index}_{wave_no}_{team_index}")
                 x[participant_index, wave_no, team_index] = variable
                 if wave_no not in allowed:
+                    model.add(variable == 0)
+                if (
+                    participant.allowed_team_keys is not None
+                    and team.team_key not in participant.allowed_team_keys
+                ):
                     model.add(variable == 0)
 
     for locked in solver_input.locked_assignments:
@@ -590,6 +595,7 @@ def _validate_input(solver_input: SolverInput) -> None:
         raise ValueError("participant_id 必须唯一")
     participant_ids = {participant.participant_id for participant in solver_input.participants}
     player_ids = {participant.player_id for participant in solver_input.participants}
+    team_keys = {team.team_key for team in definition.teams}
     if len({preference.player_id for preference in solver_input.player_preferences}) != len(
         solver_input.player_preferences
     ):
@@ -616,6 +622,13 @@ def _validate_input(solver_input: SolverInput) -> None:
                 for wave_no in participant.allowed_waves
             ):
                 raise ValueError("allowed_waves 包含越界波次")
+        if participant.allowed_team_keys is not None:
+            if not participant.allowed_team_keys:
+                raise ValueError("allowed_team_keys 不能为空")
+            if len(participant.allowed_team_keys) != len(set(participant.allowed_team_keys)):
+                raise ValueError("allowed_team_keys 不能重复")
+            if not set(participant.allowed_team_keys) <= team_keys:
+                raise ValueError("allowed_team_keys 引用了未知队伍")
 
     team_by_key = {team.team_key: team for team in definition.teams}
     locked_participants: set[str] = set()
