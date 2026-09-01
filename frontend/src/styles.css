@@ -368,20 +368,48 @@ body {
   margin: 0 0 4px -15px;
   padding-block: 0;
 }
-.schedule-summary {
-  margin-bottom: 12px;
+.schedule-detail-heading {
+  align-items: flex-end;
+  margin-bottom: 10px;
 }
-.schedule-summary .ant-card-body {
-  min-height: 58px;
-  display: flex;
+.schedule-action-bar {
+  justify-content: flex-end;
+  max-width: 850px;
+}
+.schedule-overview-card .ant-card-body {
+  padding-block: 9px;
+}
+.schedule-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(72px, 1fr)) minmax(230px, 1.6fr);
   align-items: center;
+  gap: 8px 18px;
 }
-.schedule-summary .ant-statistic-title {
+.schedule-overview-grid .ant-statistic {
+  min-width: 0;
+}
+.schedule-overview-grid .ant-statistic-title,
+.wave-count-control > .ant-typography {
   margin-bottom: 0;
   font-size: 11px;
 }
-.schedule-summary .ant-statistic-content {
-  font-size: 22px;
+.schedule-overview-grid .ant-statistic-content {
+  font-size: 19px;
+  line-height: 1.2;
+}
+.wave-count-control {
+  display: grid;
+  gap: 3px;
+  justify-self: end;
+}
+.schedule-lock-alert {
+  padding-block: 7px;
+}
+.schedule-lock-alert .ant-alert-message {
+  font-size: 13px;
+}
+.schedule-lock-alert .ant-alert-description {
+  font-size: 11px;
 }
 .schedule-panel {
   margin-bottom: 12px;
@@ -398,9 +426,17 @@ body {
 }
 .participant-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
   gap: 7px;
   width: 100%;
+}
+.participant-checkbox-group {
+  display: block;
+  width: 100%;
+}
+.participant-panel .ant-card-body,
+.unassigned-panel .ant-card-body {
+  padding-block: 9px;
 }
 .participant-option {
   margin: 0;
@@ -416,6 +452,16 @@ body {
 .wave-list > .wave-card {
   content-visibility: auto;
   contain-intrinsic-size: auto 360px;
+}
+.wave-card > .ant-card-head {
+  min-height: 38px;
+}
+.wave-card > .ant-card-head .ant-card-head-title,
+.wave-card > .ant-card-head .ant-card-extra {
+  padding-block: 6px;
+}
+.wave-card > .ant-card-body {
+  padding: 8px 10px 10px;
 }
 .team-card {
   height: 100%;
@@ -446,6 +492,22 @@ body {
   flex-wrap: wrap;
   gap: 8px;
   min-height: 34px;
+}
+.unassigned-pool > .draggable-participant {
+  padding: 5px 8px;
+  border: 1px solid #d9d9df;
+  border-radius: 8px;
+  background: #fafafa;
+  transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+}
+.unassigned-pool > .draggable-participant:hover {
+  border-color: #8eb8f7;
+  background: #fff;
+  box-shadow: 0 2px 8px rgb(0 122 255 / 10%);
+}
+.unassigned-pool > .draggable-participant:focus-visible {
+  outline: 2px solid #1677ff;
+  outline-offset: 2px;
 }
 .draggable-participant {
   width: fit-content;
@@ -578,6 +640,16 @@ body {
   .section-heading {
     align-items: stretch;
     flex-direction: column;
+  }
+  .schedule-action-bar {
+    justify-content: flex-start;
+  }
+  .schedule-overview-grid {
+    grid-template-columns: repeat(2, minmax(72px, 1fr));
+  }
+  .wave-count-control {
+    grid-column: 1 / -1;
+    justify-self: stretch;
   }
   .version-row {
     align-items: flex-start;

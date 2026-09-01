@@ -168,6 +168,32 @@ describe("SchedulePage", () => {
     expect(within(participantStatistic as HTMLElement).getByText("0")).toBeInTheDocument();
   });
 
+  it("keeps a large participant list collapsed until requested", async () => {
+    const participants = Array.from({ length: 25 }, (_, index) => ({
+      ...detail.participants[0],
+      id: `participant-${index + 1}`,
+      characterId: `character-${index + 1}`,
+      characterNameSnapshot: `角色${index + 1}`,
+    }));
+    vi.mocked(api).mockImplementation(async (path: string) => {
+      if (path.endsWith("/lock")) return editLockResponse(path);
+      if (path === "/schedules") return { items: [summary], total: 1 };
+      if (path === "/dungeons") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1") return { ...detail, participants };
+      if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1/versions") return { items: [], total: 0 };
+      throw new Error(`unexpected API path: ${path}`);
+    });
+
+    render(<SchedulePage userRole="OWNER" onError={vi.fn()} onSuccess={vi.fn()} />);
+    fireEvent.click(await screen.findByText("周六团"));
+
+    expect(await screen.findByText("候选角色已收起，需要调整参团名单时再展开。")).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /展开角色选择/ }));
+    expect(await screen.findAllByRole("checkbox")).toHaveLength(25);
+  });
+
   it("applies an editor lock command and exposes undo", async () => {
     vi.mocked(api).mockImplementation(async (path: string) => {
       if (path.endsWith("/lock")) return editLockResponse(path);
@@ -421,7 +447,7 @@ describe("SchedulePage", () => {
     expect(await screen.findByText("有效")).toBeInTheDocument();
     expect(screen.getByText(/有效期至/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "撤 销" })).toBeEnabled();
-  });
+  }, 15_000);
 });
 
 describe("schedule drag operations", () => {

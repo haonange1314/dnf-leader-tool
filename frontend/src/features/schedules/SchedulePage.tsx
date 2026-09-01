@@ -2,6 +2,7 @@ import {
   CheckCircleOutlined,
   CopyOutlined,
   CrownOutlined,
+  DownOutlined,
   DownloadOutlined,
   EyeOutlined,
   HistoryOutlined,
@@ -33,6 +34,7 @@ import {
   Card,
   Checkbox,
   Col,
+  Dropdown,
   Empty,
   Form,
   Input,
@@ -146,6 +148,8 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
   const [sharePending, setSharePending] = useState(false);
   const [shareUrl, setShareUrl] = useState("");
   const [waveCount, setWaveCount] = useState(1);
+  const [participantPanelOpen, setParticipantPanelOpen] = useState(false);
+  const [unassignedPanelOpen, setUnassignedPanelOpen] = useState(false);
   const [editLock, setEditLock] = useState<EditLock | null>(null);
   const editLockRef = useRef<{ scheduleId: string; token: string } | null>(null);
   const [createForm] = Form.useForm();
@@ -277,6 +281,8 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
     setLatestGeneration(null);
     setVersions([]);
     setShareUrl("");
+    setParticipantPanelOpen(false);
+    setUnassignedPanelOpen(false);
     resetEditor();
   };
 
@@ -289,6 +295,11 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
         api<{ items: ScheduleVersionSummary[] }>(`/schedules/${scheduleId}/versions`),
       ]);
       applyDetail(schedule);
+      const selectedParticipantCount = schedule.participants.filter(
+        (participant) => participant.isSelected,
+      ).length;
+      setParticipantPanelOpen(schedule.participants.length <= 24);
+      setUnassignedPanelOpen(selectedParticipantCount <= 24);
       resetEditor();
       setLatestGeneration(runs.items[0] ?? null);
       setVersions(versionResult.items);
@@ -414,6 +425,8 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
       await loadList();
       await releaseCurrentEditLock();
       applyDetail(created);
+      setParticipantPanelOpen(true);
+      setUnassignedPanelOpen(true);
       resetEditor();
       setVersions([]);
       await establishEditLock(created.id);
@@ -921,7 +934,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
 
   return (
     <section>
-      <div className="section-heading">
+      <div className="section-heading schedule-detail-heading">
         <div>
           <Button
             type="link"
@@ -935,11 +948,12 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
             {detail.waveCount} 波 · revision {detail.revision} · {detail.status}
           </Typography.Text>
         </div>
-        <Space wrap>
-          <Button icon={<HistoryOutlined />} onClick={() => setHistoryOpen(true)}>
+        <Space wrap size={6} className="schedule-action-bar">
+          <Button size="small" icon={<HistoryOutlined />} onClick={() => setHistoryOpen(true)}>
             发布历史 {versions.length ? `(${versions.length})` : ""}
           </Button>
           <Button
+            size="small"
             type="primary"
             icon={<SendOutlined />}
             loading={publishPending}
@@ -954,28 +968,31 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
             发布排表
           </Button>
           {detail.status === "DRAFT" ? (
-            <>
-              <Button
-                icon={<DownloadOutlined />}
-                href={`/api/v1/schedules/${detail.id}/exports/image`}
-              >
-                草稿长图
+            <Dropdown
+              menu={{
+                items: [
+                  {
+                    key: "image",
+                    label: <a href={`/api/v1/schedules/${detail.id}/exports/image`}>草稿长图</a>,
+                  },
+                  {
+                    key: "excel",
+                    label: <a href={`/api/v1/schedules/${detail.id}/exports/excel`}>草稿 Excel</a>,
+                  },
+                  {
+                    key: "text",
+                    label: <a href={`/api/v1/schedules/${detail.id}/exports/text`}>草稿文本</a>,
+                  },
+                ],
+              }}
+            >
+              <Button size="small" icon={<DownloadOutlined />}>
+                导出草稿 <DownOutlined />
               </Button>
-              <Button
-                icon={<DownloadOutlined />}
-                href={`/api/v1/schedules/${detail.id}/exports/excel`}
-              >
-                草稿 Excel
-              </Button>
-              <Button
-                icon={<DownloadOutlined />}
-                href={`/api/v1/schedules/${detail.id}/exports/text`}
-              >
-                草稿文本
-              </Button>
-            </>
+            </Dropdown>
           ) : null}
           <Button
+            size="small"
             icon={<CopyOutlined />}
             disabled={!canCreateContent || hasUnsavedChanges}
             onClick={() => {
@@ -989,6 +1006,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
             复制排表
           </Button>
           <Button
+            size="small"
             icon={<SettingOutlined />}
             disabled={!canEditSchedule || hasUnsavedChanges}
             onClick={openPreferences}
@@ -996,6 +1014,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
             玩家偏好
           </Button>
           <Button
+            size="small"
             icon={<ReloadOutlined />}
             disabled={!canEditSchedule || hasUnsavedChanges}
             onClick={() => void previewSync()}
@@ -1003,6 +1022,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
             同步角色
           </Button>
           <Button
+            size="small"
             type="primary"
             icon={<CheckCircleOutlined />}
             disabled={hasUnsavedChanges}
@@ -1011,6 +1031,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
             运行预检查
           </Button>
           <Button
+            size="small"
             type="primary"
             icon={<PlayCircleOutlined />}
             disabled={!canEditSchedule || hasUnsavedChanges || detail.status === "ARCHIVED"}
@@ -1027,7 +1048,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
 
       {!canEditSchedule ? (
         <Alert
-          className="schedule-panel"
+          className="schedule-panel schedule-lock-alert"
           type="info"
           showIcon
           title={
@@ -1045,7 +1066,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
         />
       ) : (
         <Alert
-          className="schedule-panel"
+          className="schedule-panel schedule-lock-alert"
           type="success"
           showIcon
           title="已获得此排表的单编辑会话锁"
@@ -1063,27 +1084,25 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
         />
       ) : null}
 
-      <Row gutter={[16, 16]} className="schedule-summary">
-        <Col xs={12} md={6}>
-          <Card><Statistic title="参团角色" value={selectedParticipants.length} /></Card>
-        </Col>
-        <Col xs={12} md={6}>
-          <Card><Statistic title="C" value={damageCount} /></Card>
-        </Col>
-        <Col xs={12} md={6}>
-          <Card><Statistic title="奶" value={selectedParticipants.length - damageCount} /></Card>
-        </Col>
-        <Col xs={12} md={6}>
-          <Card>
-            <Space.Compact block>
+      <Card className="schedule-panel schedule-overview-card" size="small">
+        <div className="schedule-overview-grid">
+          <Statistic title="参团角色" value={selectedParticipants.length} />
+          <Statistic title="已安排" value={assignedParticipantIds.size} />
+          <Statistic title="C" value={damageCount} />
+          <Statistic title="奶" value={selectedParticipants.length - damageCount} />
+          <div className="wave-count-control">
+            <Typography.Text type="secondary">波数</Typography.Text>
+            <Space.Compact>
               <InputNumber
                 min={1}
                 max={50}
+                size="small"
                 disabled={!canEditSchedule}
                 value={waveCount}
                 onChange={(value) => setWaveCount(value ?? 1)}
               />
               <Button
+                size="small"
                 icon={<SettingOutlined />}
                 disabled={!canEditSchedule}
                 onClick={() => void updateWaves()}
@@ -1091,9 +1110,9 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
                 更新波数
               </Button>
             </Space.Compact>
-          </Card>
-        </Col>
-      </Row>
+          </div>
+        </div>
+      </Card>
 
       {validation ? (
         <Card title="预检查结果" className="schedule-panel">
@@ -1126,27 +1145,49 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
       ) : null}
 
       <Card
-        title="参团角色"
-        className="schedule-panel"
+        title={`参团角色 · 已选 ${selectedParticipants.length}/${detail.participants.length}`}
+        className="schedule-panel participant-panel"
+        size="small"
         extra={
-          <Button disabled={!canEditSchedule} onClick={() => void saveParticipants()}>
-            保存选择
-          </Button>
+          <Space size={4}>
+            <Button
+              type="text"
+              size="small"
+              icon={<EyeOutlined />}
+              onClick={() => setParticipantPanelOpen((open) => !open)}
+            >
+              {participantPanelOpen ? "收起角色选择" : "展开角色选择"}
+            </Button>
+            <Button
+              size="small"
+              disabled={!canEditSchedule || !participantSelectionDirty}
+              onClick={() => void saveParticipants()}
+            >
+              保存选择
+            </Button>
+          </Space>
         }
       >
-        <Checkbox.Group
-          disabled={!canEditSchedule}
-          value={selectedIds}
-          onChange={(values) => setSelectedIds(values as string[])}
-        >
-          <div className="participant-grid">
-            {detail.participants.map((participant) => (
-              <Checkbox value={participant.id} key={participant.id} className="participant-option">
-                <ParticipantLabel participant={participant} />
-              </Checkbox>
-            ))}
-          </div>
-        </Checkbox.Group>
+        {participantPanelOpen ? (
+          <Checkbox.Group
+            className="participant-checkbox-group"
+            disabled={!canEditSchedule}
+            value={selectedIds}
+            onChange={(values) => setSelectedIds(values as string[])}
+          >
+            <div className="participant-grid">
+              {detail.participants.map((participant) => (
+                <Checkbox value={participant.id} key={participant.id} className="participant-option">
+                  <ParticipantLabel participant={participant} />
+                </Checkbox>
+              ))}
+            </div>
+          </Checkbox.Group>
+        ) : (
+          <Typography.Text type="secondary">
+            候选角色已收起，需要调整参团名单时再展开。
+          </Typography.Text>
+        )}
       </Card>
 
       <Card className="schedule-panel editor-toolbar">
@@ -1189,20 +1230,39 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
       </Card>
 
       <DndContext sensors={sensors} onDragEnd={(event) => void onDragEnd(event)}>
-        <Card title={`未分配角色 · ${unassignedParticipants.length}`} className="schedule-panel">
-          <div className="unassigned-pool">
-            {unassignedParticipants.length ? (
-              unassignedParticipants.map((participant) => (
+        <Card
+          size="small"
+          title={`未分配角色 · ${unassignedParticipants.length}`}
+          className="schedule-panel unassigned-panel"
+          extra={
+            unassignedParticipants.length ? (
+              <Button
+                type="text"
+                size="small"
+                onClick={() => setUnassignedPanelOpen((open) => !open)}
+              >
+                {unassignedPanelOpen ? "收起" : "展开"}
+              </Button>
+            ) : null
+          }
+        >
+          {unassignedPanelOpen && unassignedParticipants.length ? (
+            <div className="unassigned-pool">
+              {unassignedParticipants.map((participant) => (
                 <DraggableParticipant
                   key={participant.id}
                   participant={participant}
                   disabled={!canEditSchedule || participant.isLocked || editorPending}
                 />
-              ))
-            ) : (
-              <Typography.Text type="secondary">所有参团角色都已安排</Typography.Text>
-            )}
-          </div>
+              ))}
+            </div>
+          ) : (
+            <Typography.Text type="secondary">
+              {unassignedParticipants.length
+                ? "角色池已收起，展开后可拖入队伍。"
+                : "所有参团角色都已安排"}
+            </Typography.Text>
+          )}
         </Card>
         <div className="wave-list">
           {visibleWaves.map((wave) => (
@@ -1813,6 +1873,7 @@ function EditorWave({
 }) {
   return (
     <Card
+      size="small"
       title={`第 ${wave.waveNo} 波`}
       extra={
         <Space>
@@ -1838,7 +1899,9 @@ function EditorWave({
           <Col xs={24} xl={Math.max(6, Math.floor(24 / wave.teams.length))} key={team.id}>
             <Card
               size="small"
-              title={`${team.displayNameSnapshot} · ${team.compositionCode}`}
+              title={`${team.displayNameSnapshot} · ${
+                team.compositionCode === "INCOMPLETE" ? "待补" : team.compositionCode
+              }`}
               extra={`C ${team.damageTotal} · 奶 ${team.bufferTotal}`}
               className="team-card"
               style={{ borderTopColor: team.displayColorSnapshot }}
@@ -2009,16 +2072,16 @@ function ParticipantLabel({
 }) {
   return (
     <Space size={4} wrap={!compact}>
-      <Tag color={participant.roleTypeSnapshot === "DAMAGE" ? "volcano" : "blue"}>
+      <Tag color={participant.roleTypeSnapshot === "DAMAGE" ? "red" : "green"}>
         {participant.roleTypeSnapshot === "DAMAGE" ? "C" : "奶"}
       </Tag>
       <span>{participant.playerNameSnapshot} · {participant.characterNameSnapshot}</span>
-      {participant.isTreasureSnapshot ? <Tag color="gold">秘宝</Tag> : null}
+      {participant.isTreasureSnapshot ? <Tag color="purple">秘宝</Tag> : null}
       {participant.isFixedLeadTeamBufferSnapshot ? (
         <Tag color="red">固定红奶</Tag>
       ) : null}
-      {participant.isGroupHuntSnapshot ? <Tag color="green">群猎</Tag> : null}
-      {core ? <Tag color="gold">本波核心</Tag> : null}
+      {participant.isGroupHuntSnapshot ? <Tag color="orange">群猎</Tag> : null}
+      {core ? <Tag color="purple">本波核心</Tag> : null}
       {participant.unassignedReason ? (
         <Tag color="warning">
           {describeUnassignedReason(participant.unassignedReason)}
@@ -2040,7 +2103,7 @@ function GenerationSummary({
   const unassigned = run.diagnostics?.unassigned ?? [];
   const issues = run.diagnostics?.issues ?? [];
   return (
-    <Card title="最近一次自动排表" className="schedule-panel">
+    <Card title="最近一次自动排表" className="schedule-panel" size="small">
       <Space wrap className="generation-summary-tags">
         <Tag color={run.status === "SUCCEEDED" ? "green" : "orange"}>{run.status}</Tag>
         <Tag>耗时 {run.durationMs ?? 0} ms</Tag>
