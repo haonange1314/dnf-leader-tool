@@ -39,6 +39,15 @@ def _load_dungeon(db: DbSession, dungeon_id: uuid.UUID) -> Dungeon:
     return dungeon
 
 
+def _lock_dungeon_for_version(db: DbSession, dungeon_id: uuid.UUID) -> Dungeon:
+    locked_id = db.scalar(
+        select(Dungeon.id).where(Dungeon.id == dungeon_id).with_for_update()
+    )
+    if locked_id is None:
+        raise AppError(404, "DUNGEON_NOT_FOUND", "副本不存在")
+    return _load_dungeon(db, dungeon_id)
+
+
 def _version_view(version: DungeonVersion) -> DungeonVersionView:
     config = version.formula_version.config
     formula = FormulaDefinition(
@@ -141,7 +150,7 @@ def create_version(
     dungeon_id: uuid.UUID, payload: DungeonVersionInput, db: DbSession, current_user: EditorUser
 ) -> DungeonVersionView:
     del current_user
-    dungeon = _load_dungeon(db, dungeon_id)
+    dungeon = _lock_dungeon_for_version(db, dungeon_id)
     next_version = (
         db.scalar(
             select(func.max(DungeonVersion.version_no)).where(
@@ -168,7 +177,11 @@ def create_version(
         teams=[_team_model(team) for team in definition.teams],
     )
     db.add(version)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise AppError(409, "DUNGEON_VERSION_CONFLICT", "副本版本已变化，请重试") from exc
     return _version_view(_load_version(db, version.id))
 
 

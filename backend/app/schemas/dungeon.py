@@ -29,7 +29,7 @@ class TeamDefinition(BaseModel):
 class CompositionRule(BaseModel):
     model_config = FROZEN_MODEL_CONFIG
 
-    code: str = Field(min_length=1, max_length=40)
+    code: str = Field(min_length=1, max_length=40, pattern=r"^[A-Z0-9][A-Z0-9_]*$")
     applicable_team_keys: tuple[str, ...]
     roles: dict[RoleType, int]
     priority: PositiveSmallInt
@@ -58,7 +58,7 @@ class CompanionPolicy(BaseModel):
 class SpecialRoleRule(BaseModel):
     model_config = FROZEN_MODEL_CONFIG
 
-    code: str = Field(min_length=1, max_length=40)
+    code: str = Field(min_length=1, max_length=40, pattern=r"^[A-Z0-9][A-Z0-9_]*$")
     character_flag: Literal["TREASURE_DAMAGE"]
     count_per_wave: PositiveSmallInt
     target_team_key: str
@@ -140,6 +140,8 @@ class DungeonVersionDefinition(BaseModel):
     def validate_definition(self) -> "DungeonVersionDefinition":
         if not self.teams:
             raise ValueError("副本版本必须至少包含一支队伍")
+        if self.participants_per_wave > 64:
+            raise ValueError("副本每波总人数不能超过 64")
         if self.max_wave_count is not None and self.max_wave_count < self.min_wave_count:
             raise ValueError("最大波数不能小于最小波数")
         if self.default_wave_count < self.min_wave_count or (
@@ -152,9 +154,19 @@ class DungeonVersionDefinition(BaseModel):
             raise ValueError("队伍 key 必须唯一")
         if len({team.display_order for team in self.teams}) != len(self.teams):
             raise ValueError("队伍展示顺序必须唯一")
+        strength_ranks = [
+            team.strength_rank for team in self.teams if team.strength_rank is not None
+        ]
+        if len(strength_ranks) != len(set(strength_ranks)):
+            raise ValueError("已填写的队伍强度排名必须唯一")
 
         covered: set[str] = set()
+        composition_codes = [rule.code for rule in self.composition_rules.allowed]
+        if len(composition_codes) != len(set(composition_codes)):
+            raise ValueError("组成规则 code 必须唯一")
         for rule in self.composition_rules.allowed:
+            if len(rule.applicable_team_keys) != len(set(rule.applicable_team_keys)):
+                raise ValueError(f"组成规则 {rule.code} 的适用队伍不能重复")
             unknown = set(rule.applicable_team_keys) - team_by_key.keys()
             if unknown:
                 raise ValueError(f"组成规则引用未知队伍: {sorted(unknown)}")
@@ -165,10 +177,20 @@ class DungeonVersionDefinition(BaseModel):
         if covered != team_by_key.keys():
             raise ValueError("每支队伍必须至少有一条适用组成规则")
 
+        special_codes = [rule.code for rule in self.special_role_rules.rules]
+        if len(special_codes) != len(set(special_codes)):
+            raise ValueError("特殊角色规则 code 必须唯一")
         for special_rule in self.special_role_rules.rules:
             if special_rule.target_team_key not in team_by_key:
                 raise ValueError(f"特殊角色规则引用未知队伍: {special_rule.target_team_key}")
+            if special_rule.count_per_wave > team_by_key[special_rule.target_team_key].member_count:
+                raise ValueError(f"特殊角色规则 {special_rule.code} 数量超过目标队伍容量")
+        order_metrics = [order.metric for order in self.strength_order_rules.orders]
+        if len(order_metrics) != len(set(order_metrics)):
+            raise ValueError("同一种强度指标只能配置一条顺序规则")
         for order in self.strength_order_rules.orders:
+            if not order.teams:
+                raise ValueError("强度顺序必须至少包含一支队伍")
             if len(order.teams) != len(set(order.teams)):
                 raise ValueError("强度顺序中的队伍不能重复")
             unknown = set(order.teams) - team_by_key.keys()

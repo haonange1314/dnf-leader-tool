@@ -1,9 +1,9 @@
 # DNF 团长排表工具技术设计文档
 
-> 文档版本：v0.2  
+> 文档版本：v0.3
 > 状态：技术评审稿  
-> 依据文档：[DNF 团长排表工具设计文档](./design.md) v0.2  
-> 当前范围：MVP 副本管理和 12 人团本排表
+> 依据文档：[DNF 团长排表工具设计文档](./design.md) v0.3
+> 当前范围：副本管理、12 人团本排表和自然语言排表规则
 
 ## 1. 文档目标
 
@@ -30,6 +30,7 @@
 7. **本地与公网同构**：本地和公网都通过容器运行，只替换环境变量、入口代理和安全配置。
 8. **参数可配置**：尚未最终确认的精度、求解时限和波数上限采用配置默认值，不写死在业务代码中。
 9. **副本驱动排表**：人数、队伍、合法组成、强度顺序和特殊角色规则来自版本化副本配置，不使用全局常量。
+10. **模型只做解释**：DeepSeek 只把自然语言翻译为白名单内的结构化规则；确定性校验、规则编译和 OR-Tools 才是排表执行真源。
 
 ## 3. 技术选型
 
@@ -43,6 +44,7 @@
 | 后端 | FastAPI + Pydantic | HTTP API、数据校验和 OpenAPI |
 | ORM | SQLAlchemy 2 + Alembic | PostgreSQL 访问和 Schema 迁移 |
 | 智能排表 | OR-Tools CP-SAT | 约束满足和多目标优化 |
+| 自然语言规则 | DeepSeek v4 + Provider Adapter | 仅解析本次排表要求，模型与提示词版本可追踪 |
 | 数据库 | PostgreSQL | 事务、JSONB、约束和不可变版本快照 |
 | Excel | openpyxl | `.xlsx` 模板、预览、导入和导出 |
 | 长图 | Pillow | 根据版本化副本结构直接绘制 PNG 长图 |
@@ -59,6 +61,8 @@ flowchart LR
     Web --> API["FastAPI 模块化单体"]
     API --> DB[("PostgreSQL")]
     API --> Solver["OR-Tools 排表领域模块"]
+    API --> RuleParser["自然语言规则解释器"]
+    RuleParser --> DeepSeek["DeepSeek v4 API"]
     API --> Excel["openpyxl 导入导出"]
     API --> Exporter["Pillow PNG 长图生成"]
     Exporter --> Snapshot["不可变排表快照"]
@@ -74,6 +78,8 @@ Docker Compose 包含三个常驻服务：
 
 MVP 不引入 Redis、消息队列和独立求解服务。默认 12 波求解采用同步请求并设置严格时间上限。若性能测试表明公网阶段需要异步化，可在不改变求解器接口的情况下增加 `worker` 服务。
 
+自然语言规则解析仍由同一个 `api` 进程编排，通过可替换的 Provider Adapter 调用 DeepSeek v4，不新增常驻服务。外部调用只发生在团长显式点击“解析要求”时；规则确认、重复生成和历史查看不再次调用模型。
+
 ### 4.2 模块边界
 
 ```text
@@ -84,6 +90,8 @@ Application Services
   ├── Dungeon Service
   ├── Import Service
   ├── Schedule Service
+  ├── Rule Interpretation Service
+  ├── Rule Compilation Service
   ├── Validation Service
   ├── Generation Service
   ├── Version Service
@@ -95,6 +103,7 @@ Domain
   ├── Dungeon Definition
   ├── Scoring Formula
   ├── Constraint Model
+  ├── Schedule Rule Model
   └── Issue Codes
         ↓
 Repositories / PostgreSQL
@@ -189,8 +198,26 @@ dnf/
 - 特殊角色和强度顺序通过规则表单配置。
 - 页面实时显示每波总人数、规则覆盖情况和发布错误。
 - PUBLISHED 版本只读；“编辑”操作实际复制出下一版 DRAFT。
+- 新建副本成功后直接打开首个版本编辑器；已有空副本也保留“创建首个草稿”入口，避免只有主体而无法继续配置。
+- 版本编辑器按“波次与队伍 / 队伍组成 / 自动排表规则”分区，使用 `Form.List` 维护任意数量队伍和组成规则；`displayOrder` 来自队伍列表顺序。C 与奶的强度顺序分别编辑并按选择顺序无损回写 `strengthOrderRules`，不从 `strengthRank` 推导，也不写死队伍键；`strengthRank` 只用于标识固定主队规则的目标队伍。
+- 评分公式在当前编辑器中只读，创建首个 12 人团本草稿使用 `TEAM_SCORE v2`，复制版本则保留来源公式快照。
+- 保存前执行轻量的队伍标识、强度排名、组成容量和规则覆盖检查，服务端 `DungeonVersionDefinition` 仍是最终规则真源。
+- 版本历史提供只读查看、复制草稿、显式校验、发布和退役；所有写入口继续按 Owner/Editor 权限禁用，Viewer 保持只读。
 
 内置 12 人团本使用同一数据结构和页面展示，不在前端写特殊页面分支。
+
+#### 6.0.1 自然语言排表规则
+
+自然语言入口放在排表生成区，而不是副本版本的执行配置中。前端采用“输入 → 解析预览 → 确认生效 → 自动生成”四步状态：
+
+- 输入框标题为“本次排表要求”，显示长度限制和不会修改副本规则的提示。
+- 解析预览按硬规则、软目标、歧义、冲突和不支持内容分组，所有玩家、角色、队伍和波次引用同时显示名称与已解析实体。
+- 有歧义、未知引用、不支持项或硬冲突时禁用确认；允许团长修改原文后重新解析。
+- 已确认规则使用紧凑标签展示，修改原文会产生新解析记录，旧规则继续生效直到新规则确认或被明确停用。
+- 生成结果展示每条规则的 `SATISFIED/UNSATISFIED/BLOCKED/NOT_APPLICABLE` 状态和确定性说明，不在浏览器重新解释模型文本。
+- Viewer 只读；Owner/Editor 的解析、确认和停用操作均要求有效编辑租约及最新 `baseRevision`。
+
+副本编辑器后续可以复用同一解析组件作为结构化表单填写助手，但保存和发布的仍是 `DungeonVersionDefinition`，不会让自然语言绕过版本校验。
 
 ### 6.1 当前导航与公开路由
 
@@ -357,6 +384,8 @@ erDiagram
     PLAYERS ||--o{ CHARACTERS : owns
     FORMULA_VERSIONS ||--o{ SCHEDULES : selected_by
     SCHEDULES ||--o{ SCHEDULE_PARTICIPANTS : snapshots
+    SCHEDULES ||--o{ SCHEDULE_RULE_SETS : interprets
+    SCHEDULE_RULE_SETS ||--o{ GENERATION_RUNS : applied_by
     CHARACTERS ||--o{ SCHEDULE_PARTICIPANTS : references
     SCHEDULES ||--o{ SCHEDULE_PLAYER_PREFERENCES : configures
     PLAYERS ||--o{ SCHEDULE_PLAYER_PREFERENCES : has
@@ -490,7 +519,8 @@ unique `(dungeon_version_id, team_key)` 和 `(dungeon_version_id, display_order)
 - 队伍人数及总人数不超过系统安全上限。
 - 每个队伍至少有一条适用组成规则，且规则人数之和等于该队伍容量。
 - 特殊角色规则引用存在的 team_key 和角色标志。
-- 强度顺序引用存在且不重复的队伍。
+- 已填写的 `strength_rank` 唯一；同一强度指标最多一条顺序规则，且每条规则引用至少一支存在且不重复的队伍。
+- 组成规则和特殊角色规则的 code 各自在版本内唯一；单条组成规则的适用队伍不得重复。
 - 优化规则和待补策略使用当前支持的 schemaVersion 和枚举值。
 - 默认波数处于允许范围。
 
@@ -606,6 +636,7 @@ unique `(dungeon_version_id, team_key)` 和 `(dungeon_version_id, display_order)
 | `status` | varchar(16) | `DRAFT/PUBLISHED/ARCHIVED` |
 | `formula_version_id` | uuid | FK formula_versions |
 | `note` | text | 可空 |
+| `active_rule_set_id` | uuid | 可空，FK schedule_rule_sets；当前已确认规则集 |
 | `revision` | integer | 乐观并发版本，默认 1 |
 | `last_published_version` | integer | 可空 |
 | `validation_summary` | jsonb | 当前 revision 的摘要 |
@@ -630,6 +661,34 @@ DRAFT 或 PUBLISHED 归档 → ARCHIVED
 新建排表只能引用 PUBLISHED 副本版本。创建事务根据该版本一次性生成全部 wave、team 和 slot，并把队伍展示及容量字段写入快照。副本版本后来退休不影响已有排表。
 
 `schedules.formula_version_id` 在创建时复制自 `dungeon_versions.formula_version_id`，作为排表快照的一部分；首期不允许排表绕过副本版本单独切换公式。
+
+#### `schedule_rule_sets`
+
+| 列 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | uuid | PK |
+| `schedule_id` | uuid | FK schedules，not null |
+| `input_revision` | integer | 解析时的排表 revision |
+| `source_text` | text | 团长输入的原文 |
+| `source_hash` | char(64) | 规范化原文哈希 |
+| `context_hash` | char(64) | 参团实体、波数、副本队伍和规则能力目录哈希 |
+| `status` | varchar(16) | `PARSED/CONFIRMED/STALE/SUPERSEDED/FAILED` |
+| `model_provider` | varchar(40) | 首期为 `DEEPSEEK` |
+| `model_name` | varchar(120) | 首期配置别名为 `deepseek-v4`，保存调用时解析到的实际标识 |
+| `provider_response_id` | varchar(160) | 可空，供应商请求追踪标识 |
+| `prompt_version` | varchar(40) | 系统提示词模板版本 |
+| `schema_version` | integer | 结构化规则 Schema 版本 |
+| `parsed_rules` | jsonb | 通过 Pydantic Schema 校验的模型输出 |
+| `resolved_references` | jsonb | 玩家、角色、队伍和波次引用快照 |
+| `issues` | jsonb | 歧义、冲突、不支持项和解析失败摘要 |
+| `created_by` | uuid | FK users |
+| `confirmed_by` | uuid | 可空，FK users |
+| `created_at` | timestamptz | not null |
+| `confirmed_at` | timestamptz | 可空 |
+
+规则集确认后不可原地修改。确认事务锁定排表，校验 `baseRevision`、编辑租约、`source_hash`、`context_hash` 和全部引用，把旧 `CONFIRMED` 规则集改为 `SUPERSEDED`，再更新 `schedules.active_rule_set_id` 并递增 revision。使用部分唯一索引保证每张排表至多一个 `CONFIRMED` 规则集。解析记录允许保留失败摘要，但不保存供应商隐式推理过程。
+
+影响解释语义的参团人员、波数或副本结构发生变化时，将当前规则集标记为 `STALE` 并清空 `active_rule_set_id`；团长可保留原文重新解析。拖拽位置和锁定变化不改变 `context_hash`，生成前由确定性编译器检查其与规则的冲突。复制排表只把原文作为待解析输入带入，不复制已确认状态或解析引用。
 
 #### `schedule_participants`
 
@@ -755,11 +814,15 @@ unique `(wave_id, rule_code, participant_id)`。内置 12 人团本通过 `TREAS
 - `input_hash`
 - `solver_version`
 - `formula_version_id`
+- `schedule_rule_set_id`：可空，FK schedule_rule_sets
+- `rule_compiler_version`
+- `effective_rules`：jsonb，实际传入求解器的确定性规则快照
 - `random_seed`
 - `time_limit_seconds`
 - `duration_ms`
 - `objective_summary`：jsonb。
 - `diagnostics`：jsonb。
+- `rule_evaluation`：jsonb，每条自然语言规则的满足状态和说明。
 - `created_by`
 - `created_at`
 - `finished_at`
@@ -780,6 +843,8 @@ unique `(wave_id, rule_code, participant_id)`。内置 12 人团本通过 `TREAS
 - `published_at`
 
 unique `(schedule_id, version_no)`。发布后禁止 UPDATE 和 DELETE，归档只改变 schedule 状态。
+
+发布快照包含当前确认规则集的原文、结构化规则、引用快照、编译器版本和最近一次规则满足状态；不包含 API Key、供应商隐式推理或未经确认的解析记录。后续替换当前排表规则集不会改变已发布版本。
 
 除应用层限制外，生产迁移应创建数据库触发器拒绝对 `schedule_versions` 的 UPDATE 和 DELETE，确保历史快照不可变。
 
@@ -940,10 +1005,18 @@ POST   /schedules/{scheduleId}/commands
 
 ```text
 POST   /schedules/{scheduleId}/validate
+POST   /schedules/{scheduleId}/rule-sets/parse
+GET    /schedules/{scheduleId}/rule-sets
+POST   /schedules/{scheduleId}/rule-sets/{ruleSetId}/confirm
+POST   /schedules/{scheduleId}/rule-sets/clear
 POST   /schedules/{scheduleId}/generate
 GET    /schedules/{scheduleId}/generation-runs
 GET    /generation-runs/{runId}
 ```
+
+解析请求携带 `sourceText` 和 `baseRevision`。服务端构造最小化上下文，调用 DeepSeek v4，随后依次执行 Pydantic Schema 校验、名称解析、白名单检查和规则冲突检查。解析响应仅供预览，不会自动设为生效规则。
+
+`confirm` 和 `clear` 是排表聚合写操作，必须携带 `baseRevision`、有效编辑租约和当前规则集哈希。解析依据的人员、队伍或波次上下文已变化时返回 `409 RULE_SET_CONTEXT_STALE`，要求重新解析。模型调用在数据库事务外完成，不长时间占用排表锁。
 
 生成请求：
 
@@ -951,12 +1024,15 @@ GET    /generation-runs/{runId}
 {
   "baseRevision": 18,
   "preserveLocks": true,
+  "expectedRuleSetId": "uuid-or-null",
   "randomSeed": 42,
   "timeLimitSeconds": 10
 }
 ```
 
 `timeLimitSeconds` 的默认值来自服务端配置；客户端只能在允许范围内选择。
+
+`expectedRuleSetId` 必须与排表当前生效规则集一致，防止用户预览后规则被另一个操作替换却继续生成。没有确认规则集时显式传 `null`。
 
 ### 9.8 发布、历史和分享
 
@@ -1029,7 +1105,8 @@ sequenceDiagram
     participant Solver as OR-Tools
 
     UI->>API: generate(baseRevision, lockToken)
-    API->>DB: 读取并校验锁、revision、快照
+    API->>DB: 读取并校验锁、revision、快照和规则集
+    API->>API: 确定性编译已确认规则并计算 input_hash
     API->>DB: 写入 RUNNING generation_run
     API->>Solver: 传入不可变 SolverInput
     Solver-->>API: SolverResult
@@ -1042,6 +1119,8 @@ sequenceDiagram
         API-->>UI: 409，请重新生成
     end
 ```
+
+生成事务准备阶段还必须比较请求的 `expectedRuleSetId`、排表当前 `active_rule_set_id` 和编译上下文哈希。任一不一致都在调用 OR-Tools 前返回 409；DeepSeek 不出现在生成链路中。
 
 ### 10.3 发布事务
 
@@ -1062,7 +1141,8 @@ sequenceDiagram
 2. **数据库约束**：唯一、外键和检查约束。
 3. **排表硬规则**：角色唯一、同玩家同波唯一、波次可用、位置归属。
 4. **副本完整队伍规则**：命中当前副本版本允许的组成；内置团本为 3C1奶 或 2C2奶。
-5. **优化目标检查**：当前副本定义的特殊角色、队伍强度顺序和跨波平衡。
+5. **排表规则集**：引用唯一、白名单类型、上下文版本、锁定冲突及副本兼容性。
+6. **优化目标检查**：当前副本定义的特殊角色、自然语言软目标、队伍强度顺序和跨波平衡。
 
 ### 11.2 稳定 issue code
 
@@ -1073,6 +1153,13 @@ DUNGEON_VERSION_NOT_PUBLISHED
 DUNGEON_TEAM_TEMPLATE_INVALID
 DUNGEON_COMPOSITION_CAPACITY_MISMATCH
 DUNGEON_SPECIAL_RULE_TARGET_MISSING
+RULE_SET_CONTEXT_STALE
+RULE_SET_REFERENCE_NOT_FOUND
+RULE_SET_REFERENCE_AMBIGUOUS
+RULE_SET_TYPE_UNSUPPORTED
+RULE_SET_CONFLICTS_WITH_DUNGEON
+RULE_SET_CONFLICTS_WITH_LOCK
+RULE_PROVIDER_UNAVAILABLE
 CAPACITY_EXCEEDED
 PARTICIPANT_SHORTAGE
 DAMAGE_IDEAL_SHORTAGE
@@ -1133,6 +1220,70 @@ class ScoringFormula(Protocol):
 
 ## 13. OR-Tools 求解器设计
 
+### 13.0 自然语言规则解释与编译边界
+
+自然语言处理分为两个明确隔离的步骤：
+
+1. **模型解释**：`DeepSeekRuleProvider` 接收原文和最小化的当前排表实体目录，只能返回版本化 JSON Schema 中的规则候选、引用文本和置信/歧义标记。
+2. **确定性编译**：`ScheduleRuleCompiler` 在本地解析实体 ID、检查权限与上下文版本、校验副本兼容性，并把已确认规则转换为 `SolverScheduleRule`。编译器不依赖 HTTP、ORM 或模型客户端。
+
+首批白名单规则类型建议为：
+
+```text
+硬规则
+PLAYER_ALLOWED_WAVES
+PLAYER_FORBIDDEN_WAVES
+PLAYERS_NOT_SAME_WAVE
+CHARACTER_REQUIRED_WAVE
+CHARACTER_REQUIRED_TEAM
+
+软目标
+PLAYER_PREFER_WAVE_RANGE
+PLAYER_PREFER_CONTIGUOUS
+CHARACTER_PREFER_TEAM
+TEAM_ROLE_COVERAGE_PRIORITY
+WAVE_TEAM_STRENGTH_PRIORITY
+```
+
+模型响应示例只包含候选引用，不包含数据库 ID；实体 ID 由服务端解析：
+
+```json
+{
+  "schemaVersion": 1,
+  "rules": [
+    {
+      "candidateId": "R1",
+      "type": "PLAYERS_NOT_SAME_WAVE",
+      "enforcement": "HARD",
+      "playerReferences": [{"text": "剑来"}, {"text": "点评"}]
+    },
+    {
+      "candidateId": "R2",
+      "type": "PLAYER_PREFER_WAVE_RANGE",
+      "enforcement": "SOFT",
+      "softPriority": 1,
+      "playerReference": {"text": "韩亚"},
+      "waveRange": {"start": 1, "end": 6}
+    }
+  ],
+  "unsupportedItems": []
+}
+```
+
+规则类型使用判别联合 Pydantic Schema，每种类型有独立必填字段和范围限制。模型不能输出任意表达式、Python、SQL、CP-SAT 代码或原始目标权重；未知类型一律进入 `unsupportedItems`。名称解析只在当前排表的参与者快照、当前副本队伍和有效波次内进行，零匹配和多匹配都不能自动确认。
+
+用户原文始终作为不可信数据放入独立消息字段；即使其中包含“忽略系统要求”、代码片段或外部链接，也不能改变系统提示、Schema 白名单或触发工具/网络访问。服务端不访问原文中的 URL，不执行模型返回内容。
+
+模型调用输入遵循最小化原则：仅发送理解本次要求所需的显示名、职业、角色类型、业务标签、队伍名和波次范围，不发送密码、会话、密钥、审计日志或无关人员数据。“最强”“较弱”等语义由模型映射为符号规则，再由本地评分公式计算，数值评分无需发送给模型。
+
+DeepSeek 适配器必须具备超时、有限重试、响应大小限制、结构化日志脱敏和按用户限流。API Key 只存在于后端密钥配置，绝不写入前端构建变量、提示词快照或数据库。Provider 不可用时仅禁用自然语言解析，结构化副本配置、已有确认规则集、手动编辑和 OR-Tools 生成继续工作。
+
+首批配置键为 `NATURAL_LANGUAGE_RULES_ENABLED`、`DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL`、`DEEPSEEK_TIMEOUT_SECONDS` 和 `RULE_PROMPT_VERSION`。生产环境仅在功能开关启用时要求 DeepSeek 配置完整并 fail-fast；开发和测试可以使用实现同一 Provider Protocol 的本地假适配器，不依赖公网模型。
+
+规则解释结果不保存或展示模型的隐式推理过程。持久化范围仅包括原文、结构化输出、引用解析、可公开的简短说明、模型/提示词/Schema 版本和供应商追踪 ID。
+
+首期不让 DeepSeek 输出候选人员子集或完整排表。后续可以单独实验“模型建议排表 → 转换为 CP-SAT Hint → OR-Tools 校验、修复并继续优化”，但 Hint 必须可被求解器忽略，不能改变完整候选集合、硬约束或目标优先级；只有基准测试证明改善求解时间或首解质量后才考虑启用。
+
 ### 13.1 输入模型
 
 ```python
@@ -1155,6 +1306,8 @@ class SolverInput:
     dungeon: SolverDungeonDefinition
     participants: tuple[SolverParticipant, ...]
     player_preferences: tuple[SolverPlayerPreference, ...]
+    schedule_rules: tuple[SolverScheduleRule, ...]
+    schedule_rule_set_id: UUID | None
     locked_assignments: tuple[LockedAssignment, ...]
     locked_empty_slots: tuple[LockedEmptySlot, ...]
     formula: SolverFormula
@@ -1230,15 +1383,20 @@ x[r,w,t] = 角色 r 是否进入波次 w 的队伍 t
 #### 阶段 A：可用性与完整度
 
 1. 最大化已安排参团角色数。
-2. 最大化完整波次数和完整队伍数。
-3. 按副本的 `missingSlotPolicy` 处理空位；内置团本对较早波次施加更高空位惩罚，使缺口集中到最后几波。
+2. 若副本使用 `SPREAD_EVENLY`，先最小化各波已安排人数的最大差值。
+3. 最大化完整波次数和完整队伍数。
+4. 若副本使用 `FILL_EARLIER_WAVES`，对较早波次施加更高填充奖励，使缺口集中到最后几波。
 
 #### 阶段 B：构成和核心
 
 1. 最小化合法组成规则的优先级惩罚；内置 12 人团本由此优先 3C1奶、其次 2C2奶。
 2. 最大化满足必需特殊角色规则的完整波次数；内置 12 人团本由此优先安排红队核心秘宝 C。
 
-#### 阶段 C：单波队伍关系
+#### 阶段 C：本次排表的自然语言软目标
+
+已确认的自然语言硬规则在进入阶段 A 前直接编译为约束；与副本硬规则或锁定冲突时终止生成并返回结构化 issue。自然语言软目标在保持阶段 A、B 最好结果后执行，按规则集中预览并确认的顺序采用词法序优化。应用层把每种白名单规则映射为固定目标变量，忽略模型输出的任意原始权重。
+
+#### 阶段 D：单波队伍关系
 
 根据副本版本的 `strengthOrderRules` 最小化相邻队伍的顺序松弛量。内置 12 人团本等价于：
 
@@ -1249,9 +1407,9 @@ max(0, 黄队奶 - 红队奶)
 max(0, 绿队奶 - 黄队奶)
 ```
 
-#### 阶段 D：跨波平衡
+#### 阶段 E：跨波平衡
 
-固定阶段 C 的最好结果后，仅对副本 `balanceAcrossWaves` 启用的指标进行优化。内置 12 人团本对完整波次分别最小化：
+固定阶段 D 的最好结果后，仅对副本 `balanceAcrossWaves` 启用的指标进行优化。内置 12 人团本对完整波次分别最小化：
 
 ```text
 max(波次C总强度) - min(波次C总强度)
@@ -1260,11 +1418,11 @@ max(波次奶总强度) - min(波次奶总强度)
 
 不完整波次不参与强度差优化，避免“待补”错误拉低目标。
 
-#### 阶段 E：特殊角色搭配
+#### 阶段 F：特殊角色搭配
 
 若特殊规则定义了同队搭配策略，则在保持队伍顺序和跨波平衡结果后继续优化。内置 12 人团本最小化红队核心秘宝 C 以外的 C 强度占用，使大 C 搭配相对较弱的 C。
 
-#### 阶段 F：玩家偏好和稳定排序
+#### 阶段 G：玩家偏好和稳定排序
 
 - `prefer_early`：最小化波次编号加权和。
 - `prefer_contiguous`：最小化玩家最早和最晚出场之间的空档数。
@@ -1291,6 +1449,14 @@ empty_penalty(w) = (wave_count - w + 1) × empty_count(w)
 ```
 
 越早的波次空位惩罚越高，因此求解器倾向先填满前面的波次。
+
+当副本使用 `SPREAD_EVENLY` 时，在已安排总人数相同的前提下，先最小化所有波次已安排人数的极差：
+
+```text
+wave_fill_spread = max(assigned_count(w)) - min(assigned_count(w))
+```
+
+固定最小极差后再优化完整波次和完整队伍。这样该策略会真实地把缺口分散到各波，而不会被“尽量填满完整波次”的目标抵消。
 
 ### 13.7 结果映射
 
@@ -1495,10 +1661,11 @@ Owner/Editor 权限。`user_sessions.csrf_token_hash` 将 CSRF 令牌绑定到�
 - API 路径和耗时。
 - 数据库错误码。
 - 求解器状态、耗时、变量规模和目标摘要。
+- 自然语言 Provider、模型别名、提示词版本、调用耗时和结构化解析状态。
 - 导入批次摘要。
 - 导出耗时和失败阶段。
 
-不得记录密码、会话令牌、分享明文令牌或完整上传文件内容。
+不得记录密码、会话令牌、分享明文令牌、DeepSeek API Key、完整自然语言原文、完整模型响应或完整上传文件内容。
 
 ### 18.2 关键指标
 
@@ -1510,6 +1677,7 @@ MVP 先通过数据库和日志记录：
 - 导入错误率。
 - 排表 revision 冲突次数。
 - 编辑锁超时和接管次数。
+- 自然语言解析成功率、超时率、歧义率、不支持项数量和确认转化率。
 
 公网阶段再接入正式监控系统。
 
@@ -1524,6 +1692,9 @@ MVP 先通过数据库和日志记录：
 - Issue 生成。
 - 快照规范化和哈希。
 - 编辑命令及逆命令。
+- 自然语言规则判别联合 Schema、实体解析和上下文哈希。
+- DeepSeek Provider 假适配器的超时、畸形 JSON、未知类型、超大响应和脱敏日志。
+- 已确认规则到 `SolverScheduleRule` 的确定性编译及规则满足说明。
 
 ### 19.2 求解器测试
 
@@ -1542,6 +1713,9 @@ MVP 先通过数据库和日志记录：
 11. 自定义单队 4 人副本，不含秘宝 C 和强度顺序。
 12. 自定义多队、不同队伍人数和不同合法组成。
 13. 副本规则引用不存在的队伍时拒绝发布。
+14. 自然语言规则中的玩家重名、未知角色、越界波次和未知队伍。
+15. 已确认硬规则与副本规则、角色锁、位置锁或波次锁冲突。
+16. 相同结构化规则快照在 DeepSeek 不可用时仍可重复生成。
 
 属性测试需要验证：
 
@@ -1559,6 +1733,8 @@ MVP 先通过数据库和日志记录：
 - 根据副本版本正确生成队伍和位置快照。
 - Excel 预览后确认。
 - 生成期间 revision 变化导致结果标记 STALE。
+- 规则解析期间排表 revision 变化导致确认返回 `RULE_SET_CONTEXT_STALE`。
+- 确认新规则集会原子地替换旧规则集，并写入 generation_run 和发布快照。
 - 编辑锁获取、续期、超时和接管。
 - 发布快照不可变。
 
@@ -1571,6 +1747,7 @@ MVP 先通过数据库和日志记录：
 - 409 冲突回滚。
 - 编辑锁丢失后切换只读。
 - issue 定位和确认发布。
+- 自然语言规则输入、解析预览、歧义阻断、确认替换和 Viewer 只读。
 
 ### 19.5 端到端测试
 
@@ -1582,6 +1759,7 @@ MVP 先通过数据库和日志记录：
 → 导入角色 Excel
 → 新建 12 波排表
 → 设置玩家波次
+→ 输入并确认本次排表要求
 → 自动生成
 → 拖拽微调
 → 发布版本
@@ -1733,6 +1911,8 @@ flowchart TD
 - CP-SAT 将队伍强度顺序、跨波平衡、特殊角色搭配和玩家偏好拆为有序求解阶段。对内置 12 人团本先保证红黄绿顺序，再在该结果空间内优化跨波差值；每个阶段固定其在分配时间内得到的最好目标值，禁止后续目标换取前级退化。
 - `ObjectiveSummary` 继续作为稳定的求解器输出契约，前端补充展示 `preferredCompositionCount`、`damageSpread` 和 `bufferSpread`，不在浏览器重新计算持久化评分。
 - 默认 12 波、短缺场景、锁定场景和自定义单队 4 人副本必须继续通过回归与性能验收。
+- 新增自然语言排表规则子轨：DeepSeek v4 通过 Provider Adapter 解析“本次排表要求”，但只有经过引用解析、白名单校验和团长确认的规则集才能进入确定性编译器；模型不进入 OR-Tools 生成链路。
+- DeepSeek 生成初始提示解仅列入长期实验 TODO，不属于本轮交付；即使未来启用，最终决策和最优状态证明仍由 OR-Tools 完成。
 
 军团本专用流程不作为默认下一阶段，仅在未来明确重新排定优先级后启动。
 
@@ -1751,6 +1931,9 @@ flowchart TD
 11. 编辑锁超时后可以安全接管，旧锁令牌不能继续写入。
 12. 发布版本的长图、Excel 和文本内容一致。
 13. PostgreSQL 备份能够在全新实例中恢复。
+14. 自然语言规则在确认前不影响排表；歧义、未知引用、不支持类型和硬冲突都会阻止确认。
+15. generation_run 和发布快照能够指出实际使用的规则集、编译器版本及每条规则的满足状态。
+16. DeepSeek 不可用时，既有结构化功能和已确认规则集仍能正常生成。
 
 ## 25. 配置默认值与待确认项
 
@@ -1768,6 +1951,10 @@ flowchart TD
 | 单波人数上限 | 64 | 服务端安全配置 |
 | 单排表总位置上限 | 1,200 | 服务端安全配置 |
 | 求解时限 | 10 秒 | 服务端配置/生成参数 |
+| 自然语言规则开关 | 默认关闭，配置完成后启用 | 服务端配置 |
+| 自然语言模型 | `deepseek-v4` 配置别名 | 服务端配置，记录实际模型标识 |
+| 自然语言输入上限 | 2,000 字符 | 服务端配置 |
+| 模型调用超时 | 20 秒 | 服务端配置 |
 | 编辑锁租期 | 90 秒 | 服务端配置 |
 | 心跳间隔 | 30 秒 | 前后端配置 |
 | 导入文件上限 | 10 MB | 服务端配置 |
@@ -1790,6 +1977,9 @@ flowchart TD
 | 草稿模型 | 关系表 | 支持高频拖拽、校验和局部更新 |
 | 排表变量 | 角色×波次×配置队伍 | 比角色×位置更少，且不硬编码三支队伍 |
 | 数据删除 | 软停用 | 保留历史引用和导入匹配稳定性 |
+| 自然语言规则归属 | 当前排表的确认规则集 | 本次要求不会污染可复用副本版本 |
+| LLM 职责 | 解释器，不是求解器 | 白名单 Schema、确定性编译和 OR-Tools 保证可校验与可复现 |
+| LLM 生成排表 | 长期实验性 Hint | 不裁剪候选池、不绕过约束，最终结果仍由 OR-Tools 决策 |
 
 ## 27. 技术参考
 

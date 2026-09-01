@@ -207,6 +207,7 @@ def solve(solver_input: SolverInput) -> SolverResult:
 
     total_score = sum(participant.score for participant in participants)
     early_terms: list[cp_model.LinearExpr] = []
+    assigned_by_wave: dict[int, cp_model.LinearExpr] = {}
     for participant_index, _participant in enumerate(participants):
         for wave_no in waves:
             early_weight = solver_input.wave_count - wave_no + 1
@@ -215,6 +216,29 @@ def solve(solver_input: SolverInput) -> SolverResult:
             ]
             if solver_input.dungeon.missing_slot_policy.mode == "FILL_EARLIER_WAVES":
                 early_terms.append(early_weight * cp_model.LinearExpr.sum(team_assignments))
+    for wave_no in waves:
+        assigned_by_wave[wave_no] = cp_model.LinearExpr.sum(
+            [
+                x[participant_index, wave_no, team_index]
+                for participant_index, _participant in enumerate(participants)
+                for team_index, _team in enumerate(teams)
+            ]
+        )
+
+    spread_objective: cp_model.IntVar | None = None
+    if solver_input.dungeon.missing_slot_policy.mode == "SPREAD_EVENLY":
+        maximum_wave_fill = model.new_int_var(
+            0, solver_input.dungeon.participants_per_wave, "wave_fill_max"
+        )
+        minimum_wave_fill = model.new_int_var(
+            0, solver_input.dungeon.participants_per_wave, "wave_fill_min"
+        )
+        spread_objective = model.new_int_var(
+            0, solver_input.dungeon.participants_per_wave, "wave_fill_spread"
+        )
+        model.add_max_equality(maximum_wave_fill, list(assigned_by_wave.values()))
+        model.add_min_equality(minimum_wave_fill, list(assigned_by_wave.values()))
+        model.add(spread_objective == maximum_wave_fill - minimum_wave_fill)
 
     composition_penalties = [
         (composition_rules[rule_index].priority - 1) * variable
@@ -351,6 +375,25 @@ def solve(solver_input: SolverInput) -> SolverResult:
         model.add(assigned_total == best_assigned_count)
         _replace_hints(model, hint_variables, availability_solver)
 
+    if can_continue and spread_objective is not None:
+        spread_solver, spread_status = _solve_stage(
+            model,
+            spread_objective,
+            maximize=False,
+            time_limit_seconds=_stage_budget(solver_input.time_limit_seconds, 0.05),
+            random_seed=solver_input.random_seed,
+        )
+        elapsed += spread_solver.wall_time
+        if spread_status in (SolverStatus.OPTIMAL, SolverStatus.FEASIBLE):
+            best_solver, best_status = spread_solver, spread_status
+            best_spread = round(spread_solver.value(spread_objective))
+            can_continue = spread_status == SolverStatus.OPTIMAL or best_spread == 0
+            if can_continue:
+                model.add(spread_objective == best_spread)
+                _replace_hints(model, hint_variables, spread_solver)
+        else:
+            can_continue = False
+
     complete_multiplier = len(team_full) + 1
     complete_objective = complete_multiplier * cp_model.LinearExpr.sum(
         list(wave_full.values())
@@ -378,7 +421,7 @@ def solve(solver_input: SolverInput) -> SolverResult:
             can_continue = False
 
     early_objective = cp_model.LinearExpr.sum(early_terms)
-    if can_continue:
+    if can_continue and early_terms:
         early_solver, early_status = _solve_stage(
             model,
             early_objective,

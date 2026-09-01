@@ -5,7 +5,9 @@ import re
 import urllib.error
 import urllib.request
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
+from threading import Barrier
 
 import psycopg
 from openpyxl import Workbook
@@ -157,6 +159,22 @@ viewer_login = client_request(
     {"username": "viewer-smoke", "password": "viewer-password"},
 )
 assert isinstance(viewer_login, dict) and viewer_login["role"] == "VIEWER"
+editor = request(
+    "/users",
+    "POST",
+    {"username": "editor-smoke", "password": "editor-password", "role": "EDITOR"},
+)
+assert isinstance(editor, dict) and editor["role"] == "EDITOR"
+editor_jar = http.cookiejar.CookieJar()
+editor_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(editor_jar))
+editor_login = client_request(
+    editor_opener,
+    editor_jar,
+    "/auth/login",
+    "POST",
+    {"username": "editor-smoke", "password": "editor-password"},
+)
+assert isinstance(editor_login, dict) and editor_login["role"] == "EDITOR"
 assert isinstance(client_request(viewer_opener, viewer_jar, "/dungeons"), dict)
 try:
     client_request(
@@ -638,6 +656,41 @@ version_payload = {
     "optimizationRules": source_version["optimizationRules"],
     "missingSlotPolicy": source_version["missingSlotPolicy"],
 }
+concurrent_dungeon = request(
+    "/dungeons",
+    "POST",
+    {
+        "code": "CONCURRENT_VERSION_SMOKE",
+        "name": "并发版本验收副本",
+        "isActive": True,
+    },
+)
+assert isinstance(concurrent_dungeon, dict)
+concurrent_barrier = Barrier(2)
+
+
+def create_concurrent_version(
+    client: urllib.request.OpenerDirector, cookies: http.cookiejar.CookieJar
+) -> object:
+    concurrent_barrier.wait()
+    return client_request(
+        client,
+        cookies,
+        f"/dungeons/{concurrent_dungeon['id']}/versions",
+        "POST",
+        version_payload,
+    )
+
+
+with ThreadPoolExecutor(max_workers=2) as executor:
+    concurrent_futures = [
+        executor.submit(create_concurrent_version, opener, jar),
+        executor.submit(create_concurrent_version, editor_opener, editor_jar),
+    ]
+    concurrent_versions = [future.result() for future in concurrent_futures]
+assert all(isinstance(version, dict) for version in concurrent_versions)
+assert sorted(version["versionNo"] for version in concurrent_versions) == [1, 2]
+
 damage_only_payload = {
     **version_payload,
     "compositionRules": {
@@ -659,6 +712,13 @@ draft = request(f"/dungeons/{dungeon['id']}/versions", "POST", damage_only_paylo
 assert isinstance(draft, dict) and draft["status"] == "DRAFT"
 published = request(f"/dungeon-versions/{draft['id']}/publish", "POST")
 assert isinstance(published, dict) and published["status"] == "PUBLISHED"
+immutable_error = request_error(
+    f"/dungeon-versions/{published['id']}",
+    "PATCH",
+    damage_only_payload,
+    expected_status=409,
+)
+assert immutable_error["error"]["code"] == "DUNGEON_VERSION_IMMUTABLE"
 migration_preview = request(
     f"/schedules/{schedule['id']}/copy/preview",
     "POST",

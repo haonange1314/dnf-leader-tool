@@ -38,21 +38,68 @@ export interface TeamDefinition {
   memberCount: number;
   strengthRank: number | null;
 }
-export interface DungeonVersion {
+export type DungeonRoleType = "DAMAGE" | "BUFFER";
+export interface FormulaDefinition {
+  code: string;
+  version: number;
+  damageUnit: "YI";
+  damageScale: number;
+  bufferScale: number;
+  teamDamageMode: "SUM";
+  twoBufferMode: "SUM";
+}
+export interface CompositionRuleDefinition {
+  code: string;
+  applicableTeamKeys: string[];
+  roles: Partial<Record<DungeonRoleType, number>>;
+  priority: number;
+}
+export interface SpecialRoleRuleDefinition {
+  code: string;
+  characterFlag: "TREASURE_DAMAGE";
+  countPerWave: number;
+  targetTeamKey: string;
+  requiredForCompleteWave: boolean;
+  companionPolicy: {
+    roleType: DungeonRoleType;
+    objective: "MINIMIZE_OTHER_MEMBER_SCORE";
+  } | null;
+}
+export interface DungeonVersionInput {
+  defaultWaveCount: number;
+  minWaveCount: number;
+  maxWaveCount: number | null;
+  formula: FormulaDefinition;
+  teams: TeamDefinition[];
+  compositionRules: {
+    schemaVersion: 1;
+    allowed: CompositionRuleDefinition[];
+  };
+  specialRoleRules: {
+    schemaVersion: 1;
+    rules: SpecialRoleRuleDefinition[];
+  };
+  strengthOrderRules: {
+    schemaVersion: 1;
+    orders: Array<{ metric: DungeonRoleType; teams: string[] }>;
+  };
+  optimizationRules: {
+    schemaVersion: 1;
+    balanceAcrossWaves: DungeonRoleType[];
+    respectPlayerPreferences: boolean;
+  };
+  missingSlotPolicy: {
+    schemaVersion: 1;
+    mode: "FILL_EARLIER_WAVES" | "SPREAD_EVENLY";
+  };
+}
+export interface DungeonVersion extends DungeonVersionInput {
   id: string;
   dungeonId: string;
   versionNo: number;
   status: "DRAFT" | "PUBLISHED" | "RETIRED";
-  defaultWaveCount: number;
-  minWaveCount: number;
-  maxWaveCount: number | null;
-  formula: Record<string, unknown>;
-  teams: TeamDefinition[];
-  compositionRules: Record<string, unknown>;
-  specialRoleRules: Record<string, unknown>;
-  strengthOrderRules: Record<string, unknown>;
-  optimizationRules: Record<string, unknown>;
-  missingSlotPolicy: Record<string, unknown>;
+  createdAt: string;
+  publishedAt: string | null;
 }
 export interface Dungeon {
   id: string;
