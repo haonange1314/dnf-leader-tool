@@ -36,6 +36,7 @@ pythonpath = ["."]
 testpaths = ["tests"]
 markers = [
   "performance: explicit solver and export performance acceptance",
+  "quality: explicit 12-person raid scheduling quality baseline",
 ]
 
 [tool.ruff]

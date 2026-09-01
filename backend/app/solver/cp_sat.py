@@ -394,14 +394,48 @@ def solve(solver_input: SolverInput) -> SolverResult:
         else:
             can_continue = False
 
+    early_objective = cp_model.LinearExpr.sum(early_terms)
     complete_multiplier = len(team_full) + 1
     complete_objective = complete_multiplier * cp_model.LinearExpr.sum(
         list(wave_full.values())
     ) + cp_model.LinearExpr.sum(list(team_full.values()))
+    complete_upper_bound = _complete_objective_upper_bound(
+        best_assigned_count,
+        solver_input.wave_count,
+        tuple(team.member_count for team in teams),
+        complete_multiplier,
+    )
+    early_upper_bound = _early_fill_upper_bound(
+        best_assigned_count,
+        solver_input.wave_count,
+        solver_input.dungeon.participants_per_wave,
+    )
+    complete_search_objective = complete_objective
+    complete_search_upper_bound = complete_upper_bound
+    if early_terms and complete_search_upper_bound <= (
+        INT64_MAX - early_upper_bound
+    ) // (early_upper_bound + 1):
+        # This bounded tie-break keeps completeness strictly dominant while
+        # removing equivalent wave permutations from the search space.
+        complete_search_objective = (
+            (early_upper_bound + 1) * complete_objective + early_objective
+        )
+        complete_search_upper_bound = (
+            (early_upper_bound + 1) * complete_search_upper_bound + early_upper_bound
+        )
+    special_total = cp_model.LinearExpr.sum(special_satisfied)
+    if special_satisfied and complete_search_upper_bound <= (
+        INT64_MAX - len(special_satisfied)
+    ) // (len(special_satisfied) + 1):
+        # A second bounded tie-break gives later special-role optimization a
+        # useful incumbent without changing the fixed stage priorities.
+        complete_search_objective = (
+            (len(special_satisfied) + 1) * complete_search_objective + special_total
+        )
     if can_continue:
         complete_solver, complete_status = _solve_stage(
             model,
-            complete_objective,
+            complete_search_objective,
             maximize=True,
             time_limit_seconds=_stage_budget(solver_input.time_limit_seconds, 0.15),
             random_seed=solver_input.random_seed,
@@ -410,7 +444,6 @@ def solve(solver_input: SolverInput) -> SolverResult:
         if complete_status in (SolverStatus.OPTIMAL, SolverStatus.FEASIBLE):
             best_solver, best_status = complete_solver, complete_status
             best_complete = round(complete_solver.value(complete_objective))
-            complete_upper_bound = complete_multiplier * solver_input.wave_count + len(team_full)
             can_continue = complete_status == SolverStatus.OPTIMAL or (
                 best_complete == complete_upper_bound
             )
@@ -420,7 +453,6 @@ def solve(solver_input: SolverInput) -> SolverResult:
         else:
             can_continue = False
 
-    early_objective = cp_model.LinearExpr.sum(early_terms)
     if can_continue and early_terms:
         early_solver, early_status = _solve_stage(
             model,
@@ -433,11 +465,6 @@ def solve(solver_input: SolverInput) -> SolverResult:
         if early_status in (SolverStatus.OPTIMAL, SolverStatus.FEASIBLE):
             best_solver, best_status = early_solver, early_status
             best_early = round(early_solver.value(early_objective))
-            early_upper_bound = _early_fill_upper_bound(
-                best_assigned_count,
-                solver_input.wave_count,
-                solver_input.dungeon.participants_per_wave,
-            )
             can_continue = early_status == SolverStatus.OPTIMAL or (best_early == early_upper_bound)
             if can_continue:
                 model.add(early_objective == best_early)
@@ -468,7 +495,6 @@ def solve(solver_input: SolverInput) -> SolverResult:
             can_continue = False
 
     if can_continue and special_satisfied:
-        special_total = cp_model.LinearExpr.sum(special_satisfied)
         special_solver, special_status = _solve_stage(
             model,
             special_total,
@@ -480,8 +506,16 @@ def solve(solver_input: SolverInput) -> SolverResult:
         if special_status in (SolverStatus.OPTIMAL, SolverStatus.FEASIBLE):
             best_solver, best_status = special_solver, special_status
             best_special_count = round(special_solver.value(special_total))
+            maximum_complete_waves = min(
+                solver_input.wave_count,
+                best_assigned_count // solver_input.dungeon.participants_per_wave,
+            )
+            special_upper_bound = (
+                len(solver_input.dungeon.special_role_rules.rules)
+                * maximum_complete_waves
+            )
             can_continue = special_status == SolverStatus.OPTIMAL or (
-                best_special_count == len(special_satisfied)
+                best_special_count == special_upper_bound
             )
             if can_continue:
                 model.add(special_total == best_special_count)
@@ -615,6 +649,25 @@ def _early_fill_upper_bound(
         if remaining == 0:
             break
     return upper_bound
+
+
+def _complete_objective_upper_bound(
+    assigned_count: int,
+    wave_count: int,
+    team_capacities: tuple[int, ...],
+    complete_multiplier: int,
+) -> int:
+    participants_per_wave = sum(team_capacities)
+    complete_waves = min(wave_count, assigned_count // participants_per_wave)
+    remaining = assigned_count - complete_waves * participants_per_wave
+    additional_complete_teams = 0
+    for capacity in sorted(team_capacities):
+        if capacity > remaining:
+            break
+        additional_complete_teams += 1
+        remaining -= capacity
+    complete_teams = complete_waves * len(team_capacities) + additional_complete_teams
+    return complete_multiplier * complete_waves + complete_teams
 
 
 def _validate_input(solver_input: SolverInput) -> None:
