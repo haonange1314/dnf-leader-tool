@@ -1,4 +1,4 @@
-.PHONY: bootstrap dev up down logs migrate seed init-owner solver-poc test test-backend test-frontend test-stack test-e2e test-performance prod-config prod-up prod-down prod-logs backup restore check
+.PHONY: bootstrap dev up down logs migrate seed init-owner solver-poc test test-backend test-frontend test-stack test-e2e test-performance test-quality prod-config prod-up prod-down prod-logs backup restore check
 
 export UV_CACHE_DIR ?= $(CURDIR)/.uv-cache
 
@@ -47,6 +47,9 @@ test-e2e:
 
 test-performance:
 	cd backend && uv run pytest -m performance -s
+
+test-quality:
+	cd backend && uv run pytest -m quality -s
 
 prod-config:
 	docker compose --env-file .env.production -f compose.yaml -f compose.production.yaml config --quiet
