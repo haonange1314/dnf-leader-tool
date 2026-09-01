@@ -548,7 +548,7 @@ unique `(dungeon_version_id, team_key)` 和 `(dungeon_version_id, display_order)
 | `is_fixed_lead_team_buffer` | boolean | default false，仅奶可设置 |
 | `is_group_hunt` | boolean | default false，仅 C 可设置 |
 | `default_raid_participant` | boolean | default false |
-| `note` | text | 可空 |
+| `note` | text | 可空，历史兼容字段，不在人员页面录入或展示 |
 | `is_active` | boolean | default true |
 | `sort_order` | integer | not null，持久化所属玩家内的角色显示顺序 |
 | `created_at` | timestamptz | not null |
@@ -564,7 +564,7 @@ unique `(dungeon_version_id, team_key)` 和 `(dungeon_version_id, display_order)
 - 只有 `DAMAGE` 可以设置 `is_group_hunt=true`。
 - 两类评分都必须大于等于 0。
 
-人员列表先按 `sort_order` 排序，再使用规范化名称或创建时间和 ID 保证旧数据及并列值的稳定顺序。新建和 Excel 导入的玩家、角色追加到各自作用域末尾；迁移旧数据时分别保留原玩家名称顺序和角色创建顺序。
+人员列表先按 `sort_order` 排序，再使用规范化名称或创建时间和 ID 保证旧数据及并列值的稳定顺序。手动新建的玩家、角色追加到各自作用域末尾；Excel 确认导入按数据行首次出现顺序重排导入范围，未出现在表格中的既有玩家和角色保持原相对顺序并置于导入项之后。迁移旧数据时分别保留原玩家名称顺序和角色创建顺序。
 
 ### 8.6 公式版本
 
@@ -824,7 +824,7 @@ unique `(schedule_id, version_no)`。发布后禁止 UPDATE 和 DELETE，归档�
 
 保存行号、规范化 payload、匹配到的玩家/角色、动作 `CREATE/UPDATE/IGNORE/ERROR` 和错误列表。
 
-导入确认后在一个事务中写入人员数据，并把批次标记为 `COMMITTED`。过期未确认批次可以安全清理。
+导入确认后在一个事务中写入人员数据，按暂存行顺序更新玩家和角色的 `sort_order`，并把批次标记为 `COMMITTED`。即使某行内容为 `IGNORE`，也参与顺序计算；未出现在导入文件中的既有记录保持相对顺序并追加在导入项之后。过期未确认批次可以安全清理。
 
 ## 9. API 设计
 
@@ -1367,6 +1367,7 @@ class SolverResult:
 - 不执行 Excel 公式；公式单元格必须有可读取的缓存值，否则报错。
 - 文件大小、行数和单元格文本长度使用配置限制。
 - 预览按规范化后的“玩家称呼 + 职业”匹配；文件内重复职业直接报错，历史重复数据会阻止迁移并要求先清理，禁止静默覆盖。
+- 确认导入严格使用角色数据页中的有效数据行顺序：玩家按首次出现排序，同一玩家的角色按行顺序排序；未导入的既有记录保持相对顺序并置后。
 
 ### 14.3 预览和确认
 

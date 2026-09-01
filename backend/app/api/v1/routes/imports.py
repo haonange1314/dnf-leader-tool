@@ -5,7 +5,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, File, UploadFile
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
@@ -112,12 +112,11 @@ def commit_import(batch_id: uuid.UUID, db: DbSession, current_user: EditorUser) 
     if any(row.action == "ERROR" for row in batch.rows):
         raise AppError(409, "IMPORT_HAS_ERRORS", "请先修正错误行后重新预览")
     player_cache: dict[str, Player] = {}
-    current_player_order = db.scalar(select(func.max(Player.sort_order)))
-    next_player_order = int(current_player_order) + 1 if current_player_order is not None else 0
-    next_character_order: dict[uuid.UUID, int] = {}
+    imported_player_ids: list[uuid.UUID] = []
+    imported_player_id_set: set[uuid.UUID] = set()
+    imported_character_ids: dict[uuid.UUID, list[uuid.UUID]] = {}
+    imported_character_id_sets: dict[uuid.UUID, set[uuid.UUID]] = {}
     for row in batch.rows:
-        if row.action == "IGNORE":
-            continue
         payload = row.payload
         player = player_cache.get(payload["player_key"])
         if player is None:
@@ -129,12 +128,14 @@ def commit_import(batch_id: uuid.UUID, db: DbSession, current_user: EditorUser) 
                     display_name=payload["player_name"],
                     display_name_key=payload["player_key"],
                     is_active=True,
-                    sort_order=next_player_order,
+                    sort_order=0,
                 )
-                next_player_order += 1
                 db.add(player)
                 db.flush()
             player_cache[payload["player_key"]] = player
+        if player.id not in imported_player_id_set:
+            imported_player_ids.append(player.id)
+            imported_player_id_set.add(player.id)
         character = None
         if row.matched_character_id:
             character = db.get(Character, row.matched_character_id)
@@ -147,28 +148,56 @@ def commit_import(batch_id: uuid.UUID, db: DbSession, current_user: EditorUser) 
                 raise AppError(409, "IMPORT_DATA_CHANGED", "同玩家同职业角色不唯一，请重新预览")
             character = matches[0] if matches else None
         if character is None:
-            if player.id not in next_character_order:
-                current_character_order = db.scalar(
-                    select(func.max(Character.sort_order)).where(
-                        Character.player_id == player.id
-                    )
-                )
-                next_character_order[player.id] = (
-                    int(current_character_order) + 1
-                    if current_character_order is not None
-                    else 0
-                )
             character_id = uuid.uuid4()
             character = Character(
                 id=character_id,
                 player_id=player.id,
                 name=str(payload["profession"]),
                 name_key=str(payload["profession_key"]),
-                sort_order=next_character_order[player.id],
+                sort_order=0,
             )
-            next_character_order[player.id] += 1
             db.add(character)
-        _apply_payload(character, payload)
+        player_character_ids = imported_character_ids.setdefault(player.id, [])
+        player_character_id_set = imported_character_id_sets.setdefault(player.id, set())
+        if character.id not in player_character_id_set:
+            player_character_ids.append(character.id)
+            player_character_id_set.add(character.id)
+        if row.action != "IGNORE":
+            _apply_payload(character, payload)
+
+    db.flush()
+    all_players = list(
+        db.scalars(
+            select(Player).order_by(
+                Player.sort_order,
+                Player.display_name_key,
+                Player.id,
+            )
+        )
+    )
+    player_by_id = {player.id: player for player in all_players}
+    remaining_player_ids = [
+        player.id for player in all_players if player.id not in imported_player_id_set
+    ]
+    for sort_order, player_id in enumerate(imported_player_ids + remaining_player_ids):
+        player_by_id[player_id].sort_order = sort_order
+
+    for player_id, ordered_ids in imported_character_ids.items():
+        characters = list(
+            db.scalars(
+                select(Character)
+                .where(Character.player_id == player_id)
+                .order_by(Character.sort_order, Character.created_at, Character.id)
+            )
+        )
+        imported_ids = imported_character_id_sets[player_id]
+        remaining_ids = [
+            character.id for character in characters if character.id not in imported_ids
+        ]
+        character_by_id = {character.id: character for character in characters}
+        for sort_order, character_id in enumerate(ordered_ids + remaining_ids):
+            character_by_id[character_id].sort_order = sort_order
+
     batch.status = "COMMITTED"
     batch.committed_at = utc_now()
     try:

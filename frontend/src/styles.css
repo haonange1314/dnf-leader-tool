@@ -207,6 +207,11 @@ body {
 .personnel-player-collapse {
   background: white;
 }
+.personnel-player-collapse.ant-collapse
+  > .ant-collapse-item
+  > .ant-collapse-header {
+  align-items: center;
+}
 .sortable-player,
 .sortable-character {
   position: relative;

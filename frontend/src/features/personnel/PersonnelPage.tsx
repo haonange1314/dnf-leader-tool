@@ -159,7 +159,6 @@ export function PersonnelPage({ userRole, onError, onSuccess }: Props) {
       isFixedLeadTeamBuffer: character.isFixedLeadTeamBuffer,
       isGroupHunt: character.isGroupHunt,
       defaultRaidParticipant: character.defaultRaidParticipant,
-      note: character.note,
       isActive: character.isActive,
     });
     setCharacterPlayer(player);
@@ -181,6 +180,7 @@ export function PersonnelPage({ userRole, onError, onSuccess }: Props) {
       isFixedLeadTeamBuffer:
         role === "BUFFER" && values.isFixedLeadTeamBuffer,
       isGroupHunt: role === "DAMAGE" && values.isGroupHunt,
+      note: editingCharacter?.note ?? null,
     };
     try {
       await api(
@@ -494,9 +494,6 @@ export function PersonnelPage({ userRole, onError, onSuccess }: Props) {
             valuePropName="checked"
           >
             <Switch />
-          </Form.Item>
-          <Form.Item label="备注" name="note">
-            <Input.TextArea />
           </Form.Item>
           <Form.Item label="启用" name="isActive" valuePropName="checked">
             <Switch />
