@@ -90,6 +90,7 @@ interface Props {
 const ISSUE_LABELS: Record<string, string> = {
   CAPACITY_EXCEEDED: "参团角色超过排表容量",
   PARTICIPANT_SHORTAGE: "参团角色少于排表容量",
+  DISTINCT_PLAYER_SHORTAGE: "每波可用玩家人数不足",
   DAMAGE_IDEAL_SHORTAGE: "C 数量不足理想组成",
   BUFFER_BASE_SHORTAGE: "奶数量不足基础组成",
   TREASURE_SHORTAGE: "秘宝 C 数量不足",
@@ -2415,7 +2416,7 @@ function describeGenerationDiagnostic(
   }
 }
 
-function describeIssue(issue: ValidationIssue): string {
+export function describeIssue(issue: ValidationIssue): string {
   const params = issue.message_params;
   switch (issue.code) {
     case "TEAM_INCOMPLETE":
@@ -2439,6 +2440,8 @@ function describeIssue(issue: ValidationIssue): string {
       return `容量 ${params.capacity}，当前 ${params.current}，请减少角色或增加波数。`;
     case "PARTICIPANT_SHORTAGE":
       return `容量 ${params.capacity}，当前 ${params.current}，还缺 ${params.shortage} 个角色。`;
+    case "DISTINCT_PLAYER_SHORTAGE":
+      return `每波需要 ${params.required} 个不同玩家，当前只有 ${params.current} 个，还缺 ${params.shortage} 个；同一玩家在同一波最多使用一个角色。`;
     case "DAMAGE_IDEAL_SHORTAGE":
     case "BUFFER_BASE_SHORTAGE":
     case "TREASURE_SHORTAGE":

@@ -4,7 +4,11 @@ import pytest
 from pydantic import ValidationError
 
 from app.domain.dungeon import builtin_raid_12_definition
-from app.domain.schedule import composition_feasibility, composition_role_requirements
+from app.domain.schedule import (
+    composition_feasibility,
+    composition_role_requirements,
+    distinct_player_feasibility,
+)
 from app.schemas.dungeon import CompositionRule, CompositionRules, RoleType
 from app.schemas.schedule import (
     PlayerPreferenceInput,
@@ -89,6 +93,24 @@ def test_builtin_full_composition_reports_role_infeasibility() -> None:
 
     assert result.can_fill_all_teams is False
     assert result.minimum_damage == 6
+
+
+def test_distinct_player_shortage_ignores_extra_characters_from_same_player() -> None:
+    result = distinct_player_feasibility(
+        12,
+        [*(f"player-{index}" for index in range(11)), "player-0", "player-0"],
+    )
+
+    assert result.current == 11
+    assert result.shortage == 1
+    assert result.can_fill_wave is False
+
+
+def test_custom_four_player_dungeon_can_fill_with_four_distinct_players() -> None:
+    result = distinct_player_feasibility(4, ["a", "b", "c", "d"])
+
+    assert result.shortage == 0
+    assert result.can_fill_wave is True
 
 
 def test_schedule_name_rejects_whitespace_only_input() -> None:

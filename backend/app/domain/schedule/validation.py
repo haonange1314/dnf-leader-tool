@@ -28,6 +28,31 @@ class CompositionFeasibility:
     buffer_shortage: int
 
 
+@dataclass(frozen=True)
+class DistinctPlayerFeasibility:
+    required: int
+    current: int
+    shortage: int
+
+    @property
+    def can_fill_wave(self) -> bool:
+        return self.shortage == 0
+
+
+def distinct_player_feasibility(
+    required_per_wave: int, player_ids: Iterable[object]
+) -> DistinctPlayerFeasibility:
+    """Check the per-wave player limit imposed by one character per player."""
+    if required_per_wave < 0:
+        raise ValueError("required_per_wave 不能小于 0")
+    current = len(set(player_ids))
+    return DistinctPlayerFeasibility(
+        required=required_per_wave,
+        current=current,
+        shortage=max(0, required_per_wave - current),
+    )
+
+
 def composition_role_requirements(
     composition_rules: CompositionRules, team_keys: Iterable[str]
 ) -> RoleRequirements:

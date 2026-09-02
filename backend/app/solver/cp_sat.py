@@ -76,7 +76,11 @@ def solve(solver_input: SolverInput) -> SolverResult:
     participant_indices_by_player: dict[str, list[int]] = defaultdict(list)
     for participant_index, participant in enumerate(participants):
         participant_indices_by_player[participant.player_id].append(participant_index)
-    for indices in participant_indices_by_player.values():
+    preference_by_player = {
+        preference.player_id: preference for preference in solver_input.player_preferences
+    }
+    player_assignment_upper_bound = 0
+    for player_id, indices in participant_indices_by_player.items():
         for wave_no in waves:
             model.add(
                 sum(
@@ -86,10 +90,24 @@ def solve(solver_input: SolverInput) -> SolverResult:
                 )
                 <= 1
             )
+        allowed_waves: set[int] = set()
+        for participant_index in indices:
+            participant_allowed_waves = participants[participant_index].allowed_waves
+            allowed_waves.update(
+                waves
+                if participant_allowed_waves is None
+                else participant_allowed_waves
+            )
+        player_capacity = min(len(indices), len(allowed_waves))
+        preference = preference_by_player.get(player_id)
+        if preference is not None and preference.max_wave_count is not None:
+            player_capacity = min(player_capacity, preference.max_wave_count)
+        model.add(
+            sum(assigned[participant_index] for participant_index in indices)
+            <= player_capacity
+        )
+        player_assignment_upper_bound += player_capacity
 
-    preference_by_player = {
-        preference.player_id: preference for preference in solver_input.player_preferences
-    }
     preference_penalties: list[cp_model.LinearExpr] = []
     for player_id, indices in participant_indices_by_player.items():
         preference = preference_by_player.get(player_id)
@@ -336,6 +354,15 @@ def solve(solver_input: SolverInput) -> SolverResult:
             companion_penalties.append(target_damage - selected_core_score)
 
     assigned_total = cp_model.LinearExpr.sum(assigned)
+    position_assignment_upper_bound = min(
+        len(participants),
+        solver_input.wave_count * solver_input.dungeon.participants_per_wave,
+    )
+    assignment_upper_bound = min(
+        position_assignment_upper_bound,
+        player_assignment_upper_bound,
+    )
+    model.add(assigned_total <= assignment_upper_bound)
     hint_variables = [*x.values(), *special_variables.values()]
     elapsed = 0.0
     objective_stages: list[ObjectiveStageResult] = []
@@ -349,6 +376,7 @@ def solve(solver_input: SolverInput) -> SolverResult:
         value: int,
         *,
         target_reached: bool,
+        duration_seconds: float | None = None,
     ) -> None:
         nonlocal all_stage_outcomes_optimal
         outcome = (
@@ -365,18 +393,45 @@ def solve(solver_input: SolverInput) -> SolverResult:
                 code=code,
                 value=value,
                 outcome=outcome,
-                duration_seconds=stage_solver.wall_time,
+                duration_seconds=(
+                    stage_solver.wall_time
+                    if duration_seconds is None
+                    else duration_seconds
+                ),
             )
-        )
-
-    availability_solver, availability_status = _solve_stage(
-        model,
-        assigned_total,
-        maximize=True,
-        time_limit_seconds=_stage_budget(solver_input.time_limit_seconds, 0.30),
-        random_seed=solver_input.random_seed,
     )
-    elapsed += availability_solver.wall_time
+
+    availability_budget = _stage_budget(solver_input.time_limit_seconds, 0.30)
+    if player_assignment_upper_bound < position_assignment_upper_bound:
+        target_model = model.clone()
+        target_model.add(assigned_total == assignment_upper_bound)
+        availability_solver, availability_status = _solve_stage(
+            target_model,
+            assigned_total,
+            maximize=True,
+            time_limit_seconds=availability_budget * 0.75,
+            random_seed=solver_input.random_seed,
+        )
+        availability_elapsed = availability_solver.wall_time
+    else:
+        availability_solver, availability_status = _solve_stage(
+            model,
+            assigned_total,
+            maximize=True,
+            time_limit_seconds=availability_budget,
+            random_seed=solver_input.random_seed,
+        )
+        availability_elapsed = availability_solver.wall_time
+    if availability_status not in (SolverStatus.OPTIMAL, SolverStatus.FEASIBLE):
+        availability_solver, availability_status = _solve_stage(
+            model,
+            assigned_total,
+            maximize=True,
+            time_limit_seconds=max(0.05, availability_budget - availability_elapsed),
+            random_seed=solver_input.random_seed,
+        )
+        availability_elapsed += availability_solver.wall_time
+    elapsed += availability_elapsed
     best_solver = availability_solver
     if availability_status not in (SolverStatus.OPTIMAL, SolverStatus.FEASIBLE):
         return SolverResult(
@@ -400,15 +455,13 @@ def solve(solver_input: SolverInput) -> SolverResult:
         )
 
     best_assigned_count = round(availability_solver.value(assigned_total))
-    assignment_upper_bound = min(
-        len(participants), solver_input.wave_count * solver_input.dungeon.participants_per_wave
-    )
     record_stage(
         "ASSIGNED_COUNT",
         availability_solver,
         availability_status,
         best_assigned_count,
         target_reached=best_assigned_count == assignment_upper_bound,
+        duration_seconds=availability_elapsed,
     )
     model.add(assigned_total == best_assigned_count)
     _replace_hints(model, hint_variables, availability_solver)

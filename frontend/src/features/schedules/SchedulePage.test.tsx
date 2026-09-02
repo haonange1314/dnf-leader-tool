@@ -1,7 +1,12 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, type ScheduleDetail } from "../../api/client";
-import { applyOptimisticAssignment, buildDropOperations, SchedulePage } from "./SchedulePage";
+import {
+  applyOptimisticAssignment,
+  buildDropOperations,
+  describeIssue,
+  SchedulePage,
+} from "./SchedulePage";
 
 vi.mock("../../api/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../api/client")>()),
@@ -97,6 +102,18 @@ function editLockResponse(path: string) {
 describe("SchedulePage", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => cleanup());
+
+  it("explains when distinct players cannot fill a wave", () => {
+    expect(
+      describeIssue({
+        severity: "WARNING",
+        code: "DISTINCT_PLAYER_SHORTAGE",
+        message_params: { required: 12, current: 11, shortage: 1 },
+      }),
+    ).toBe(
+      "每波需要 12 个不同玩家，当前只有 11 个，还缺 1 个；同一玩家在同一波最多使用一个角色。",
+    );
+  });
 
   it("opens the readonly wave layout from the schedule list", async () => {
     vi.mocked(api).mockImplementation(async (path: string) => {
