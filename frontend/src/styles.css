@@ -416,6 +416,28 @@ body {
   border-color: rgb(0 0 0 / 8%);
   box-shadow: 0 6px 22px rgb(0 0 0 / 4%);
 }
+
+.schedule-rule-card .ant-card-body {
+  display: grid;
+  gap: 10px;
+}
+
+.schedule-rule-actions,
+.schedule-rule-preview-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.schedule-rule-preview {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 10px;
+  background: rgb(248 250 252 / 72%);
+}
 .validation-summary {
   margin-bottom: 8px;
 }

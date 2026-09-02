@@ -28,6 +28,26 @@ def test_edit_lock_heartbeat_is_capped_below_half_the_lease() -> None:
     assert settings.effective_edit_lock_heartbeat_seconds == 30
 
 
+def test_natural_language_rules_are_disabled_without_a_key_by_default() -> None:
+    settings = Settings()
+
+    assert settings.natural_language_rules_enabled is False
+    assert settings.deepseek_model == "deepseek-v4-flash"
+    assert settings.natural_language_rule_rate_limit_requests == 10
+
+
+def test_enabling_natural_language_rules_requires_secure_provider_config() -> None:
+    with pytest.raises(ValidationError, match="DEEPSEEK_API_KEY"):
+        Settings(natural_language_rules_enabled=True)
+
+    with pytest.raises(ValidationError, match="HTTPS"):
+        Settings(
+            natural_language_rules_enabled=True,
+            deepseek_api_key="secret",
+            deepseek_base_url="http://api.deepseek.com",
+        )
+
+
 def test_source_login_limit_cannot_be_lower_than_account_source_limit() -> None:
     with pytest.raises(ValidationError, match="LOGIN_RATE_LIMIT_SOURCE_ATTEMPTS"):
         Settings(login_rate_limit_attempts=10, login_rate_limit_source_attempts=5)

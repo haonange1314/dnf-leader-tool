@@ -208,6 +208,7 @@ dependencies = [
     { name = "alembic" },
     { name = "argon2-cffi" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "openpyxl" },
     { name = "ortools" },
     { name = "pillow" },
@@ -220,7 +221,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "httpx" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -233,6 +233,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.17,<2" },
     { name = "argon2-cffi", specifier = ">=25.1,<26" },
     { name = "fastapi", specifier = ">=0.128,<1" },
+    { name = "httpx", specifier = ">=0.28,<1" },
     { name = "openpyxl", specifier = ">=3.1,<4" },
     { name = "ortools", specifier = ">=9.15,<10" },
     { name = "pillow", specifier = ">=11,<13" },
@@ -245,7 +246,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx", specifier = ">=0.28,<1" },
     { name = "mypy", specifier = ">=1.19,<2" },
     { name = "pytest", specifier = ">=9.0,<10" },
     { name = "pytest-cov", specifier = ">=7.0,<8" },

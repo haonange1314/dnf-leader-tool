@@ -674,7 +674,7 @@ DRAFT 或 PUBLISHED 归档 → ARCHIVED
 | `context_hash` | char(64) | 参团实体、波数、副本队伍和规则能力目录哈希 |
 | `status` | varchar(16) | `PARSED/CONFIRMED/STALE/SUPERSEDED/FAILED` |
 | `model_provider` | varchar(40) | 首期为 `DEEPSEEK` |
-| `model_name` | varchar(120) | 首期配置别名为 `deepseek-v4`，保存调用时解析到的实际标识 |
+| `model_name` | varchar(120) | 默认 `deepseek-v4-flash`，保存调用时返回的实际标识 |
 | `provider_response_id` | varchar(160) | 可空，供应商请求追踪标识 |
 | `prompt_version` | varchar(40) | 系统提示词模板版本 |
 | `schema_version` | integer | 结构化规则 Schema 版本 |
@@ -687,6 +687,10 @@ DRAFT 或 PUBLISHED 归档 → ARCHIVED
 | `confirmed_at` | timestamptz | 可空 |
 
 规则集确认后不可原地修改。确认事务锁定排表，校验 `baseRevision`、编辑租约、`source_hash`、`context_hash` 和全部引用，把旧 `CONFIRMED` 规则集改为 `SUPERSEDED`，再更新 `schedules.active_rule_set_id` 并递增 revision。使用部分唯一索引保证每张排表至多一个 `CONFIRMED` 规则集。解析记录允许保留失败摘要，但不保存供应商隐式推理过程。
+
+#### `natural_language_rate_limits`
+
+按 `user_id` 保存当前解析窗口、请求次数和更新时间。解析前使用 PostgreSQL 事务级 advisory lock 串行化同一用户的计数更新；默认每 60 秒最多 10 次，达到阈值返回 429，过期记录自动清理。
 
 影响解释语义的参团人员、波数或副本结构发生变化时，将当前规则集标记为 `STALE` 并清空 `active_rule_set_id`；团长可保留原文重新解析。拖拽位置和锁定变化不改变 `context_hash`，生成前由确定性编译器检查其与规则的冲突。复制排表只把原文作为待解析输入带入，不复制已确认状态或解析引用。
 
@@ -1016,6 +1020,8 @@ GET    /generation-runs/{runId}
 
 解析请求携带 `sourceText` 和 `baseRevision`。服务端构造最小化上下文，调用 DeepSeek v4，随后依次执行 Pydantic Schema 校验、名称解析、白名单检查和规则冲突检查。解析响应仅供预览，不会自动设为生效规则。
 
+规则集列表响应同时返回服务端当前的 `maxSourceChars` 和 `parsingEnabled` 能力值。前端输入长度和可用状态必须以该响应为准，不能复制服务端默认值作为固定业务限制。
+
 `confirm` 和 `clear` 是排表聚合写操作，必须携带 `baseRevision`、有效编辑租约和当前规则集哈希。解析依据的人员、队伍或波次上下文已变化时返回 `409 RULE_SET_CONTEXT_STALE`，要求重新解析。模型调用在数据库事务外完成，不长时间占用排表锁。
 
 生成请求：
@@ -1228,7 +1234,7 @@ class ScoringFormula(Protocol):
 1. **模型解释**：`DeepSeekRuleProvider` 接收原文和最小化的当前排表实体目录，只能返回版本化 JSON Schema 中的规则候选、引用文本和置信/歧义标记。
 2. **确定性编译**：`ScheduleRuleCompiler` 在本地解析实体 ID、检查权限与上下文版本、校验副本兼容性，并把已确认规则转换为 `SolverScheduleRule`。编译器不依赖 HTTP、ORM 或模型客户端。
 
-首批白名单规则类型建议为：
+首批已实现的白名单规则类型为：
 
 ```text
 硬规则
@@ -1242,8 +1248,6 @@ CHARACTER_REQUIRED_TEAM
 PLAYER_PREFER_WAVE_RANGE
 PLAYER_PREFER_CONTIGUOUS
 CHARACTER_PREFER_TEAM
-TEAM_ROLE_COVERAGE_PRIORITY
-WAVE_TEAM_STRENGTH_PRIORITY
 ```
 
 模型响应示例只包含候选引用，不包含数据库 ID；实体 ID 由服务端解析：
@@ -1262,7 +1266,6 @@ WAVE_TEAM_STRENGTH_PRIORITY
       "candidateId": "R2",
       "type": "PLAYER_PREFER_WAVE_RANGE",
       "enforcement": "SOFT",
-      "softPriority": 1,
       "playerReference": {"text": "韩亚"},
       "waveRange": {"start": 1, "end": 6}
     }
@@ -1273,13 +1276,15 @@ WAVE_TEAM_STRENGTH_PRIORITY
 
 规则类型使用判别联合 Pydantic Schema，每种类型有独立必填字段和范围限制。模型不能输出任意表达式、Python、SQL、CP-SAT 代码或原始目标权重；未知类型一律进入 `unsupportedItems`。名称解析只在当前排表的参与者快照、当前副本队伍和有效波次内进行，零匹配和多匹配都不能自动确认。
 
+生成前会把保留的角色、槽位和波次锁与已确认硬规则做确定性冲突检查。直接冲突的规则标记为 `BLOCKED` 并记录具体原因；因生成未执行而无法评价的规则标记为 `NOT_APPLICABLE`。成功生成后才按实际结果记录 `SATISFIED` 或 `UNSATISFIED`，前端不得把这些状态合并成同一类提示。
+
 用户原文始终作为不可信数据放入独立消息字段；即使其中包含“忽略系统要求”、代码片段或外部链接，也不能改变系统提示、Schema 白名单或触发工具/网络访问。服务端不访问原文中的 URL，不执行模型返回内容。
 
 模型调用输入遵循最小化原则：仅发送理解本次要求所需的显示名、职业、角色类型、业务标签、队伍名和波次范围，不发送密码、会话、密钥、审计日志或无关人员数据。“最强”“较弱”等语义由模型映射为符号规则，再由本地评分公式计算，数值评分无需发送给模型。
 
-DeepSeek 适配器必须具备超时、有限重试、响应大小限制、结构化日志脱敏和按用户限流。API Key 只存在于后端密钥配置，绝不写入前端构建变量、提示词快照或数据库。Provider 不可用时仅禁用自然语言解析，结构化副本配置、已有确认规则集、手动编辑和 OR-Tools 生成继续工作。
+DeepSeek 适配器具备超时、一次有界重试、响应大小限制、不记录完整提示/响应和 PostgreSQL 持久化的按用户限流。API Key 只存在于后端密钥配置，绝不写入前端构建变量、提示词快照或数据库。Provider 不可用时仅禁用自然语言解析，结构化副本配置、已有确认规则集、手动编辑和 OR-Tools 生成继续工作。
 
-首批配置键为 `NATURAL_LANGUAGE_RULES_ENABLED`、`DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL`、`DEEPSEEK_TIMEOUT_SECONDS` 和 `RULE_PROMPT_VERSION`。生产环境仅在功能开关启用时要求 DeepSeek 配置完整并 fail-fast；开发和测试可以使用实现同一 Provider Protocol 的本地假适配器，不依赖公网模型。
+首批配置键为 `NATURAL_LANGUAGE_RULES_ENABLED`、`DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL`、`DEEPSEEK_TIMEOUT_SECONDS`、`RULE_PROMPT_VERSION`、`NATURAL_LANGUAGE_RULE_MAX_CHARS`、`NATURAL_LANGUAGE_RULE_RATE_LIMIT_REQUESTS` 和 `NATURAL_LANGUAGE_RULE_RATE_LIMIT_WINDOW_SECONDS`。生产环境仅在功能开关启用时要求 DeepSeek 配置完整并 fail-fast；开发和测试通过 MockTransport 验证同一 Provider 协议，不依赖公网模型。
 
 规则解释结果不保存或展示模型的隐式推理过程。持久化范围仅包括原文、结构化输出、引用解析、可公开的简短说明、模型/提示词/Schema 版本和供应商追踪 ID。
 
@@ -1413,7 +1418,7 @@ x[r,w,t] = 角色 r 是否进入波次 w 的队伍 t
 
 #### 阶段 C：本次排表的自然语言软目标
 
-已确认的自然语言硬规则在进入阶段 A 前直接编译为约束；与副本硬规则或锁定冲突时终止生成并返回结构化 issue。自然语言软目标在保持阶段 A、B 最好结果后执行，按规则集中预览并确认的顺序采用词法序优化。应用层把每种白名单规则映射为固定目标变量，忽略模型输出的任意原始权重。
+已确认的自然语言硬规则在进入阶段 A 前直接编译为约束；与副本硬规则或锁定冲突时终止生成并返回结构化 issue。自然语言软目标在保持阶段 A、B 最好结果后作为一个固定优先级阶段执行，以等权违反量汇总；应用层把每种白名单规则映射为固定目标变量，忽略模型输出的任意顺序或原始权重。
 
 #### 阶段 D：单波队伍关系
 
@@ -1948,7 +1953,7 @@ flowchart TD
 - CP-SAT 将队伍强度顺序、跨波平衡、特殊角色搭配和玩家偏好拆为有序求解阶段。对内置 12 人团本先保证红黄绿顺序，再在该结果空间内优化跨波差值；每个阶段固定其在分配时间内得到的最好目标值，禁止后续目标换取前级退化。
 - `ObjectiveSummary` 继续作为稳定的求解器输出契约，前端补充展示 `preferredCompositionCount`、`damageSpread` 和 `bufferSpread`，不在浏览器重新计算持久化评分。
 - 默认 12 波、短缺场景、锁定场景和自定义单队 4 人副本必须继续通过回归与性能验收。
-- 新增自然语言排表规则子轨：DeepSeek v4 通过 Provider Adapter 解析“本次排表要求”，但只有经过引用解析、白名单校验和团长确认的规则集才能进入确定性编译器；模型不进入 OR-Tools 生成链路。
+- 自然语言排表规则首批闭环已实现：DeepSeek v4 通过 Provider Adapter 解析“本次排表要求”，但只有经过引用解析、白名单校验、直接硬冲突检查和团长确认的规则集才能进入确定性编译器；模型不进入 OR-Tools 生成链路。
 - DeepSeek 生成初始提示解仅列入长期实验 TODO，不属于本轮交付；即使未来启用，最终决策和最优状态证明仍由 OR-Tools 完成。
 
 军团本专用流程不作为默认下一阶段，仅在未来明确重新排定优先级后启动。
@@ -1989,9 +1994,10 @@ flowchart TD
 | 单排表总位置上限 | 1,200 | 服务端安全配置 |
 | 求解时限 | 10 秒 | 服务端配置/生成参数 |
 | 自然语言规则开关 | 默认关闭，配置完成后启用 | 服务端配置 |
-| 自然语言模型 | `deepseek-v4` 配置别名 | 服务端配置，记录实际模型标识 |
+| 自然语言模型 | `deepseek-v4-flash` | 服务端配置，记录实际模型标识 |
 | 自然语言输入上限 | 2,000 字符 | 服务端配置 |
 | 模型调用超时 | 20 秒 | 服务端配置 |
+| 模型解析限流 | 每用户每 60 秒 10 次 | 服务端配置 |
 | 编辑锁租期 | 90 秒 | 服务端配置 |
 | 心跳间隔 | 30 秒 | 前后端配置 |
 | 导入文件上限 | 10 MB | 服务端配置 |

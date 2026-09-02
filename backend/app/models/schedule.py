@@ -18,6 +18,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -50,6 +51,16 @@ class Schedule(TimestampMixin, Base):
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     last_published_version: Mapped[int | None] = mapped_column(Integer)
     validation_summary: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    active_rule_set_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "schedule_rule_sets.id",
+            ondelete="SET NULL",
+            use_alter=True,
+            name="fk_schedules_active_rule_set_id",
+        ),
+        index=True,
+    )
     created_by: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
@@ -69,6 +80,15 @@ class Schedule(TimestampMixin, Base):
     generation_runs: Mapped[list[GenerationRun]] = relationship(
         back_populates="schedule", cascade="all, delete-orphan"
     )
+    rule_sets: Mapped[list[ScheduleRuleSet]] = relationship(
+        back_populates="schedule",
+        cascade="all, delete-orphan",
+        foreign_keys="ScheduleRuleSet.schedule_id",
+        order_by="ScheduleRuleSet.created_at",
+    )
+    active_rule_set: Mapped[ScheduleRuleSet | None] = relationship(
+        foreign_keys=[active_rule_set_id], post_update=True
+    )
     versions: Mapped[list[ScheduleVersion]] = relationship(
         back_populates="schedule",
         cascade="all, delete-orphan",
@@ -76,6 +96,56 @@ class Schedule(TimestampMixin, Base):
     )
     edit_operations: Mapped[list[ScheduleEditOperation]] = relationship(
         back_populates="schedule", cascade="all, delete-orphan"
+    )
+
+
+class ScheduleRuleSet(Base):
+    __tablename__ = "schedule_rule_sets"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('PARSED','CONFIRMED','STALE','SUPERSEDED','FAILED')",
+            name="valid_status",
+        ),
+        Index("ix_schedule_rule_sets_schedule_id_created_at", "schedule_id", "created_at"),
+        Index(
+            "uq_schedule_rule_sets_confirmed_schedule",
+            "schedule_id",
+            unique=True,
+            postgresql_where=text("status = 'CONFIRMED'"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    schedule_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("schedules.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    input_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_text: Mapped[str] = mapped_column(Text, nullable=False)
+    source_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    context_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    model_provider: Mapped[str] = mapped_column(String(40), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    provider_response_id: Mapped[str | None] = mapped_column(String(160))
+    prompt_version: Mapped[str] = mapped_column(String(40), nullable=False)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    parsed_rules: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    resolved_references: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    issues: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    created_by: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    confirmed_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    schedule: Mapped[Schedule] = relationship(
+        back_populates="rule_sets", foreign_keys=[schedule_id]
     )
 
 
@@ -280,6 +350,12 @@ class GenerationRun(Base):
     formula_version_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("formula_versions.id", ondelete="RESTRICT"), nullable=False
     )
+    schedule_rule_set_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("schedule_rule_sets.id", ondelete="SET NULL"), index=True
+    )
+    rule_compiler_version: Mapped[str | None] = mapped_column(String(40))
+    effective_rules: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+    rule_evaluation: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
     random_seed: Mapped[int] = mapped_column(Integer, nullable=False)
     time_limit_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
     duration_ms: Mapped[int | None] = mapped_column(Integer)

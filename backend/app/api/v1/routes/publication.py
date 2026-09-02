@@ -20,6 +20,7 @@ from app.application.schedule_publication import (
     publication_issues,
     restore_snapshot,
 )
+from app.application.schedule_rules import invalidate_active_rule_set
 from app.core.errors import AppError
 from app.core.security import utc_now
 from app.models.dungeon import DungeonVersion
@@ -54,6 +55,8 @@ def _load_schedule(db: DbSession, schedule_id: uuid.UUID, *, for_update: bool = 
             selectinload(Schedule.preferences),
             selectinload(Schedule.waves).selectinload(Wave.special_assignments),
             selectinload(Schedule.waves).selectinload(Wave.teams).selectinload(Team.slots),
+            selectinload(Schedule.active_rule_set),
+            selectinload(Schedule.generation_runs),
         )
     )
     if for_update:
@@ -251,6 +254,7 @@ def restore_schedule_version(
     )
     if version is None:
         raise AppError(404, "SCHEDULE_VERSION_NOT_FOUND", "排表发布版本不存在")
+    invalidate_active_rule_set(schedule)
     try:
         restore_snapshot(db, schedule, version.snapshot)
     except (KeyError, TypeError, ValueError) as exc:

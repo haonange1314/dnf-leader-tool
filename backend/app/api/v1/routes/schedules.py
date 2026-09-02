@@ -13,6 +13,7 @@ from app.api.dependencies import (
     ScheduleEditor,
     enforce_schedule_edit_lock,
 )
+from app.application.schedule_rules import invalidate_active_rule_set
 from app.core.errors import AppError
 from app.domain.schedule import (
     MAX_SCHEDULE_POSITIONS,
@@ -26,6 +27,7 @@ from app.models.schedule import (
     Schedule,
     ScheduleParticipant,
     SchedulePlayerPreference,
+    ScheduleRuleSet,
     Team,
     TeamSlot,
     Wave,
@@ -63,6 +65,7 @@ def _load(db: DbSession, schedule_id: uuid.UUID, *, for_update: bool = False) ->
             selectinload(Schedule.preferences),
             selectinload(Schedule.waves).selectinload(Wave.special_assignments),
             selectinload(Schedule.waves).selectinload(Wave.teams).selectinload(Team.slots),
+            selectinload(Schedule.active_rule_set),
         )
     )
     if for_update:
@@ -741,6 +744,35 @@ def copy_schedule(
             )
             copied_wave.teams.append(copied_team)
         copied.waves.append(copied_wave)
+    if source.active_rule_set is not None:
+        copied.rule_sets.append(
+            ScheduleRuleSet(
+                id=uuid.uuid4(),
+                schedule_id=copied.id,
+                input_revision=1,
+                source_text=source.active_rule_set.source_text,
+                source_hash=source.active_rule_set.source_hash,
+                context_hash=source.active_rule_set.context_hash,
+                status="STALE",
+                model_provider="COPIED_SOURCE",
+                model_name=source.active_rule_set.model_name,
+                provider_response_id=None,
+                prompt_version=source.active_rule_set.prompt_version,
+                schema_version=source.active_rule_set.schema_version,
+                parsed_rules=[],
+                resolved_references={},
+                issues=[
+                    {
+                        "code": "RULE_SET_REPARSE_REQUIRED",
+                        "candidateId": None,
+                        "field": None,
+                        "reference": "复制排表后需要基于新的参团快照重新解析",
+                        "matches": [],
+                    }
+                ],
+                created_by=current_user.id,
+            )
+        )
     db.add(copied)
     db.commit()
     return _load(db, copied.id)
@@ -827,6 +859,7 @@ def update_schedule(
                 ):
                     preference.max_wave_count = new_wave_count
         item.wave_count = new_wave_count
+        invalidate_active_rule_set(item)
     item.status = "DRAFT"
     item.validation_summary = None
     db.commit()
@@ -843,6 +876,9 @@ def update_schedule_participants(
     item = _load(db, schedule_id)
     participant_by_id = {participant.id: participant for participant in item.participants}
     selected_ids = set(payload.selected_participant_ids)
+    selection_changed = selected_ids != {
+        participant.id for participant in item.participants if participant.is_selected
+    }
     unknown_ids = selected_ids - participant_by_id.keys()
     if unknown_ids:
         raise AppError(
@@ -862,6 +898,8 @@ def update_schedule_participants(
                 if slot.participant_id is not None and slot.participant_id not in selected_ids:
                     slot.participant_id = None
                     slot.is_locked = False
+    if selection_changed:
+        invalidate_active_rule_set(item)
     item.status = "DRAFT"
     item.validation_summary = None
     db.commit()
@@ -1028,6 +1066,7 @@ def commit_schedule_character_sync(
                     if slot.participant_id in deselected_participant_ids:
                         slot.participant_id = None
                         slot.is_locked = False
+    invalidate_active_rule_set(item)
     item.status = "DRAFT"
     item.validation_summary = None
     db.commit()

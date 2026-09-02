@@ -16,9 +16,16 @@ from app.application.schedule_generation import (
     solver_input_hash,
 )
 from app.application.schedule_locks import require_edit_lock
+from app.application.schedule_rules import compile_rule_set
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.core.security import utc_now
+from app.domain.schedule.rules import (
+    RULE_COMPILER_VERSION,
+    blocked_generation_rule_evaluation,
+    evaluate_compiled_rules,
+    evaluate_locked_rule_blockers,
+)
 from app.models.dungeon import DungeonVersion, FormulaVersion
 from app.models.schedule import GenerationRun, Schedule, Team, Wave
 from app.schemas.schedule import (
@@ -42,6 +49,7 @@ def _load_schedule(db: DbSession, schedule_id: uuid.UUID, *, for_update: bool = 
             selectinload(Schedule.preferences),
             selectinload(Schedule.waves).selectinload(Wave.special_assignments),
             selectinload(Schedule.waves).selectinload(Wave.teams).selectinload(Team.slots),
+            selectinload(Schedule.active_rule_set),
         )
     )
     if for_update:
@@ -85,6 +93,20 @@ def generate_schedule(
             "排表已被其他操作修改，请刷新后重试",
             details={"expected": payload.base_revision, "current": schedule.revision},
         )
+    if schedule.active_rule_set_id != payload.expected_rule_set_id:
+        raise AppError(
+            409,
+            "RULE_SET_CONTEXT_STALE",
+            "当前生效规则已变化，请刷新后重新生成",
+            details={
+                "expected": str(payload.expected_rule_set_id)
+                if payload.expected_rule_set_id
+                else None,
+                "current": str(schedule.active_rule_set_id)
+                if schedule.active_rule_set_id
+                else None,
+            },
+        )
     settings = get_settings()
     random_seed = (
         payload.random_seed if payload.random_seed is not None else settings.solver_random_seed
@@ -95,6 +117,7 @@ def generate_schedule(
         else settings.solver_time_limit_seconds
     )
     version, formula = _load_definition(db, schedule)
+    schedule_rules = compile_rule_set(schedule.active_rule_set)
     try:
         solver_input = build_solver_input(
             schedule,
@@ -103,6 +126,7 @@ def generate_schedule(
             preserve_locks=payload.preserve_locks,
             random_seed=random_seed,
             time_limit_seconds=time_limit_seconds,
+            schedule_rules=schedule_rules,
         )
     except ValueError as exc:
         raise AppError(422, "SOLVER_INPUT_INVALID", str(exc)) from exc
@@ -114,12 +138,40 @@ def generate_schedule(
         input_hash=solver_input_hash(solver_input),
         solver_version=SOLVER_VERSION,
         formula_version_id=schedule.formula_version_id,
+        schedule_rule_set_id=schedule.active_rule_set_id,
+        rule_compiler_version=RULE_COMPILER_VERSION if schedule_rules else None,
+        effective_rules=(
+            schedule.active_rule_set.parsed_rules if schedule.active_rule_set else None
+        ),
         random_seed=random_seed,
         time_limit_seconds=time_limit_seconds,
         created_by=current_user.id,
     )
     db.add(run)
     db.commit()
+
+    lock_blockers = evaluate_locked_rule_blockers(
+        schedule_rules,
+        solver_input.locked_assignments,
+        solver_input.participants,
+    )
+    if lock_blockers:
+        blocked_evaluation = blocked_generation_rule_evaluation(
+            schedule_rules,
+            lock_blockers,
+        )
+        run.status = "FAILED"
+        run.duration_ms = 0
+        run.rule_evaluation = blocked_evaluation
+        run.diagnostics = {"ruleBlockers": blocked_evaluation}
+        run.finished_at = utc_now()
+        db.commit()
+        raise AppError(
+            422,
+            "SCHEDULE_RULES_BLOCKED",
+            "当前锁定安排与本次排表要求冲突",
+            details={"ruleEvaluation": blocked_evaluation},
+        )
 
     started = time.perf_counter()
     try:
@@ -154,8 +206,17 @@ def generate_schedule(
         )
     if result.status in (SolverStatus.INFEASIBLE, SolverStatus.ERROR):
         stored_run.status = "FAILED"
+        stored_run.rule_evaluation = blocked_generation_rule_evaluation(schedule_rules)
         db.commit()
-        raise AppError(422, "SCHEDULE_GENERATION_INFEASIBLE", "当前锁定或输入无法生成有效排表")
+        raise AppError(
+            422,
+            "SCHEDULE_GENERATION_INFEASIBLE",
+            "当前锁定、候选角色或规则无法生成有效排表",
+            details={"ruleEvaluation": stored_run.rule_evaluation},
+        )
+    stored_run.rule_evaluation = evaluate_compiled_rules(
+        schedule_rules, result.assignments, solver_input.participants
+    )
 
     try:
         clear_regeneratable_assignments(

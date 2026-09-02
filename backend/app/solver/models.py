@@ -18,6 +18,28 @@ class ObjectiveStageOutcome(StrEnum):
     FEASIBLE = "FEASIBLE"
 
 
+class SolverScheduleRuleType(StrEnum):
+    PLAYER_ALLOWED_WAVES = "PLAYER_ALLOWED_WAVES"
+    PLAYER_FORBIDDEN_WAVES = "PLAYER_FORBIDDEN_WAVES"
+    PLAYERS_NOT_SAME_WAVE = "PLAYERS_NOT_SAME_WAVE"
+    CHARACTER_REQUIRED_WAVE = "CHARACTER_REQUIRED_WAVE"
+    CHARACTER_REQUIRED_TEAM = "CHARACTER_REQUIRED_TEAM"
+    PLAYER_PREFER_WAVE_RANGE = "PLAYER_PREFER_WAVE_RANGE"
+    PLAYER_PREFER_CONTIGUOUS = "PLAYER_PREFER_CONTIGUOUS"
+    CHARACTER_PREFER_TEAM = "CHARACTER_PREFER_TEAM"
+
+
+@dataclass(frozen=True, slots=True)
+class SolverScheduleRule:
+    rule_id: str
+    type: SolverScheduleRuleType
+    explanation: str = ""
+    player_ids: tuple[str, ...] = ()
+    participant_id: str | None = None
+    waves: tuple[int, ...] = ()
+    team_key: str | None = None
+
+
 @dataclass(frozen=True, slots=True)
 class SolverParticipant:
     participant_id: str
@@ -59,6 +81,7 @@ class SolverInput:
     schedule_id: str | None = None
     revision: int = 1
     player_preferences: tuple[SolverPlayerPreference, ...] = ()
+    schedule_rules: tuple[SolverScheduleRule, ...] = ()
     locked_assignments: tuple[LockedAssignment, ...] = ()
     locked_empty_slots: tuple[LockedEmptySlot, ...] = ()
     random_seed: int = 42

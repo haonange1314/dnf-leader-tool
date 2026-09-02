@@ -12,6 +12,7 @@ from app.solver.models import (
     SolverInput,
     SolverIssue,
     SolverResult,
+    SolverScheduleRuleType,
     SolverStatus,
     SpecialAssignment,
     TeamSummary,
@@ -49,6 +50,55 @@ def solve(solver_input: SolverInput) -> SolverResult:
                     and team.team_key not in participant.allowed_team_keys
                 ):
                     model.add(variable == 0)
+
+    for schedule_rule in solver_input.schedule_rules:
+        if schedule_rule.type == SolverScheduleRuleType.PLAYER_ALLOWED_WAVES:
+            rule_allowed_waves = set(schedule_rule.waves)
+            for participant_index, participant in enumerate(participants):
+                if participant.player_id not in schedule_rule.player_ids:
+                    continue
+                for wave_no in waves:
+                    if wave_no not in rule_allowed_waves:
+                        for team_index, _team in enumerate(teams):
+                            model.add(x[participant_index, wave_no, team_index] == 0)
+        elif schedule_rule.type == SolverScheduleRuleType.PLAYER_FORBIDDEN_WAVES:
+            for participant_index, participant in enumerate(participants):
+                if participant.player_id not in schedule_rule.player_ids:
+                    continue
+                for wave_no in schedule_rule.waves:
+                    for team_index, _team in enumerate(teams):
+                        model.add(x[participant_index, wave_no, team_index] == 0)
+        elif schedule_rule.type == SolverScheduleRuleType.PLAYERS_NOT_SAME_WAVE:
+            player_ids = set(schedule_rule.player_ids)
+            for wave_no in waves:
+                model.add(
+                    sum(
+                        x[participant_index, wave_no, team_index]
+                        for participant_index, participant in enumerate(participants)
+                        if participant.player_id in player_ids
+                        for team_index, _team in enumerate(teams)
+                    )
+                    <= 1
+                )
+        elif schedule_rule.type == SolverScheduleRuleType.CHARACTER_REQUIRED_WAVE:
+            participant_index = participant_index_by_id[schedule_rule.participant_id or ""]
+            model.add(
+                sum(
+                    x[participant_index, schedule_rule.waves[0], team_index]
+                    for team_index, _team in enumerate(teams)
+                )
+                == 1
+            )
+        elif schedule_rule.type == SolverScheduleRuleType.CHARACTER_REQUIRED_TEAM:
+            participant_index = participant_index_by_id[schedule_rule.participant_id or ""]
+            target_team_index = team_index_by_key[schedule_rule.team_key or ""]
+            model.add(
+                sum(
+                    x[participant_index, wave_no, target_team_index]
+                    for wave_no in waves
+                )
+                == 1
+            )
 
     for locked in solver_input.locked_assignments:
         model.add(
@@ -108,23 +158,68 @@ def solve(solver_input: SolverInput) -> SolverResult:
         )
         player_assignment_upper_bound += player_capacity
 
+    player_wave_usage: dict[tuple[str, int], cp_model.IntVar] = {}
+
+    def player_wave_variables(player_id: str) -> dict[int, cp_model.IntVar]:
+        indices = participant_indices_by_player[player_id]
+        result: dict[int, cp_model.IntVar] = {}
+        for wave_no in waves:
+            key = (player_id, wave_no)
+            used = player_wave_usage.get(key)
+            if used is None:
+                used = model.new_bool_var(f"player_wave_{player_id}_{wave_no}")
+                model.add(
+                    used
+                    == sum(
+                        x[participant_index, wave_no, team_index]
+                        for participant_index in indices
+                        for team_index, _team in enumerate(teams)
+                    )
+                )
+                player_wave_usage[key] = used
+            result[wave_no] = used
+        return result
+
+    def contiguous_penalty(
+        player_id: str,
+        player_wave: dict[int, cp_model.IntVar],
+        suffix: str,
+    ) -> cp_model.IntVar:
+        assigned_count = cp_model.LinearExpr.sum(list(player_wave.values()))
+        any_used = model.new_bool_var(f"player_any_{player_id}_{suffix}")
+        model.add_max_equality(any_used, list(player_wave.values()))
+        latest = model.new_int_var(
+            0, solver_input.wave_count, f"player_latest_{player_id}_{suffix}"
+        )
+        model.add_max_equality(latest, [wave_no * used for wave_no, used in player_wave.items()])
+        earliest_candidates: list[cp_model.IntVar] = []
+        for wave_no, used in player_wave.items():
+            candidate = model.new_int_var(
+                1,
+                solver_input.wave_count * 2 + 1,
+                f"player_earliest_candidate_{player_id}_{wave_no}_{suffix}",
+            )
+            model.add(candidate == wave_no + (solver_input.wave_count + 1) * (1 - used))
+            earliest_candidates.append(candidate)
+        earliest = model.new_int_var(
+            1,
+            solver_input.wave_count * 2 + 1,
+            f"player_earliest_{player_id}_{suffix}",
+        )
+        model.add_min_equality(earliest, earliest_candidates)
+        gap = model.new_int_var(
+            0, solver_input.wave_count, f"player_gap_{player_id}_{suffix}"
+        )
+        model.add(gap == latest - earliest + 1 - assigned_count).only_enforce_if(any_used)
+        model.add(gap == 0).only_enforce_if(~any_used)
+        return gap
+
     preference_penalties: list[cp_model.LinearExpr] = []
-    for player_id, indices in participant_indices_by_player.items():
+    for player_id, _indices in participant_indices_by_player.items():
         preference = preference_by_player.get(player_id)
         if preference is None:
             continue
-        player_wave: dict[int, cp_model.IntVar] = {}
-        for wave_no in waves:
-            used = model.new_bool_var(f"player_wave_{player_id}_{wave_no}")
-            model.add(
-                used
-                == sum(
-                    x[participant_index, wave_no, team_index]
-                    for participant_index in indices
-                    for team_index, _team in enumerate(teams)
-                )
-            )
-            player_wave[wave_no] = used
+        player_wave = player_wave_variables(player_id)
         assigned_count = cp_model.LinearExpr.sum(list(player_wave.values()))
         if preference.max_wave_count is not None:
             model.add(assigned_count <= preference.max_wave_count)
@@ -135,29 +230,43 @@ def solve(solver_input: SolverInput) -> SolverResult:
                 cp_model.LinearExpr.sum([wave_no * used for wave_no, used in player_wave.items()])
             )
         if preference.prefer_contiguous and len(player_wave) > 1:
-            any_used = model.new_bool_var(f"player_any_{player_id}")
-            model.add_max_equality(any_used, list(player_wave.values()))
-            latest = model.new_int_var(0, solver_input.wave_count, f"player_latest_{player_id}")
-            model.add_max_equality(
-                latest, [wave_no * used for wave_no, used in player_wave.items()]
-            )
-            earliest_candidates: list[cp_model.IntVar] = []
-            for wave_no, used in player_wave.items():
-                candidate = model.new_int_var(
-                    1,
-                    solver_input.wave_count * 2 + 1,
-                    f"player_earliest_candidate_{player_id}_{wave_no}",
+            preference_penalties.append(contiguous_penalty(player_id, player_wave, "profile"))
+
+    schedule_rule_penalties: list[cp_model.LinearExpr] = []
+    for schedule_rule in solver_input.schedule_rules:
+        if schedule_rule.type == SolverScheduleRuleType.PLAYER_PREFER_WAVE_RANGE:
+            preferred_waves = set(schedule_rule.waves)
+            for player_id in schedule_rule.player_ids:
+                player_wave = player_wave_variables(player_id)
+                schedule_rule_penalties.append(
+                    cp_model.LinearExpr.sum(
+                        [
+                            used
+                            for wave_no, used in player_wave.items()
+                            if wave_no not in preferred_waves
+                        ]
+                    )
                 )
-                model.add(candidate == wave_no + (solver_input.wave_count + 1) * (1 - used))
-                earliest_candidates.append(candidate)
-            earliest = model.new_int_var(
-                1, solver_input.wave_count * 2 + 1, f"player_earliest_{player_id}"
+        elif schedule_rule.type == SolverScheduleRuleType.PLAYER_PREFER_CONTIGUOUS:
+            for player_id in schedule_rule.player_ids:
+                player_wave = player_wave_variables(player_id)
+                schedule_rule_penalties.append(
+                    contiguous_penalty(
+                        player_id, player_wave, f"rule_{schedule_rule.rule_id}"
+                    )
+                )
+        elif schedule_rule.type == SolverScheduleRuleType.CHARACTER_PREFER_TEAM:
+            participant_index = participant_index_by_id[
+                schedule_rule.participant_id or ""
+            ]
+            target_team_index = team_index_by_key[schedule_rule.team_key or ""]
+            schedule_rule_penalties.append(
+                assigned[participant_index]
+                - sum(
+                    x[participant_index, wave_no, target_team_index]
+                    for wave_no in waves
+                )
             )
-            model.add_min_equality(earliest, earliest_candidates)
-            gap = model.new_int_var(0, solver_input.wave_count, f"player_gap_{player_id}")
-            model.add(gap == latest - earliest + 1 - assigned_count).only_enforce_if(any_used)
-            model.add(gap == 0).only_enforce_if(~any_used)
-            preference_penalties.append(gap)
 
     team_full: dict[tuple[int, int], cp_model.IntVar] = {}
     selected_composition: dict[tuple[int, int, int], cp_model.IntVar] = {}
@@ -410,7 +519,9 @@ def solve(solver_input: SolverInput) -> SolverResult:
     has_multi_character_player = any(
         len(indices) > 1 for indices in participant_indices_by_player.values()
     )
-    if assignment_upper_bound < len(participants) or has_multi_character_player:
+    if (
+        assignment_upper_bound < len(participants) or has_multi_character_player
+    ) and not solver_input.schedule_rules:
         target_hint_attempted = True
         target_hint, target_hint_elapsed, target_hint_count = _find_assignment_target_hint(
             solver_input,
@@ -698,6 +809,7 @@ def solve(solver_input: SolverInput) -> SolverResult:
         )
 
     final_stages: list[tuple[str, list[cp_model.LinearExpr], float]] = [
+        ("SCHEDULE_RULES", schedule_rule_penalties, 0.05),
         ("STRENGTH_ORDER", strength_order_penalties, 0.10),
     ]
     balance_budget = 0.08 / max(1, len(balance_penalties))
@@ -1179,6 +1291,48 @@ def _validate_input(solver_input: SolverInput) -> None:
             1 <= preference.max_wave_count <= solver_input.wave_count
         ):
             raise ValueError("max_wave_count 超出排表波次范围")
+    if len({rule.rule_id for rule in solver_input.schedule_rules}) != len(
+        solver_input.schedule_rules
+    ):
+        raise ValueError("schedule_rules 中的 rule_id 必须唯一")
+    player_rule_types = {
+        SolverScheduleRuleType.PLAYER_ALLOWED_WAVES,
+        SolverScheduleRuleType.PLAYER_FORBIDDEN_WAVES,
+        SolverScheduleRuleType.PLAYER_PREFER_WAVE_RANGE,
+        SolverScheduleRuleType.PLAYER_PREFER_CONTIGUOUS,
+    }
+    character_rule_types = {
+        SolverScheduleRuleType.CHARACTER_REQUIRED_WAVE,
+        SolverScheduleRuleType.CHARACTER_REQUIRED_TEAM,
+        SolverScheduleRuleType.CHARACTER_PREFER_TEAM,
+    }
+    wave_rule_types = {
+        SolverScheduleRuleType.PLAYER_ALLOWED_WAVES,
+        SolverScheduleRuleType.PLAYER_FORBIDDEN_WAVES,
+        SolverScheduleRuleType.CHARACTER_REQUIRED_WAVE,
+        SolverScheduleRuleType.PLAYER_PREFER_WAVE_RANGE,
+    }
+    team_rule_types = {
+        SolverScheduleRuleType.CHARACTER_REQUIRED_TEAM,
+        SolverScheduleRuleType.CHARACTER_PREFER_TEAM,
+    }
+    for rule in solver_input.schedule_rules:
+        if rule.type in player_rule_types:
+            if len(rule.player_ids) != 1 or rule.player_ids[0] not in player_ids:
+                raise ValueError("schedule_rules 引用了未知或数量错误的玩家")
+        elif rule.type == SolverScheduleRuleType.PLAYERS_NOT_SAME_WAVE and (
+            len(rule.player_ids) < 2 or not set(rule.player_ids) <= player_ids
+        ):
+            raise ValueError("PLAYERS_NOT_SAME_WAVE 至少需要两个已知玩家")
+        if rule.type in character_rule_types and rule.participant_id not in participant_ids:
+            raise ValueError("schedule_rules 引用了未知角色")
+        if rule.type in wave_rule_types and (
+            not rule.waves
+            or any(not 1 <= wave_no <= solver_input.wave_count for wave_no in rule.waves)
+        ):
+            raise ValueError("schedule_rules 包含空或越界波次")
+        if rule.type in team_rule_types and rule.team_key not in team_keys:
+            raise ValueError("schedule_rules 引用了未知队伍")
     for participant in solver_input.participants:
         if not isinstance(participant.score, int) or isinstance(participant.score, bool):
             raise ValueError("score 必须是整数")
