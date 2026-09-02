@@ -170,6 +170,60 @@ def test_player_upper_bound_search_falls_back_when_team_capacity_is_tighter() ->
     assert result.objective_summary.complete_team_count == 1
 
 
+def test_dense_player_hint_uses_reachable_assignment_bound() -> None:
+    definition = default_raid_12_input().dungeon
+    participants = tuple(
+        SolverParticipant(
+            participant_id=f"player-{player_index}-role-{role_index}",
+            player_id=f"player-{player_index}",
+            role_type=(RoleType.DAMAGE if player_index < 9 else RoleType.BUFFER),
+            score=1000 + role_index,
+            allowed_team_keys=None if player_index < 9 else ("RED",),
+        )
+        for player_index in range(12)
+        for role_index in range(2)
+    )
+
+    solver_input = SolverInput(
+        dungeon=definition,
+        wave_count=2,
+        participants=participants,
+        time_limit_seconds=5,
+    )
+    result = solve(solver_input)
+    repeated_result = solve(solver_input)
+
+    # The generic player/position bound is 24, but buffers restricted to RED make
+    # only 10 assignments per wave reachable: RED 2D2B plus two partial 3D teams.
+    assert result.objective_summary.assigned_count == 20
+    assert Counter(assignment.wave_no for assignment in result.assignments) == {1: 10, 2: 10}
+    assert repeated_result.assignments == result.assignments
+
+
+def test_failed_hint_time_is_included_in_error_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    solver_input = custom_party_4_input(include_player_conflict=True)
+
+    monkeypatch.setattr(
+        cp_sat_module,
+        "_find_assignment_target_hint",
+        lambda *_args, **_kwargs: (None, 0.4, 0),
+    )
+
+    def fail_stage(*_args, **_kwargs):
+        failed_solver = cp_model.CpSolver()
+        failed_solver.solve(cp_model.CpModel())
+        return failed_solver, SolverStatus.ERROR
+
+    monkeypatch.setattr(cp_sat_module, "_solve_stage", fail_stage)
+
+    result = cp_sat_module.solve(solver_input)
+
+    assert result.status == SolverStatus.ERROR
+    assert result.wall_time_seconds >= 0.4
+
+
 def test_same_player_is_never_assigned_twice_in_a_wave() -> None:
     solver_input = custom_party_4_input(include_player_conflict=True)
     result = solve(solver_input)
