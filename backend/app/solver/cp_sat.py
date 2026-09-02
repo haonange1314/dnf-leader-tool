@@ -5,6 +5,8 @@ from ortools.sat.python import cp_model
 from app.domain.schedule import MAX_SCHEDULE_POSITIONS, MAX_WAVE_COUNT
 from app.schemas.dungeon import RoleType
 from app.solver.models import (
+    ObjectiveStageOutcome,
+    ObjectiveStageResult,
     ObjectiveSummary,
     SolverAssignment,
     SolverInput,
@@ -264,6 +266,9 @@ def solve(solver_input: SolverInput) -> SolverResult:
                 metric_totals[metric, wave_no, team_index] = total
 
     strength_order_penalties: list[cp_model.LinearExpr] = []
+    strength_order_pairs: list[
+        tuple[int, cp_model.LinearExpr, cp_model.LinearExpr]
+    ] = []
     for order_index, order in enumerate(solver_input.dungeon.strength_order_rules.orders):
         for wave_no in waves:
             for pair_index, (stronger_key, weaker_key) in enumerate(
@@ -279,8 +284,9 @@ def solve(solver_input: SolverInput) -> SolverResult:
                 model.add(slack >= weaker - stronger).only_enforce_if(wave_full[wave_no])
                 model.add(slack == 0).only_enforce_if(~wave_full[wave_no])
                 strength_order_penalties.append(slack)
+                strength_order_pairs.append((wave_no, stronger, weaker))
 
-    balance_penalties: list[cp_model.LinearExpr] = []
+    balance_penalties: list[tuple[RoleType, cp_model.LinearExpr]] = []
     for metric in solver_input.dungeon.optimization_rules.balance_across_waves:
         wave_totals: dict[int, cp_model.LinearExpr] = {}
         for wave_no in waves:
@@ -298,7 +304,7 @@ def solve(solver_input: SolverInput) -> SolverResult:
         for wave_no in waves:
             model.add(maximum >= wave_totals[wave_no]).only_enforce_if(wave_full[wave_no])
             model.add(minimum <= wave_totals[wave_no]).only_enforce_if(wave_full[wave_no])
-        balance_penalties.append(spread)
+        balance_penalties.append((metric, spread))
 
     companion_penalties: list[cp_model.LinearExpr] = []
     for rule_index, special_rule in enumerate(solver_input.dungeon.special_role_rules.rules):
@@ -332,6 +338,36 @@ def solve(solver_input: SolverInput) -> SolverResult:
     assigned_total = cp_model.LinearExpr.sum(assigned)
     hint_variables = [*x.values(), *special_variables.values()]
     elapsed = 0.0
+    objective_stages: list[ObjectiveStageResult] = []
+    stage_value_objectives: dict[str, cp_model.LinearExpr] = {}
+    all_stage_outcomes_optimal = True
+
+    def record_stage(
+        code: str,
+        stage_solver: cp_model.CpSolver,
+        stage_status: SolverStatus,
+        value: int,
+        *,
+        target_reached: bool,
+    ) -> None:
+        nonlocal all_stage_outcomes_optimal
+        outcome = (
+            ObjectiveStageOutcome.OPTIMAL
+            if stage_status == SolverStatus.OPTIMAL
+            else ObjectiveStageOutcome.TARGET_REACHED
+            if target_reached
+            else ObjectiveStageOutcome.FEASIBLE
+        )
+        if outcome == ObjectiveStageOutcome.FEASIBLE:
+            all_stage_outcomes_optimal = False
+        objective_stages.append(
+            ObjectiveStageResult(
+                code=code,
+                value=value,
+                outcome=outcome,
+                duration_seconds=stage_solver.wall_time,
+            )
+        )
 
     availability_solver, availability_status = _solve_stage(
         model,
@@ -342,7 +378,6 @@ def solve(solver_input: SolverInput) -> SolverResult:
     )
     elapsed += availability_solver.wall_time
     best_solver = availability_solver
-    best_status = availability_status
     if availability_status not in (SolverStatus.OPTIMAL, SolverStatus.FEASIBLE):
         return SolverResult(
             status=availability_status,
@@ -368,31 +403,93 @@ def solve(solver_input: SolverInput) -> SolverResult:
     assignment_upper_bound = min(
         len(participants), solver_input.wave_count * solver_input.dungeon.participants_per_wave
     )
-    can_continue = availability_status == SolverStatus.OPTIMAL or (
-        best_assigned_count == assignment_upper_bound
+    record_stage(
+        "ASSIGNED_COUNT",
+        availability_solver,
+        availability_status,
+        best_assigned_count,
+        target_reached=best_assigned_count == assignment_upper_bound,
     )
-    if can_continue:
-        model.add(assigned_total == best_assigned_count)
-        _replace_hints(model, hint_variables, availability_solver)
+    model.add(assigned_total == best_assigned_count)
+    _replace_hints(model, hint_variables, availability_solver)
 
-    if can_continue and spread_objective is not None:
-        spread_solver, spread_status = _solve_stage(
+    def canonical_stage_value(
+        code: str,
+        stage_solver: cp_model.CpSolver,
+        objective: cp_model.LinearExpr,
+    ) -> int:
+        if code == "STRENGTH_ORDER":
+            return sum(
+                max(
+                    0,
+                    round(stage_solver.value(weaker))
+                    - round(stage_solver.value(stronger)),
+                )
+                for wave_no, stronger, weaker in strength_order_pairs
+                if stage_solver.value(wave_full[wave_no])
+            )
+        if code.startswith("BALANCE_"):
+            metric = RoleType(code.removeprefix("BALANCE_"))
+            complete_wave_totals = [
+                sum(
+                    round(stage_solver.value(metric_totals[metric, wave_no, team_index]))
+                    for team_index, _team in enumerate(teams)
+                )
+                for wave_no in waves
+                if stage_solver.value(wave_full[wave_no])
+            ]
+            return (
+                max(complete_wave_totals) - min(complete_wave_totals)
+                if complete_wave_totals
+                else 0
+            )
+        return round(stage_solver.value(objective))
+
+    def optimize_and_fix_stage(
+        code: str,
+        objective: cp_model.LinearExpr,
+        *,
+        maximize: bool,
+        budget_ratio: float,
+        target_value: int,
+        value_objective: cp_model.LinearExpr | None = None,
+    ) -> None:
+        nonlocal elapsed, best_solver
+        evaluated_objective = value_objective if value_objective is not None else objective
+        stage_value_objectives[code] = evaluated_objective
+        stage_solver, stage_status = _solve_stage(
             model,
-            spread_objective,
-            maximize=False,
-            time_limit_seconds=_stage_budget(solver_input.time_limit_seconds, 0.05),
+            objective,
+            maximize=maximize,
+            time_limit_seconds=_stage_budget(solver_input.time_limit_seconds, budget_ratio),
             random_seed=solver_input.random_seed,
         )
-        elapsed += spread_solver.wall_time
-        if spread_status in (SolverStatus.OPTIMAL, SolverStatus.FEASIBLE):
-            best_solver, best_status = spread_solver, spread_status
-            best_spread = round(spread_solver.value(spread_objective))
-            can_continue = spread_status == SolverStatus.OPTIMAL or best_spread == 0
-            if can_continue:
-                model.add(spread_objective == best_spread)
-                _replace_hints(model, hint_variables, spread_solver)
+        elapsed += stage_solver.wall_time
+        if stage_status in (SolverStatus.OPTIMAL, SolverStatus.FEASIBLE):
+            best_solver = stage_solver
+            stage_value = round(stage_solver.value(evaluated_objective))
+            _replace_hints(model, hint_variables, stage_solver)
+            recorded_status = stage_status
         else:
-            can_continue = False
+            stage_value = canonical_stage_value(code, best_solver, evaluated_objective)
+            recorded_status = SolverStatus.FEASIBLE
+        record_stage(
+            code,
+            stage_solver,
+            recorded_status,
+            stage_value,
+            target_reached=stage_value == target_value,
+        )
+        model.add(evaluated_objective == stage_value)
+
+    if spread_objective is not None:
+        optimize_and_fix_stage(
+            "WAVE_FILL_SPREAD",
+            spread_objective,
+            maximize=False,
+            budget_ratio=0.05,
+            target_value=0,
+        )
 
     early_objective = cp_model.LinearExpr.sum(early_terms)
     complete_multiplier = len(team_full) + 1
@@ -432,125 +529,90 @@ def solve(solver_input: SolverInput) -> SolverResult:
         complete_search_objective = (
             (len(special_satisfied) + 1) * complete_search_objective + special_total
         )
-    if can_continue:
-        complete_solver, complete_status = _solve_stage(
-            model,
-            complete_search_objective,
-            maximize=True,
-            time_limit_seconds=_stage_budget(solver_input.time_limit_seconds, 0.15),
-            random_seed=solver_input.random_seed,
-        )
-        elapsed += complete_solver.wall_time
-        if complete_status in (SolverStatus.OPTIMAL, SolverStatus.FEASIBLE):
-            best_solver, best_status = complete_solver, complete_status
-            best_complete = round(complete_solver.value(complete_objective))
-            can_continue = complete_status == SolverStatus.OPTIMAL or (
-                best_complete == complete_upper_bound
-            )
-            if can_continue:
-                model.add(complete_objective == best_complete)
-                _replace_hints(model, hint_variables, complete_solver)
-        else:
-            can_continue = False
+    optimize_and_fix_stage(
+        "COMPLETENESS",
+        complete_search_objective,
+        maximize=True,
+        budget_ratio=0.15,
+        target_value=complete_upper_bound,
+        value_objective=complete_objective,
+    )
 
-    if can_continue and early_terms:
-        early_solver, early_status = _solve_stage(
-            model,
+    if early_terms:
+        optimize_and_fix_stage(
+            "EARLY_FILL",
             early_objective,
             maximize=True,
-            time_limit_seconds=_stage_budget(solver_input.time_limit_seconds, 0.05),
-            random_seed=solver_input.random_seed,
+            budget_ratio=0.05,
+            target_value=early_upper_bound,
         )
-        elapsed += early_solver.wall_time
-        if early_status in (SolverStatus.OPTIMAL, SolverStatus.FEASIBLE):
-            best_solver, best_status = early_solver, early_status
-            best_early = round(early_solver.value(early_objective))
-            can_continue = early_status == SolverStatus.OPTIMAL or (best_early == early_upper_bound)
-            if can_continue:
-                model.add(early_objective == best_early)
-                _replace_hints(model, hint_variables, early_solver)
-        else:
-            can_continue = False
 
     composition_penalty = cp_model.LinearExpr.sum(composition_penalties)
-    if can_continue:
-        composition_solver, composition_status = _solve_stage(
-            model,
-            composition_penalty,
-            maximize=False,
-            time_limit_seconds=_stage_budget(solver_input.time_limit_seconds, 0.10),
-            random_seed=solver_input.random_seed,
-        )
-        elapsed += composition_solver.wall_time
-        if composition_status in (SolverStatus.OPTIMAL, SolverStatus.FEASIBLE):
-            best_solver, best_status = composition_solver, composition_status
-            best_composition_penalty = round(composition_solver.value(composition_penalty))
-            can_continue = composition_status == SolverStatus.OPTIMAL or (
-                best_composition_penalty == 0
-            )
-            if can_continue:
-                model.add(composition_penalty == best_composition_penalty)
-                _replace_hints(model, hint_variables, composition_solver)
-        else:
-            can_continue = False
+    optimize_and_fix_stage(
+        "COMPOSITION_PRIORITY",
+        composition_penalty,
+        maximize=False,
+        budget_ratio=0.10,
+        target_value=0,
+    )
 
-    if can_continue and special_satisfied:
-        special_solver, special_status = _solve_stage(
-            model,
+    if special_satisfied:
+        maximum_complete_waves = min(
+            solver_input.wave_count,
+            best_assigned_count // solver_input.dungeon.participants_per_wave,
+        )
+        special_upper_bound = (
+            len(solver_input.dungeon.special_role_rules.rules) * maximum_complete_waves
+        )
+        optimize_and_fix_stage(
+            "SPECIAL_ROLE",
             special_total,
             maximize=True,
-            time_limit_seconds=_stage_budget(solver_input.time_limit_seconds, 0.20),
-            random_seed=solver_input.random_seed,
+            budget_ratio=0.20,
+            target_value=special_upper_bound,
         )
-        elapsed += special_solver.wall_time
-        if special_status in (SolverStatus.OPTIMAL, SolverStatus.FEASIBLE):
-            best_solver, best_status = special_solver, special_status
-            best_special_count = round(special_solver.value(special_total))
-            maximum_complete_waves = min(
-                solver_input.wave_count,
-                best_assigned_count // solver_input.dungeon.participants_per_wave,
-            )
-            special_upper_bound = (
-                len(solver_input.dungeon.special_role_rules.rules)
-                * maximum_complete_waves
-            )
-            can_continue = special_status == SolverStatus.OPTIMAL or (
-                best_special_count == special_upper_bound
-            )
-            if can_continue:
-                model.add(special_total == best_special_count)
-                _replace_hints(model, hint_variables, special_solver)
-        else:
-            can_continue = False
 
-    final_stages = (
-        (strength_order_penalties, 0.10),
-        (balance_penalties, 0.08),
-        (companion_penalties, 0.01),
-        (preference_penalties, 0.01),
+    final_stages: list[tuple[str, list[cp_model.LinearExpr], float]] = [
+        ("STRENGTH_ORDER", strength_order_penalties, 0.10),
+    ]
+    balance_budget = 0.08 / max(1, len(balance_penalties))
+    final_stages.extend(
+        (f"BALANCE_{metric.value}", [penalty], balance_budget)
+        for metric, penalty in balance_penalties
     )
-    for penalties, budget_ratio in final_stages:
-        if not can_continue or not penalties:
+    final_stages.extend(
+        [
+            ("SPECIAL_COMPANION", companion_penalties, 0.01),
+            ("PLAYER_PREFERENCE", preference_penalties, 0.01),
+        ]
+    )
+    for stage_code, penalties, budget_ratio in final_stages:
+        if not penalties:
             continue
         stage_objective = cp_model.LinearExpr.sum(penalties)
-        stage_solver, stage_status = _solve_stage(
-            model,
+        optimize_and_fix_stage(
+            stage_code,
             stage_objective,
             maximize=False,
-            time_limit_seconds=_stage_budget(solver_input.time_limit_seconds, budget_ratio),
-            random_seed=solver_input.random_seed,
+            budget_ratio=budget_ratio,
+            target_value=0,
         )
-        elapsed += stage_solver.wall_time
-        if stage_status not in (SolverStatus.OPTIMAL, SolverStatus.FEASIBLE):
-            can_continue = False
-            continue
-        best_solver, best_status = stage_solver, stage_status
-        best_stage_value = round(stage_solver.value(stage_objective))
-        model.add(stage_objective == best_stage_value)
-        _replace_hints(model, hint_variables, stage_solver)
 
     solver = best_solver
-    status = best_status
+    status = SolverStatus.OPTIMAL if all_stage_outcomes_optimal else SolverStatus.FEASIBLE
+    objective_stages = [
+        ObjectiveStageResult(
+            code=stage.code,
+            value=canonical_stage_value(
+                stage.code,
+                solver,
+                stage_value_objectives.get(stage.code, assigned_total),
+            ),
+            outcome=stage.outcome,
+            duration_seconds=stage.duration_seconds,
+        )
+        for stage in objective_stages
+    ]
 
     assignments: list[SolverAssignment] = []
     assigned_locations: dict[str, tuple[int, str]] = {}
@@ -601,6 +663,7 @@ def solve(solver_input: SolverInput) -> SolverResult:
         objective_summary=objective_summary,
         objective_value=solver.objective_value,
         wall_time_seconds=elapsed,
+        objective_stages=tuple(objective_stages),
     )
 
 

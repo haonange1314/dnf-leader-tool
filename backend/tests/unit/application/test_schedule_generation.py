@@ -1,6 +1,15 @@
-from app.application.schedule_generation import objective_summary_payload
+from app.application.schedule_generation import (
+    objective_summary_payload,
+    solver_diagnostics_payload,
+)
 from app.schemas.dungeon import FormulaDefinition
-from app.solver.models import ObjectiveSummary, SolverResult, SolverStatus
+from app.solver.models import (
+    ObjectiveStageOutcome,
+    ObjectiveStageResult,
+    ObjectiveSummary,
+    SolverResult,
+    SolverStatus,
+)
 
 
 def test_objective_summary_uses_formula_scales_for_display_values() -> None:
@@ -25,6 +34,14 @@ def test_objective_summary_uses_formula_scales_for_display_values() -> None:
         ),
         objective_value=0,
         wall_time_seconds=0.1,
+        objective_stages=(
+            ObjectiveStageResult(
+                code="ASSIGNED_COUNT",
+                value=12,
+                outcome=ObjectiveStageOutcome.TARGET_REACHED,
+                duration_seconds=0.0084,
+            ),
+        ),
     )
 
     payload = objective_summary_payload(
@@ -34,3 +51,13 @@ def test_objective_summary_uses_formula_scales_for_display_values() -> None:
 
     assert payload["damageSpreadDisplay"] == "57.5"
     assert payload["bufferSpreadDisplay"] == "2.9"
+
+    diagnostics = solver_diagnostics_payload(result)
+    assert diagnostics["objectiveStages"] == [
+        {
+            "code": "ASSIGNED_COUNT",
+            "value": 12,
+            "outcome": "TARGET_REACHED",
+            "durationMs": 8,
+        }
+    ]

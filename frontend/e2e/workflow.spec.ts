@@ -164,7 +164,7 @@ test("a second browser session is downgraded while the first holds the edit leas
   await page.getByRole("menuitem", { name: "排表管理" }).click();
   await page.getByText(scheduleName).click();
   await expect(page.getByText("已获得此排表的单编辑会话锁")).toBeVisible();
-  await expect(page.getByText(/12 波 · revision 1/)).toBeVisible();
+  await expect(page.getByText(/12 波 · 修订 1/)).toBeVisible();
 
   const secondContext = await browser.newContext();
   const secondPage = await secondContext.newPage();

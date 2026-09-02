@@ -608,6 +608,13 @@ body {
   gap: 8px;
   margin-top: 12px;
 }
+.generation-objective-stages {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid #ededf0;
+}
 .publish-warning-confirm {
   margin-top: 18px;
 }

@@ -159,6 +159,9 @@ class DungeonVersionDefinition(BaseModel):
         ]
         if len(strength_ranks) != len(set(strength_ranks)):
             raise ValueError("已填写的队伍强度排名必须唯一")
+        balance_metrics = self.optimization_rules.balance_across_waves
+        if len(balance_metrics) != len(set(balance_metrics)):
+            raise ValueError("跨波平衡指标必须唯一")
 
         covered: set[str] = set()
         composition_codes = [rule.code for rule in self.composition_rules.allowed]

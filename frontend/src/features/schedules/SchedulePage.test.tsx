@@ -120,6 +120,49 @@ describe("SchedulePage", () => {
     expect(screen.getByText("位置 1 · 待排")).toBeInTheDocument();
   });
 
+  it("shows the bound dungeon name and exact version in list and detail views", async () => {
+    vi.mocked(api).mockImplementation(async (path: string) => {
+      if (path.endsWith("/lock")) return editLockResponse(path);
+      if (path === "/schedules") return { items: [summary], total: 1 };
+      if (path === "/dungeons") {
+        return {
+          items: [
+            {
+              id: "dungeon-1",
+              code: "BUILTIN_RAID_12",
+              name: "12 人团本",
+              description: null,
+              isActive: true,
+              versions: [
+                {
+                  id: "version-1",
+                  versionNo: 3,
+                  status: "PUBLISHED",
+                  defaultWaveCount: 12,
+                },
+              ],
+            },
+          ],
+          total: 1,
+        };
+      }
+      if (path === "/schedules/schedule-1") return detail;
+      if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1/versions") return { items: [], total: 0 };
+      throw new Error(`unexpected API path: ${path}`);
+    });
+
+    render(<SchedulePage userRole="OWNER" onError={vi.fn()} onSuccess={vi.fn()} />);
+
+    expect(
+      await screen.findByText("12 人团本 · 副本第 3 版 · 1 波 · 修订 1"),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByText("周六团"));
+    expect(
+      await screen.findByText("12 人团本 · 副本第 3 版 · 1 波 · 修订 1 · 草稿"),
+    ).toBeInTheDocument();
+  });
+
   it("keeps Viewer accounts in read-only mode", async () => {
     vi.mocked(api).mockImplementation(async (path: string) => {
       if (path === "/schedules") return { items: [summary], total: 1 };
@@ -324,7 +367,25 @@ describe("SchedulePage", () => {
               bufferSpreadDisplay: "0.0",
               strengthOrderViolationCount: 0,
             },
-            diagnostics: { solverStatus: "OPTIMAL", unassigned: [], issues: [] },
+            diagnostics: {
+              solverStatus: "OPTIMAL",
+              objectiveStages: [
+                {
+                  code: "ASSIGNED_COUNT",
+                  value: 1,
+                  outcome: "TARGET_REACHED",
+                  durationMs: 8,
+                },
+                {
+                  code: "BALANCE_DAMAGE",
+                  value: 0,
+                  outcome: "OPTIMAL",
+                  durationMs: 4,
+                },
+              ],
+              unassigned: [],
+              issues: [],
+            },
             createdAt: "2026-08-18T00:00:00Z",
             finishedAt: "2026-08-18T00:00:01Z",
           },
@@ -366,6 +427,8 @@ describe("SchedulePage", () => {
     expect(screen.getByText("优先组成 1")).toBeInTheDocument();
     expect(screen.getByText("C 跨波差 0.00 亿")).toBeInTheDocument();
     expect(screen.getByText("奶跨波差 0.0")).toBeInTheDocument();
+    expect(screen.getByText("安排人数 · 达到理论界")).toBeInTheDocument();
+    expect(screen.getByText("C 跨波平衡 · 已证明最优")).toBeInTheDocument();
     expect(screen.getByText("本波核心")).toBeInTheDocument();
   });
 

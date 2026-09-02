@@ -1,9 +1,17 @@
 from collections import Counter, defaultdict
 
 import pytest
+from ortools.sat.python import cp_model
 
+import app.solver.cp_sat as cp_sat_module
 from app.schemas.dungeon import MissingSlotPolicy, OptimizationRules, RoleType
-from app.solver import SolverInput, SolverParticipant, SolverStatus, solve
+from app.solver import (
+    ObjectiveStageOutcome,
+    SolverInput,
+    SolverParticipant,
+    SolverStatus,
+    solve,
+)
 from app.solver.fixtures import custom_party_4_input, default_raid_12_input
 
 
@@ -22,6 +30,17 @@ def test_default_12_wave_raid_is_complete_and_valid() -> None:
         wave: 1 for wave in range(1, 13)
     }
     assert all(a.team_key == "RED" for a in result.special_assignments)
+    stage_codes = [stage.code for stage in result.objective_stages]
+    assert stage_codes.index("BALANCE_DAMAGE") < stage_codes.index("BALANCE_BUFFER")
+    assert all(stage.duration_seconds >= 0 for stage in result.objective_stages)
+    stage_by_code = {stage.code: stage for stage in result.objective_stages}
+    assert stage_by_code["BALANCE_DAMAGE"].value == result.objective_summary.damage_spread
+    assert stage_by_code["BALANCE_BUFFER"].value == result.objective_summary.buffer_spread
+    if any(
+        stage.outcome == ObjectiveStageOutcome.FEASIBLE
+        for stage in result.objective_stages
+    ):
+        assert result.status == SolverStatus.FEASIBLE
 
     participants = {p.participant_id: p for p in solver_input.participants}
     players_by_wave: dict[int, list[str]] = defaultdict(list)
@@ -30,6 +49,39 @@ def test_default_12_wave_raid_is_complete_and_valid() -> None:
             participants[assignment.participant_id].player_id
         )
     assert all(len(players) == len(set(players)) for players in players_by_wave.values())
+
+
+def test_late_stage_timeout_keeps_incumbent_and_records_remaining_stages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_solve_stage = cp_sat_module._solve_stage
+    call_count = 0
+
+    def timeout_after_early_fill(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count >= 4:
+            timed_out_solver = cp_model.CpSolver()
+            timed_out_solver.solve(cp_model.CpModel())
+            return timed_out_solver, SolverStatus.ERROR
+        return original_solve_stage(*args, **kwargs)
+
+    monkeypatch.setattr(cp_sat_module, "_solve_stage", timeout_after_early_fill)
+
+    result = cp_sat_module.solve(default_raid_12_input())
+
+    stage_by_code = {stage.code: stage for stage in result.objective_stages}
+    assert {
+        "COMPOSITION_PRIORITY",
+        "SPECIAL_ROLE",
+        "STRENGTH_ORDER",
+        "BALANCE_DAMAGE",
+        "BALANCE_BUFFER",
+        "SPECIAL_COMPANION",
+    } <= stage_by_code.keys()
+    assert result.status == SolverStatus.FEASIBLE
+    assert stage_by_code["BALANCE_DAMAGE"].value == result.objective_summary.damage_spread
+    assert stage_by_code["BALANCE_BUFFER"].value == result.objective_summary.buffer_spread
 
 
 def test_custom_single_team_four_person_dungeon() -> None:

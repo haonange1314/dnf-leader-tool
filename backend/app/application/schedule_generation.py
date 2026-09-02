@@ -28,7 +28,7 @@ from app.solver import (
     SolverResult,
 )
 
-SOLVER_VERSION = "cp-sat-v2"
+SOLVER_VERSION = "cp-sat-v3"
 
 
 def build_solver_input(
@@ -241,8 +241,21 @@ def apply_solver_result(
             else None
         )
 
+    return solver_diagnostics_payload(result)
+
+
+def solver_diagnostics_payload(result: SolverResult) -> dict[str, object]:
     return {
         "solverStatus": result.status.value,
+        "objectiveStages": [
+            {
+                "code": stage.code,
+                "value": stage.value,
+                "outcome": stage.outcome.value,
+                "durationMs": round(stage.duration_seconds * 1000),
+            }
+            for stage in result.objective_stages
+        ],
         "unassigned": [
             {
                 "participantId": reason.participant_id,
