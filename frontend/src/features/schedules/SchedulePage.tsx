@@ -109,6 +109,49 @@ const ISSUE_LABELS: Record<string, string> = {
   UNASSIGNED_SELECTED_PARTICIPANTS: "仍有已选角色未分配",
 };
 
+const OBJECTIVE_STAGE_LABELS: Record<string, string> = {
+  ASSIGNED_COUNT: "安排人数",
+  WAVE_FILL_SPREAD: "波次填充",
+  COMPLETENESS: "完整波次与队伍",
+  EARLY_FILL: "空位靠后",
+  COMPOSITION_PRIORITY: "优先组成",
+  SPECIAL_ROLE: "特殊核心",
+  STRENGTH_ORDER: "队伍强度顺序",
+  BALANCE_DAMAGE: "C 跨波平衡",
+  BALANCE_BUFFER: "奶跨波平衡",
+  SPECIAL_COMPANION: "核心搭配",
+  PLAYER_PREFERENCE: "玩家偏好",
+};
+
+const OBJECTIVE_OUTCOME_LABELS = {
+  OPTIMAL: "已证明最优",
+  TARGET_REACHED: "达到理论界",
+  FEASIBLE: "限时可行",
+} as const;
+
+const SCHEDULE_STATUS_LABELS: Record<ScheduleSummary["status"], string> = {
+  DRAFT: "草稿",
+  PUBLISHED: "已发布",
+  ARCHIVED: "已归档",
+};
+
+const GENERATION_STATUS_LABELS: Record<GenerationRun["status"], string> = {
+  RUNNING: "生成中",
+  SUCCEEDED: "生成成功",
+  PARTIAL: "部分完成",
+  FAILED: "生成失败",
+  STALE: "结果已失效",
+};
+
+function describeDungeonVersion(
+  identity: { dungeonName: string; versionNo: number } | undefined,
+  dungeonVersionId: string,
+): string {
+  return identity
+    ? `${identity.dungeonName} · 副本第 ${identity.versionNo} 版`
+    : `副本版本暂不可用（${dungeonVersionId.slice(0, 8)}）`;
+}
+
 export function SchedulePage({ userRole, onError, onSuccess }: Props) {
   const [schedules, setSchedules] = useState<ScheduleSummary[]>([]);
   const [dungeons, setDungeons] = useState<Dungeon[]>([]);
@@ -176,7 +219,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
         dungeon.versions
           .filter((version) => version.status === "PUBLISHED" && dungeon.isActive)
           .map((version) => ({
-            label: `${dungeon.name} · v${version.versionNo}`,
+            label: `${dungeon.name} · 第 ${version.versionNo} 版`,
             value: version.id,
             defaultWaveCount: version.defaultWaveCount,
           })),
@@ -195,12 +238,25 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
           version.status === "PUBLISHED" || version.id === detail.dungeonVersionId,
       )
       .map((version) => ({
-        label: `${sourceDungeon?.name ?? "副本"} · v${version.versionNo}${
+        label: `${sourceDungeon?.name ?? "副本"} · 第 ${version.versionNo} 版${
           version.id === detail.dungeonVersionId ? "（当前）" : ""
         }`,
         value: version.id,
       }));
   }, [detail, dungeons]);
+
+  const dungeonVersionIdentityById = useMemo(
+    () =>
+      new Map(
+        dungeons.flatMap((dungeon) =>
+          dungeon.versions.map((version) => [
+            version.id,
+            { dungeonName: dungeon.name, versionNo: version.versionNo },
+          ] as const),
+        ),
+      ),
+    [dungeons],
+  );
 
   const loadList = async () => {
     try {
@@ -644,7 +700,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
       setPublicationCheck(null);
       resetEditor();
       await loadList();
-      onSuccess(`排表已发布为 v${response.version.versionNo}`);
+      onSuccess(`排表已发布为第 ${response.version.versionNo} 版`);
     } catch (error) {
       onError(error);
     } finally {
@@ -666,7 +722,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
       resetEditor();
       setHistoryOpen(false);
       await loadList();
-      onSuccess(`已从发布版本 v${versionNo} 恢复为草稿`);
+      onSuccess(`已从发布版本第 ${versionNo} 版恢复为草稿`);
     } catch (error) {
       onError(error);
     }
@@ -674,7 +730,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
 
   const confirmRestoreVersion = (versionNo: number) => {
     Modal.confirm({
-      title: `恢复发布版本 v${versionNo}？`,
+      title: `恢复发布版本第 ${versionNo} 版？`,
       content: "当前草稿布局会被该发布版本替换；发布历史不会被删除。",
       okText: "确认恢复",
       cancelText: "取消",
@@ -717,7 +773,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
       setVersions([]);
       await loadList();
       await establishEditLock(copied.id);
-      onSuccess(`已从发布版本 v${copyVersionTarget.versionNo} 创建新草稿`);
+      onSuccess(`已从发布版本第 ${copyVersionTarget.versionNo} 版创建新草稿`);
     } catch (error) {
       onError(error);
     } finally {
@@ -846,11 +902,14 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
                     <Space className="schedule-card-title">
                       <Typography.Title level={4}>{schedule.name}</Typography.Title>
                       <Tag color={schedule.status === "DRAFT" ? "orange" : "green"}>
-                        {schedule.status}
+                        {SCHEDULE_STATUS_LABELS[schedule.status]}
                       </Tag>
                     </Space>
                     <Typography.Text type="secondary">
-                      {schedule.waveCount} 波 · revision {schedule.revision}
+                      {describeDungeonVersion(
+                        dungeonVersionIdentityById.get(schedule.dungeonVersionId),
+                        schedule.dungeonVersionId,
+                      )} · {schedule.waveCount} 波 · 修订 {schedule.revision}
                     </Typography.Text>
                     {schedule.validationSummary ? (
                       <Typography.Text type="secondary">
@@ -945,7 +1004,11 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
           </Button>
           <Typography.Title level={2}>{detail.name}</Typography.Title>
           <Typography.Text type="secondary">
-            {detail.waveCount} 波 · revision {detail.revision} · {detail.status}
+            {describeDungeonVersion(
+              dungeonVersionIdentityById.get(detail.dungeonVersionId),
+              detail.dungeonVersionId,
+            )} · {detail.waveCount} 波 · 修订 {detail.revision} ·{" "}
+            {SCHEDULE_STATUS_LABELS[detail.status]}
           </Typography.Text>
         </div>
         <Space wrap size={6} className="schedule-action-bar">
@@ -1345,7 +1408,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
               <Card
                 size="small"
                 key={version.id}
-                title={`v${version.versionNo}`}
+                title={`第 ${version.versionNo} 版`}
                 extra={new Date(version.publishedAt).toLocaleString()}
               >
                 <Space wrap>
@@ -1371,7 +1434,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
                     disabled={!canCreateContent}
                     onClick={() => {
                       setCopyVersionTarget(version);
-                      setCopyVersionName(`${detail.name} · v${version.versionNo} 副本`);
+                      setCopyVersionName(`${detail.name} · 第 ${version.versionNo} 版副本`);
                     }}
                   >
                     复制为新草稿
@@ -1406,7 +1469,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
                   </Button>
                 </Space>
                 <Typography.Text type="secondary" className="version-hash">
-                  revision {version.sourceRevision} · {version.snapshotHash.slice(0, 12)}
+                  来源修订 {version.sourceRevision} · 摘要 {version.snapshotHash.slice(0, 12)}
                 </Typography.Text>
               </Card>
             ))}
@@ -1417,7 +1480,9 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
       </Modal>
 
       <Modal
-        title={versionPreview ? `发布版本 v${versionPreview.versionNo} 预览` : "发布版本预览"}
+        title={
+          versionPreview ? `发布版本第 ${versionPreview.versionNo} 版预览` : "发布版本预览"
+        }
         open={versionPreview !== null}
         onCancel={() => setVersionPreview(null)}
         footer={<Button onClick={() => setVersionPreview(null)}>关闭</Button>}
@@ -1427,7 +1492,11 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
       </Modal>
 
       <Modal
-        title={copyVersionTarget ? `复制发布版本 v${copyVersionTarget.versionNo}` : "复制发布版本"}
+        title={
+          copyVersionTarget
+            ? `复制发布版本第 ${copyVersionTarget.versionNo} 版`
+            : "复制发布版本"
+        }
         open={copyVersionTarget !== null}
         onCancel={() => setCopyVersionTarget(null)}
         onOk={() => void copyPublishedVersion()}
@@ -1447,7 +1516,9 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
       </Modal>
 
       <Modal
-        title={shareVersion ? `发布版本 v${shareVersion.versionNo} · 分享链接` : "分享链接"}
+        title={
+          shareVersion ? `发布版本第 ${shareVersion.versionNo} 版 · 分享链接` : "分享链接"
+        }
         open={shareVersion !== null}
         onCancel={() => {
           setShareVersion(null);
@@ -1798,7 +1869,7 @@ function ScheduleSnapshotPreview({ schedule }: { schedule: ScheduleDetail }) {
     <div className="snapshot-preview">
       <Typography.Title level={4}>{schedule.name}</Typography.Title>
       <Typography.Text type="secondary">
-        {schedule.waveCount} 波 · revision {schedule.revision}
+        {schedule.waveCount} 波 · 修订 {schedule.revision}
       </Typography.Text>
       <div className="wave-list snapshot-preview-waves">
         {schedule.waves.map((wave) => (
@@ -2102,10 +2173,13 @@ function GenerationSummary({
   const participantById = new Map(participants.map((participant) => [participant.id, participant]));
   const unassigned = run.diagnostics?.unassigned ?? [];
   const issues = run.diagnostics?.issues ?? [];
+  const objectiveStages = run.diagnostics?.objectiveStages ?? [];
   return (
     <Card title="最近一次自动排表" className="schedule-panel" size="small">
       <Space wrap className="generation-summary-tags">
-        <Tag color={run.status === "SUCCEEDED" ? "green" : "orange"}>{run.status}</Tag>
+        <Tag color={run.status === "SUCCEEDED" ? "green" : "orange"}>
+          {GENERATION_STATUS_LABELS[run.status]}
+        </Tag>
         <Tag>耗时 {run.durationMs ?? 0} ms</Tag>
         <Tag>种子 {run.randomSeed}</Tag>
         {summary ? (
@@ -2129,6 +2203,28 @@ function GenerationSummary({
           </>
         ) : null}
       </Space>
+      {objectiveStages.length ? (
+        <div className="generation-objective-stages">
+          <Typography.Text strong>优化阶段</Typography.Text>
+          <Space wrap size={[4, 4]}>
+            {objectiveStages.map((stage) => (
+              <Tag
+                key={stage.code}
+                color={
+                  stage.outcome === "FEASIBLE"
+                    ? "orange"
+                    : stage.outcome === "TARGET_REACHED"
+                      ? "blue"
+                      : "green"
+                }
+                title={`目标值 ${stage.value} · 用时 ${stage.durationMs} ms`}
+              >
+                {OBJECTIVE_STAGE_LABELS[stage.code] ?? stage.code} · {OBJECTIVE_OUTCOME_LABELS[stage.outcome]}
+              </Tag>
+            ))}
+          </Space>
+        </div>
+      ) : null}
       {unassigned.length ? (
         <div className="generation-diagnostics">
           <Typography.Text strong>未分配角色</Typography.Text>

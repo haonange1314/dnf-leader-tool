@@ -275,6 +275,12 @@ export interface GenerationRun {
   } | null;
   diagnostics: {
     solverStatus?: string;
+    objectiveStages?: Array<{
+      code: string;
+      value: number;
+      outcome: "OPTIMAL" | "TARGET_REACHED" | "FEASIBLE";
+      durationMs: number;
+    }>;
     unassigned?: Array<{
       participantId: string;
       code: string;

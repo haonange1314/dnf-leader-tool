@@ -68,6 +68,17 @@ def test_definition_rejects_composition_capacity_mismatch() -> None:
             ),
             "同一种强度指标只能配置一条顺序规则",
         ),
+        (
+            lambda payload: payload["optimization_rules"].update(
+                {
+                    "balance_across_waves": (
+                        payload["optimization_rules"]["balance_across_waves"]
+                        + (payload["optimization_rules"]["balance_across_waves"][0],)
+                    )
+                }
+            ),
+            "跨波平衡指标必须唯一",
+        ),
     ],
 )
 def test_definition_rejects_ambiguous_rule_identifiers(mutate, message: str) -> None:

@@ -12,6 +12,12 @@ class SolverStatus(StrEnum):
     ERROR = "ERROR"
 
 
+class ObjectiveStageOutcome(StrEnum):
+    OPTIMAL = "OPTIMAL"
+    TARGET_REACHED = "TARGET_REACHED"
+    FEASIBLE = "FEASIBLE"
+
+
 @dataclass(frozen=True, slots=True)
 class SolverParticipant:
     participant_id: str
@@ -113,6 +119,14 @@ class ObjectiveSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class ObjectiveStageResult:
+    code: str
+    value: int
+    outcome: ObjectiveStageOutcome
+    duration_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
 class SolverResult:
     status: SolverStatus
     assignments: tuple[SolverAssignment, ...]
@@ -124,3 +138,4 @@ class SolverResult:
     objective_summary: ObjectiveSummary
     objective_value: float | None
     wall_time_seconds: float
+    objective_stages: tuple[ObjectiveStageResult, ...] = ()

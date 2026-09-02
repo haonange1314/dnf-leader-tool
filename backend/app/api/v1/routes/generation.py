@@ -12,6 +12,7 @@ from app.application.schedule_generation import (
     build_solver_input,
     clear_regeneratable_assignments,
     objective_summary_payload,
+    solver_diagnostics_payload,
     solver_input_hash,
 )
 from app.application.schedule_locks import require_edit_lock
@@ -141,25 +142,7 @@ def generate_schedule(
     stored_run.duration_ms = round((time.perf_counter() - started) * 1000)
     stored_run.finished_at = utc_now()
     stored_run.objective_summary = objective_summary_payload(result, solver_input.dungeon.formula)
-    stored_run.diagnostics = {
-        "solverStatus": result.status.value,
-        "unassigned": [
-            {
-                "participantId": reason.participant_id,
-                "code": reason.code,
-                "messageParams": reason.message_params,
-            }
-            for reason in result.unassigned
-        ],
-        "issues": [
-            {
-                "severity": issue.severity,
-                "code": issue.code,
-                "messageParams": issue.message_params,
-            }
-            for issue in result.issues
-        ],
-    }
+    stored_run.diagnostics = solver_diagnostics_payload(result)
     if current.revision != payload.base_revision:
         stored_run.status = "STALE"
         db.commit()

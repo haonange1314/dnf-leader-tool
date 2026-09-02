@@ -2,6 +2,8 @@ from app.solver.cp_sat import solve
 from app.solver.models import (
     LockedAssignment,
     LockedEmptySlot,
+    ObjectiveStageOutcome,
+    ObjectiveStageResult,
     ObjectiveSummary,
     SolverAssignment,
     SolverInput,
@@ -18,6 +20,8 @@ from app.solver.models import (
 __all__ = [
     "LockedAssignment",
     "LockedEmptySlot",
+    "ObjectiveStageOutcome",
+    "ObjectiveStageResult",
     "ObjectiveSummary",
     "SolverAssignment",
     "SolverInput",
