@@ -402,35 +402,90 @@ def solve(solver_input: SolverInput) -> SolverResult:
     )
 
     availability_budget = _stage_budget(solver_input.time_limit_seconds, 0.30)
-    if player_assignment_upper_bound < position_assignment_upper_bound:
-        target_model = model.clone()
-        target_model.add(assigned_total == assignment_upper_bound)
-        availability_solver, availability_status = _solve_stage(
-            target_model,
-            assigned_total,
-            maximize=True,
+    availability_elapsed = 0.0
+    availability_model = model
+    availability_objective = assigned_total
+    protect_stage_incumbent = False
+    target_hint_attempted = False
+    has_multi_character_player = any(
+        len(indices) > 1 for indices in participant_indices_by_player.values()
+    )
+    if assignment_upper_bound < len(participants) or has_multi_character_player:
+        target_hint_attempted = True
+        target_hint, target_hint_elapsed, target_hint_count = _find_assignment_target_hint(
+            solver_input,
+            assignment_upper_bound,
             time_limit_seconds=availability_budget * 0.75,
-            random_seed=solver_input.random_seed,
         )
-        availability_elapsed = availability_solver.wall_time
-    else:
-        availability_solver, availability_status = _solve_stage(
-            model,
-            assigned_total,
-            maximize=True,
-            time_limit_seconds=availability_budget,
-            random_seed=solver_input.random_seed,
-        )
-        availability_elapsed = availability_solver.wall_time
-    if availability_status not in (SolverStatus.OPTIMAL, SolverStatus.FEASIBLE):
-        availability_solver, availability_status = _solve_stage(
-            model,
-            assigned_total,
-            maximize=True,
-            time_limit_seconds=max(0.05, availability_budget - availability_elapsed),
-            random_seed=solver_input.random_seed,
-        )
-        availability_elapsed += availability_solver.wall_time
+        availability_elapsed += target_hint_elapsed
+        if target_hint is not None:
+            protect_stage_incumbent = True
+            model.add(assigned_total >= target_hint_count)
+            for key, variable in x.items():
+                model.add_hint(variable, target_hint[key])
+            remaining_special_by_rule_wave = {
+                (rule_index, wave_no): (
+                    special_rule.count_per_wave
+                    if sum(
+                        target_hint[participant_index, wave_no, team_index]
+                        for participant_index, _participant in enumerate(participants)
+                        for team_index, _team in enumerate(teams)
+                    )
+                    == solver_input.dungeon.participants_per_wave
+                    else 0
+                )
+                for rule_index, special_rule in enumerate(
+                    solver_input.dungeon.special_role_rules.rules
+                )
+                for wave_no in waves
+            }
+            special_hint: dict[tuple[int, int, int], int] = {}
+            for (rule_index, participant_index, wave_no), variable in special_variables.items():
+                special_rule = solver_input.dungeon.special_role_rules.rules[rule_index]
+                target_team_index = team_index_by_key[special_rule.target_team_key]
+                remaining_key = (rule_index, wave_no)
+                selected = int(
+                    bool(target_hint[participant_index, wave_no, target_team_index])
+                    and remaining_special_by_rule_wave[remaining_key] > 0
+                )
+                model.add_hint(variable, selected)
+                special_hint[rule_index, participant_index, wave_no] = selected
+                remaining_special_by_rule_wave[remaining_key] -= selected
+            if target_hint_count == assignment_upper_bound:
+                model.add(assigned_total == assignment_upper_bound)
+                availability_model = model.clone()
+                for key, variable in x.items():
+                    cloned_variable = availability_model.get_bool_var_from_proto_index(
+                        variable.index
+                    )
+                    availability_model.add(cloned_variable == target_hint[key])
+                for key, variable in special_variables.items():
+                    cloned_variable = availability_model.get_bool_var_from_proto_index(
+                        variable.index
+                    )
+                    availability_model.add(cloned_variable == special_hint[key])
+                availability_objective = cp_model.LinearExpr.sum(
+                    [
+                        availability_model.get_bool_var_from_proto_index(variable.index)
+                        for variable in assigned
+                    ]
+                )
+    availability_solver, availability_status = _solve_stage(
+        availability_model,
+        availability_objective,
+        maximize=True,
+        time_limit_seconds=(
+            # A reachable aggregate target can be verified cheaply in the fixed
+            # clone. Otherwise the full model keeps its complete availability
+            # budget and treats the aggregate result only as a lower-bound hint.
+            availability_budget
+            if target_hint_attempted
+            and (not protect_stage_incumbent or availability_model is model)
+            else max(0.05, availability_budget - availability_elapsed)
+        ),
+        random_seed=solver_input.random_seed,
+    )
+    availability_elapsed += availability_solver.wall_time
     elapsed += availability_elapsed
     best_solver = availability_solver
     if availability_status not in (SolverStatus.OPTIMAL, SolverStatus.FEASIBLE):
@@ -451,7 +506,7 @@ def solve(solver_input: SolverInput) -> SolverResult:
             issues=(),
             objective_summary=ObjectiveSummary(0, len(participants), 0, 0, 0, 0, 0, 0, 0),
             objective_value=None,
-            wall_time_seconds=availability_solver.wall_time,
+            wall_time_seconds=availability_elapsed,
         )
 
     best_assigned_count = round(availability_solver.value(assigned_total))
@@ -510,6 +565,15 @@ def solve(solver_input: SolverInput) -> SolverResult:
         nonlocal elapsed, best_solver
         evaluated_objective = value_objective if value_objective is not None else objective
         stage_value_objectives[code] = evaluated_objective
+        incumbent_stage_value = round(best_solver.value(evaluated_objective))
+        if protect_stage_incumbent:
+            # The reduced-model assignment is already feasible in the full model.
+            # Protect only the formal stage objective; search-only tie-breaks must
+            # not leak into later lexicographic stages.
+            if maximize:
+                model.add(evaluated_objective >= incumbent_stage_value)
+            else:
+                model.add(evaluated_objective <= incumbent_stage_value)
         stage_solver, stage_status = _solve_stage(
             model,
             objective,
@@ -519,9 +583,17 @@ def solve(solver_input: SolverInput) -> SolverResult:
         )
         elapsed += stage_solver.wall_time
         if stage_status in (SolverStatus.OPTIMAL, SolverStatus.FEASIBLE):
-            best_solver = stage_solver
             stage_value = round(stage_solver.value(evaluated_objective))
-            _replace_hints(model, hint_variables, stage_solver)
+            stage_improved = (
+                stage_value > incumbent_stage_value
+                if maximize
+                else stage_value < incumbent_stage_value
+            )
+            if stage_improved or not protect_stage_incumbent:
+                best_solver = stage_solver
+                _replace_hints(model, hint_variables, stage_solver)
+            else:
+                stage_value = incumbent_stage_value
             recorded_status = stage_status
         else:
             stage_value = canonical_stage_value(code, best_solver, evaluated_objective)
@@ -718,6 +790,294 @@ def solve(solver_input: SolverInput) -> SolverResult:
         wall_time_seconds=elapsed,
         objective_stages=tuple(objective_stages),
     )
+
+
+def _find_assignment_target_hint(
+    solver_input: SolverInput,
+    assignment_target: int,
+    *,
+    time_limit_seconds: float,
+) -> tuple[dict[tuple[int, int, int], int] | None, float, int]:
+    """Find a maximum-cardinality assignment without downstream scoring variables.
+
+    Dense rosters with many characters per player create a large amount of symmetry.
+    Solving the complete quality model from scratch can spend most of the availability
+    stage proving a cardinality target that only depends on assignment, capacity and
+    composition constraints. This reduced model establishes that target and supplies
+    a complete assignment hint to the quality model.
+    """
+    model = cp_model.CpModel()
+    participants = solver_input.participants
+    teams = solver_input.dungeon.teams
+    waves = tuple(range(1, solver_input.wave_count + 1))
+    team_index_by_key = {team.team_key: index for index, team in enumerate(teams)}
+    participant_index_by_id = {
+        participant.participant_id: index for index, participant in enumerate(participants)
+    }
+    group_key_by_participant: dict[
+        int, tuple[str, RoleType, tuple[int, ...] | None, tuple[str, ...] | None]
+    ] = {}
+    participant_indices_by_group: dict[
+        tuple[str, RoleType, tuple[int, ...] | None, tuple[str, ...] | None], list[int]
+    ] = defaultdict(list)
+    for participant_index, participant in enumerate(participants):
+        group_key = (
+            participant.player_id,
+            participant.role_type,
+            participant.allowed_waves,
+            participant.allowed_team_keys,
+        )
+        group_key_by_participant[participant_index] = group_key
+        participant_indices_by_group[group_key].append(participant_index)
+    group_keys = tuple(participant_indices_by_group)
+    group_index_by_key = {group_key: index for index, group_key in enumerate(group_keys)}
+
+    group_assignment: dict[tuple[int, int, int], cp_model.IntVar] = {}
+    for group_index, group_key in enumerate(group_keys):
+        _player_id, _role_type, allowed_waves, allowed_team_keys = group_key
+        allowed_wave_set = set(waves if allowed_waves is None else allowed_waves)
+        for wave_no in waves:
+            for team_index, team in enumerate(teams):
+                variable = model.new_bool_var(
+                    f"target_group_{group_index}_{wave_no}_{team_index}"
+                )
+                group_assignment[group_index, wave_no, team_index] = variable
+                if wave_no not in allowed_wave_set or (
+                    allowed_team_keys is not None and team.team_key not in allowed_team_keys
+                ):
+                    model.add(variable == 0)
+        model.add(
+            sum(
+                group_assignment[group_index, wave_no, team_index]
+                for wave_no in waves
+                for team_index, _team in enumerate(teams)
+            )
+            <= len(participant_indices_by_group[group_key])
+        )
+
+    for locked in solver_input.locked_assignments:
+        participant_index = participant_index_by_id[locked.participant_id]
+        group_index = group_index_by_key[group_key_by_participant[participant_index]]
+        model.add(
+            group_assignment[
+                group_index,
+                locked.wave_no,
+                team_index_by_key[locked.team_key],
+            ]
+            == 1
+        )
+
+    group_indices_by_player: dict[str, list[int]] = defaultdict(list)
+    for group_index, (player_id, _role_type, _waves, _teams) in enumerate(group_keys):
+        group_indices_by_player[player_id].append(group_index)
+    preference_by_player = {
+        preference.player_id: preference for preference in solver_input.player_preferences
+    }
+    for player_id, group_indices in group_indices_by_player.items():
+        for wave_no in waves:
+            model.add(
+                sum(
+                    group_assignment[group_index, wave_no, team_index]
+                    for group_index in group_indices
+                    for team_index, _team in enumerate(teams)
+                )
+                <= 1
+            )
+        preference = preference_by_player.get(player_id)
+        if preference is not None and preference.max_wave_count is not None:
+            model.add(
+                sum(
+                    group_assignment[group_index, wave_no, team_index]
+                    for group_index in group_indices
+                    for wave_no in waves
+                    for team_index, _team in enumerate(teams)
+                )
+                <= preference.max_wave_count
+            )
+
+    locked_empty_counts: dict[tuple[int, str], int] = defaultdict(int)
+    for locked_empty in solver_input.locked_empty_slots:
+        locked_empty_counts[locked_empty.wave_no, locked_empty.team_key] += locked_empty.count
+    composition_rules = solver_input.dungeon.composition_rules.allowed
+    composition_penalties: list[cp_model.LinearExpr] = []
+    team_full: dict[tuple[int, int], cp_model.IntVar] = {}
+    for wave_no in waves:
+        for team_index, team in enumerate(teams):
+            member_count = sum(
+                group_assignment[group_index, wave_no, team_index]
+                for group_index, _group_key in enumerate(group_keys)
+            )
+            effective_capacity = team.member_count - locked_empty_counts[wave_no, team.team_key]
+            model.add(member_count <= effective_capacity)
+            full = model.new_bool_var(f"target_team_full_{wave_no}_{team_index}")
+            model.add(member_count == team.member_count).only_enforce_if(full)
+            model.add(member_count <= team.member_count - 1).only_enforce_if(~full)
+            team_full[wave_no, team_index] = full
+            selections: list[cp_model.IntVar] = []
+            for rule_index, rule in enumerate(composition_rules):
+                if team.team_key not in rule.applicable_team_keys:
+                    continue
+                selection = model.new_bool_var(
+                    f"target_composition_{wave_no}_{team_index}_{rule_index}"
+                )
+                selections.append(selection)
+                composition_penalties.append((rule.priority - 1) * selection)
+                for role_type in RoleType:
+                    role_count = sum(
+                        group_assignment[group_index, wave_no, team_index]
+                        for group_index, group_key in enumerate(group_keys)
+                        if group_key[1] == role_type
+                    )
+                    model.add(role_count == rule.roles.get(role_type, 0)).only_enforce_if(
+                        selection
+                    )
+            model.add(sum(selections) == full)
+
+    assigned_total = cp_model.LinearExpr.sum(list(group_assignment.values()))
+    model.add(assigned_total <= assignment_target)
+    wave_full: dict[int, cp_model.IntVar] = {}
+    for wave_no in waves:
+        full = model.new_bool_var(f"target_wave_full_{wave_no}")
+        full_teams = [team_full[wave_no, team_index] for team_index, _team in enumerate(teams)]
+        model.add_bool_and(full_teams).only_enforce_if(full)
+        model.add_bool_or([~team_full_var for team_full_var in full_teams]).only_enforce_if(
+            ~full
+        )
+        wave_full[wave_no] = full
+    treasure_used: dict[tuple[int, int, int], cp_model.IntVar] = {}
+    for group_index, group_key in enumerate(group_keys):
+        treasure_count = sum(
+            participants[participant_index].is_treasure_damage
+            for participant_index in participant_indices_by_group[group_key]
+        )
+        if treasure_count == 0:
+            continue
+        group_treasure_variables: list[cp_model.IntVar] = []
+        for wave_no in waves:
+            for team_index, _team in enumerate(teams):
+                variable = model.new_bool_var(
+                    f"target_treasure_{group_index}_{wave_no}_{team_index}"
+                )
+                model.add(variable <= group_assignment[group_index, wave_no, team_index])
+                treasure_used[group_index, wave_no, team_index] = variable
+                group_treasure_variables.append(variable)
+        model.add(sum(group_treasure_variables) <= treasure_count)
+    for locked in solver_input.locked_assignments:
+        participant_index = participant_index_by_id[locked.participant_id]
+        group_index = group_index_by_key[group_key_by_participant[participant_index]]
+        treasure_variable = treasure_used.get(
+            (group_index, locked.wave_no, team_index_by_key[locked.team_key])
+        )
+        if treasure_variable is not None:
+            model.add(
+                treasure_variable
+                == int(participants[participant_index].is_treasure_damage)
+            )
+
+    special_satisfied: list[cp_model.IntVar] = []
+    for rule_index, special_rule in enumerate(solver_input.dungeon.special_role_rules.rules):
+        target_team_index = team_index_by_key[special_rule.target_team_key]
+        for wave_no in waves:
+            special_count = sum(
+                variable
+                for (group_index, candidate_wave, team_index), variable in treasure_used.items()
+                if candidate_wave == wave_no
+                and team_index == target_team_index
+                and group_keys[group_index][1] == RoleType.DAMAGE
+            )
+            model.add(special_count <= special_rule.count_per_wave)
+            satisfied = model.new_bool_var(f"target_special_{rule_index}_{wave_no}")
+            model.add(special_count == special_rule.count_per_wave * satisfied)
+            model.add(satisfied <= wave_full[wave_no])
+            special_satisfied.append(satisfied)
+    composition_penalty = cp_model.LinearExpr.sum(composition_penalties)
+    special_total = cp_model.LinearExpr.sum(special_satisfied)
+    special_upper_bound = len(special_satisfied)
+    composition_penalty_upper_bound = sum(
+        max(0, rule.priority - 1)
+        for _wave_no in waves
+        for team in teams
+        for rule in composition_rules
+        if team.team_key in rule.applicable_team_keys
+    )
+    secondary_upper_bound = (
+        (special_upper_bound + 1) * composition_penalty_upper_bound
+        + special_upper_bound
+    )
+    model.maximize(
+        (secondary_upper_bound + 1) * assigned_total
+        - (special_upper_bound + 1) * composition_penalty
+        + special_total
+    )
+    solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = max(0.05, time_limit_seconds)
+    solver.parameters.random_seed = solver_input.random_seed
+    solver.parameters.num_search_workers = 8
+    # Deterministic interleaving keeps the parallel aggregate search repeatable
+    # for the same seed while retaining the dense-roster speedup.
+    solver.parameters.interleave_search = True
+    status = _status(solver.solve(model))
+    if status not in (SolverStatus.OPTIMAL, SolverStatus.FEASIBLE):
+        return None, solver.wall_time, 0
+
+    hint = {
+        (participant_index, wave_no, team_index): 0
+        for participant_index, _participant in enumerate(participants)
+        for wave_no in waves
+        for team_index, _team in enumerate(teams)
+    }
+    locks_by_group: dict[int, list[tuple[int, int, int]]] = defaultdict(list)
+    for locked in solver_input.locked_assignments:
+        participant_index = participant_index_by_id[locked.participant_id]
+        group_index = group_index_by_key[group_key_by_participant[participant_index]]
+        locks_by_group[group_index].append(
+            (participant_index, locked.wave_no, team_index_by_key[locked.team_key])
+        )
+    for group_index, group_key in enumerate(group_keys):
+        selected_positions = {
+            (wave_no, team_index)
+            for wave_no in waves
+            for team_index, _team in enumerate(teams)
+            if solver.value(group_assignment[group_index, wave_no, team_index])
+        }
+        locked_participant_indices: set[int] = set()
+        for participant_index, wave_no, team_index in locks_by_group[group_index]:
+            hint[participant_index, wave_no, team_index] = 1
+            selected_positions.remove((wave_no, team_index))
+            locked_participant_indices.add(participant_index)
+        required_treasure_positions = {
+            (wave_no, team_index)
+            for wave_no, team_index in selected_positions
+            if (
+                treasure_hint_variable := treasure_used.get(
+                    (group_index, wave_no, team_index)
+                )
+            )
+            is not None
+            and solver.value(treasure_hint_variable)
+        }
+        treasure_indices = iter(
+            participant_index
+            for participant_index in participant_indices_by_group[group_key]
+            if participant_index not in locked_participant_indices
+            and participants[participant_index].is_treasure_damage
+        )
+        for participant_index, (wave_no, team_index) in zip(
+            treasure_indices, sorted(required_treasure_positions), strict=False
+        ):
+            hint[participant_index, wave_no, team_index] = 1
+            selected_positions.remove((wave_no, team_index))
+            locked_participant_indices.add(participant_index)
+        available_indices = (
+            participant_index
+            for participant_index in participant_indices_by_group[group_key]
+            if participant_index not in locked_participant_indices
+        )
+        for participant_index, (wave_no, team_index) in zip(
+            available_indices, sorted(selected_positions), strict=False
+        ):
+            hint[participant_index, wave_no, team_index] = 1
+    return hint, solver.wall_time, round(solver.value(assigned_total))
 
 
 def _solve_stage(

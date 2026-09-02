@@ -89,7 +89,7 @@ MVP 采用模块化单体架构，不引入 Redis、消息队列或微服务。�
 - [技术设计文档](docs/technical-design.md)：系统架构、PostgreSQL、API、求解器、测试和部署方案。
 - [生产部署与数据恢复](docs/deployment.md)：HTTPS、生产配置、备份、恢复、升级和日常运维。
 - [阶段 5 性能基线](docs/performance-baseline.md)：1/12/30/50 波求解结果、浏览器和全栈验收范围。
-- [12 人团本质量基线](docs/raid-quality-baseline.md)：典型人员短缺、秘宝、锁定、玩家冲突和匿名多角色画像场景的量化门槛。
+- [12 人团本质量基线](docs/raid-quality-baseline.md)：典型人员短缺、秘宝、锁定、玩家冲突、匿名多角色和分段可用画像的量化门槛。
 
 当前文档版本均为 v0.2。
 
@@ -182,7 +182,7 @@ cd backend && uv run uvicorn app.main:app --reload
 - [x] 完成 HTTPS 入口、生产安全配置和部署文档
 - [x] 完成隔离 PostgreSQL 备份恢复演练和生产恢复脚本
 - [x] 完成 Playwright 浏览器端到端测试和 1/12/30/50 波性能验收
-- [x] 建立 12 人团本质量基线并覆盖短缺、秘宝、锁定和玩家冲突
+- [x] 建立 12 人团本质量基线并覆盖短缺、秘宝、锁定、玩家冲突和真实分布匿名画像
 - [ ] 实现 DeepSeek v4 自然语言规则解析、确认、编译和生成解释闭环
 
 ## 已完成实施顺序

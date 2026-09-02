@@ -302,11 +302,11 @@ def _late_concentrated_shortage() -> QualityScenario:
     )
 
 
-def _anonymized_eleven_player_profile() -> QualityScenario:
+def _anonymized_profile_participants(
+    profiles: tuple[tuple[int, int], ...],
+) -> tuple[SolverParticipant, ...]:
     participants: list[SolverParticipant] = []
-    for player_index, (damage_count, buffer_count) in enumerate(
-        ANONYMIZED_PLAYER_PROFILES
-    ):
+    for player_index, (damage_count, buffer_count) in enumerate(profiles):
         player_id = f"profile-player-{player_index:02d}"
         for role_index in range(damage_count):
             participants.append(
@@ -335,21 +335,89 @@ def _anonymized_eleven_player_profile() -> QualityScenario:
                     allowed_team_keys=("RED",) if role_index < fixed_buffer_count else None,
                 )
             )
+    return tuple(participants)
+
+
+def _anonymized_eleven_player_profile() -> QualityScenario:
+    participants = _anonymized_profile_participants(ANONYMIZED_PLAYER_PROFILES)
     return QualityScenario(
         name="anonymized-eleven-player-profile",
-        solver_input=_input(tuple(participants), time_limit_seconds=10),
+        solver_input=_input(participants, time_limit_seconds=10),
         expectation=QualityExpectation(
             assigned_count=132,
             participant_count=142,
             complete_wave_count=0,
             complete_team_count=24,
-            preferred_composition_count=16,
+            preferred_composition_count=24,
             special_rule_satisfied_count=0,
             damage_spread=0,
             buffer_spread=0,
             strength_order_violation_count=0,
             unassigned_codes={"UNASSIGNED_PLAYER_CONFLICT": 10},
             wave_fill=(11,) * 12,
+        ),
+    )
+
+
+def _anonymized_twelve_player_complete_profile() -> QualityScenario:
+    participants = _anonymized_profile_participants(
+        (*ANONYMIZED_PLAYER_PROFILES, (9, 3))
+    )
+    return QualityScenario(
+        name="anonymized-twelve-player-complete-profile",
+        solver_input=_input(participants, time_limit_seconds=20),
+        expectation=QualityExpectation(
+            assigned_count=144,
+            participant_count=154,
+            complete_wave_count=12,
+            complete_team_count=36,
+            preferred_composition_count=32,
+            special_rule_satisfied_count=12,
+            unassigned_codes={"UNASSIGNED_PLAYER_CONFLICT": 10},
+            wave_fill=(12,) * 12,
+        ),
+    )
+
+
+def _split_availability_complete_profile() -> QualityScenario:
+    participants: list[SolverParticipant] = []
+    for segment_index, allowed_waves in enumerate((tuple(range(1, 7)), tuple(range(7, 13)))):
+        for player_index in range(12):
+            role_type = RoleType.DAMAGE if player_index < 9 else RoleType.BUFFER
+            for role_index in range(6):
+                participants.append(
+                    SolverParticipant(
+                        participant_id=(
+                            f"availability-{segment_index}-{player_index:02d}-{role_index:02d}"
+                        ),
+                        player_id=f"availability-player-{segment_index}-{player_index:02d}",
+                        role_type=role_type,
+                        score=(
+                            6_000 + player_index * 250 + role_index * 50
+                            if role_type == RoleType.DAMAGE
+                            else 440 + player_index * 5 + role_index
+                        ),
+                        is_treasure_damage=role_type == RoleType.DAMAGE and player_index == 0,
+                        allowed_waves=allowed_waves,
+                        allowed_team_keys=(
+                            ("RED",)
+                            if role_type == RoleType.BUFFER and player_index == 9
+                            else None
+                        ),
+                    )
+                )
+    return QualityScenario(
+        name="split-availability-complete-profile",
+        solver_input=_input(tuple(participants), time_limit_seconds=10),
+        expectation=QualityExpectation(
+            assigned_count=144,
+            participant_count=144,
+            complete_wave_count=12,
+            complete_team_count=36,
+            preferred_composition_count=36,
+            special_rule_satisfied_count=12,
+            unassigned_codes={},
+            wave_fill=(12,) * 12,
         ),
     )
 
@@ -363,6 +431,8 @@ SCENARIOS = (
     _locked_core_assignments(),
     _late_concentrated_shortage(),
     _anonymized_eleven_player_profile(),
+    _anonymized_twelve_player_complete_profile(),
+    _split_availability_complete_profile(),
 )
 
 
