@@ -40,6 +40,33 @@ class QualityScenario:
 
 DAMAGE_SCORES = (15_000, 14_000, 13_000, 12_000, 11_000, 10_000, 9_000, 8_000, 7_000)
 BUFFER_SCORES = (60, 50, 40)
+ANONYMIZED_PLAYER_PROFILES = (
+    (7, 6),
+    (8, 5),
+    (8, 5),
+    (8, 5),
+    (8, 5),
+    (8, 5),
+    (9, 3),
+    (9, 4),
+    (9, 4),
+    (10, 3),
+    (11, 2),
+)
+ANONYMIZED_DAMAGE_BUCKETS = (
+    17_000,
+    12_000,
+    9_000,
+    7_700,
+    6_500,
+    5_250,
+    4_500,
+    3_700,
+    3_000,
+    2_500,
+    1_500,
+)
+ANONYMIZED_BUFFER_BUCKETS = (535, 490, 472, 465, 458, 445, 427)
 
 
 def _fixed_wave_participants(
@@ -275,6 +302,58 @@ def _late_concentrated_shortage() -> QualityScenario:
     )
 
 
+def _anonymized_eleven_player_profile() -> QualityScenario:
+    participants: list[SolverParticipant] = []
+    for player_index, (damage_count, buffer_count) in enumerate(
+        ANONYMIZED_PLAYER_PROFILES
+    ):
+        player_id = f"profile-player-{player_index:02d}"
+        for role_index in range(damage_count):
+            participants.append(
+                SolverParticipant(
+                    participant_id=f"profile-damage-{player_index:02d}-{role_index:02d}",
+                    player_id=player_id,
+                    role_type=RoleType.DAMAGE,
+                    score=ANONYMIZED_DAMAGE_BUCKETS[
+                        (player_index + role_index) % len(ANONYMIZED_DAMAGE_BUCKETS)
+                    ],
+                    is_treasure_damage=(
+                        role_index == 0 or (player_index < 4 and role_index == 1)
+                    ),
+                )
+            )
+        fixed_buffer_count = 2 if player_index < 3 else 1 if player_index == 3 else 0
+        for role_index in range(buffer_count):
+            participants.append(
+                SolverParticipant(
+                    participant_id=f"profile-buffer-{player_index:02d}-{role_index:02d}",
+                    player_id=player_id,
+                    role_type=RoleType.BUFFER,
+                    score=ANONYMIZED_BUFFER_BUCKETS[
+                        (player_index + role_index) % len(ANONYMIZED_BUFFER_BUCKETS)
+                    ],
+                    allowed_team_keys=("RED",) if role_index < fixed_buffer_count else None,
+                )
+            )
+    return QualityScenario(
+        name="anonymized-eleven-player-profile",
+        solver_input=_input(tuple(participants), time_limit_seconds=10),
+        expectation=QualityExpectation(
+            assigned_count=132,
+            participant_count=142,
+            complete_wave_count=0,
+            complete_team_count=24,
+            preferred_composition_count=16,
+            special_rule_satisfied_count=0,
+            damage_spread=0,
+            buffer_spread=0,
+            strength_order_violation_count=0,
+            unassigned_codes={"UNASSIGNED_PLAYER_CONFLICT": 10},
+            wave_fill=(11,) * 12,
+        ),
+    )
+
+
 SCENARIOS = (
     _balanced_complete(),
     _buffer_surplus_fallback(),
@@ -283,6 +362,7 @@ SCENARIOS = (
     _same_player_conflicts(),
     _locked_core_assignments(),
     _late_concentrated_shortage(),
+    _anonymized_eleven_player_profile(),
 )
 
 

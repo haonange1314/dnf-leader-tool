@@ -134,6 +134,42 @@ def test_participant_can_be_restricted_to_definition_team_keys() -> None:
     assert fixed_assignment.team_key == "RED"
 
 
+def test_player_upper_bound_search_falls_back_when_team_capacity_is_tighter() -> None:
+    definition = default_raid_12_input().dungeon
+    participants = (
+        SolverParticipant(
+            "damage-0", "player-0", RoleType.DAMAGE, 1000, allowed_team_keys=("RED",)
+        ),
+        SolverParticipant(
+            "damage-1", "player-1", RoleType.DAMAGE, 900, allowed_team_keys=("RED",)
+        ),
+        SolverParticipant(
+            "damage-2", "player-2", RoleType.DAMAGE, 800, allowed_team_keys=("RED",)
+        ),
+        SolverParticipant(
+            "buffer-0", "player-3", RoleType.BUFFER, 500, allowed_team_keys=("RED",)
+        ),
+        SolverParticipant(
+            "damage-3", "player-4", RoleType.DAMAGE, 700, allowed_team_keys=("RED",)
+        ),
+        SolverParticipant(
+            "buffer-1", "player-4", RoleType.BUFFER, 400, allowed_team_keys=("RED",)
+        ),
+    )
+
+    result = solve(
+        SolverInput(
+            dungeon=definition,
+            wave_count=1,
+            participants=participants,
+            time_limit_seconds=5,
+        )
+    )
+
+    assert len(result.assignments) == 4
+    assert result.objective_summary.complete_team_count == 1
+
+
 def test_same_player_is_never_assigned_twice_in_a_wave() -> None:
     solver_input = custom_party_4_input(include_player_conflict=True)
     result = solve(solver_input)

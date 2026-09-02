@@ -18,6 +18,7 @@ from app.domain.schedule import (
     MAX_SCHEDULE_POSITIONS,
     composition_feasibility,
     composition_role_requirements,
+    distinct_player_feasibility,
 )
 from app.models.dungeon import DungeonVersion
 from app.models.personnel import Character, Player
@@ -1080,6 +1081,29 @@ def validate_schedule(
                     "capacity": capacity,
                     "current": len(selected),
                     "shortage": capacity - len(selected),
+                },
+            )
+        )
+    required_distinct_players = max(
+        (
+            sum(team.member_count_snapshot for team in wave.teams)
+            for wave in item.waves
+        ),
+        default=0,
+    )
+    player_feasibility = distinct_player_feasibility(
+        required_distinct_players,
+        (participant.player_id_snapshot for participant in selected),
+    )
+    if not player_feasibility.can_fill_wave:
+        issues.append(
+            IssueView(
+                severity="WARNING",
+                code="DISTINCT_PLAYER_SHORTAGE",
+                message_params={
+                    "required": player_feasibility.required,
+                    "current": player_feasibility.current,
+                    "shortage": player_feasibility.shortage,
                 },
             )
         )

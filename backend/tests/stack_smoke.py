@@ -547,7 +547,9 @@ assert isinstance(schedule, dict) and schedule["revision"] == 7
 assert len(schedule["participants"]) == 3
 workflow_report = request(f"/schedules/{schedule['id']}/validate", "POST", {"baseRevision": 7})
 assert isinstance(workflow_report, dict)
-assert "PLAYER_WAVE_CAPACITY_INSUFFICIENT" in {issue["code"] for issue in workflow_report["issues"]}
+workflow_issue_codes = {issue["code"] for issue in workflow_report["issues"]}
+assert "PLAYER_WAVE_CAPACITY_INSUFFICIENT" in workflow_issue_codes
+assert "DISTINCT_PLAYER_SHORTAGE" in workflow_issue_codes
 stale_validation = request_error(
     f"/schedules/{schedule['id']}/validate",
     "POST",
