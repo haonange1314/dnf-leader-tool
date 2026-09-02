@@ -25,6 +25,7 @@ const summary = {
   updatedAt: "2026-08-18T00:00:00Z",
 };
 const detail = {
+  activeRuleSetId: null,
   ...summary,
   note: null,
   participants: [
@@ -93,11 +94,50 @@ const editLock = {
   heartbeatIntervalSeconds: 30,
   token: "edit-lock-token",
 };
+const parsedRuleSet = {
+  id: "rule-set-1",
+  scheduleId: "schedule-1",
+  inputRevision: 1,
+  sourceText: "玩家一尽量安排在第 1 波",
+  sourceHash: "a".repeat(64),
+  contextHash: "b".repeat(64),
+  status: "PARSED" as const,
+  modelProvider: "DEEPSEEK",
+  modelName: "deepseek-v4-flash",
+  providerResponseId: "response-1",
+  promptVersion: "schedule-rules-v1",
+  schemaVersion: 1,
+  parsedRules: [
+    {
+      candidateId: "R1",
+      type: "PLAYER_PREFER_WAVE_RANGE",
+      enforcement: "SOFT" as const,
+      explanation: "玩家一优先第一波",
+      playerIds: ["player-1"],
+      waves: [1],
+    },
+  ],
+  resolvedReferences: {},
+  issues: [],
+  createdBy: "user-1",
+  confirmedBy: null,
+  createdAt: "2026-08-18T00:00:00Z",
+  confirmedAt: null,
+};
 
 function editLockResponse(path: string) {
   const scheduleId = path.match(/^\/schedules\/([^/]+)/)?.[1] ?? "schedule-1";
   return { ...editLock, scheduleId };
 }
+
+const emptyRuleSetList = {
+  items: [],
+  total: 0,
+  activeRuleSetId: null,
+  revision: 1,
+  maxSourceChars: 2000,
+  parsingEnabled: true,
+};
 
 describe("SchedulePage", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -123,6 +163,7 @@ describe("SchedulePage", () => {
       if (path === "/schedules/schedule-1") return detail;
       if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };
       if (path === "/schedules/schedule-1/versions") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1/rule-sets") return emptyRuleSetList;
       throw new Error(`unexpected API path: ${path}`);
     });
 
@@ -166,6 +207,7 @@ describe("SchedulePage", () => {
       if (path === "/schedules/schedule-1") return detail;
       if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };
       if (path === "/schedules/schedule-1/versions") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1/rule-sets") return emptyRuleSetList;
       throw new Error(`unexpected API path: ${path}`);
     });
 
@@ -190,6 +232,7 @@ describe("SchedulePage", () => {
       if (path === "/schedules/schedule-1/lock") {
         return { ...editLock, ownedByCurrentUser: false, token: null };
       }
+      if (path === "/schedules/schedule-1/rule-sets") return emptyRuleSetList;
       throw new Error(`unexpected API path: ${path}`);
     });
 
@@ -202,6 +245,73 @@ describe("SchedulePage", () => {
     expect(screen.getByRole("button", { name: /保存选择/ })).toBeDisabled();
   });
 
+  it("previews and confirms natural-language scheduling rules", async () => {
+    let confirmed = false;
+    vi.mocked(api).mockImplementation(async (path: string) => {
+      if (path.endsWith("/lock")) return editLockResponse(path);
+      if (path === "/schedules") return { items: [summary], total: 1 };
+      if (path === "/dungeons") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1") {
+        return {
+          ...detail,
+          revision: confirmed ? 2 : 1,
+          activeRuleSetId: confirmed ? "rule-set-1" : null,
+        };
+      }
+      if (path === "/schedules/schedule-1/generation-runs") {
+        return { items: [], total: 0 };
+      }
+      if (path === "/schedules/schedule-1/versions") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1/rule-sets/parse") return parsedRuleSet;
+      if (path === "/schedules/schedule-1/rule-sets/rule-set-1/confirm") {
+        confirmed = true;
+        return {
+          revision: 2,
+          activeRuleSetId: "rule-set-1",
+          ruleSet: { ...parsedRuleSet, status: "CONFIRMED" },
+        };
+      }
+      if (path === "/schedules/schedule-1/rule-sets") {
+        return {
+          items: [{ ...parsedRuleSet, status: "CONFIRMED" }],
+          total: 1,
+          activeRuleSetId: "rule-set-1",
+          revision: 2,
+          maxSourceChars: 600,
+          parsingEnabled: true,
+        };
+      }
+      throw new Error(`unexpected API path: ${path}`);
+    });
+
+    render(<SchedulePage userRole="OWNER" onError={vi.fn()} onSuccess={vi.fn()} />);
+    fireEvent.click(await screen.findByText("周六团"));
+    fireEvent.click(await screen.findByRole("button", { name: /配置/ }));
+    const sourceInput = screen.getByPlaceholderText(/韩亚尽量安排/);
+    expect(sourceInput).toHaveAttribute("maxlength", "600");
+    fireEvent.change(sourceInput, {
+      target: { value: parsedRuleSet.sourceText },
+    });
+    const parseButton = screen.getByRole("button", { name: "解析要求" });
+    await waitFor(() => expect(parseButton).toBeEnabled());
+    fireEvent.click(parseButton);
+
+    expect(await screen.findByText(/玩家一优先第一波/)).toBeInTheDocument();
+    const confirmButton = screen.getByRole("button", { name: "确认并用于自动排表" });
+    await waitFor(() => expect(confirmButton).toBeEnabled());
+    fireEvent.click(confirmButton);
+
+    expect(await screen.findByText("已确认 1 条")).toBeInTheDocument();
+    const confirmCall = vi
+      .mocked(api)
+      .mock.calls.find(([path]) => path.endsWith("/rule-set-1/confirm"));
+    expect(JSON.parse(String(confirmCall?.[1]?.body))).toMatchObject({
+      baseRevision: 1,
+      sourceHash: "a".repeat(64),
+      contextHash: "b".repeat(64),
+    });
+  }, 15_000);
+
   it("marks participant selection as unsaved and blocks stale actions", async () => {
     vi.mocked(api).mockImplementation(async (path: string) => {
       if (path.endsWith("/lock")) return editLockResponse(path);
@@ -210,6 +320,7 @@ describe("SchedulePage", () => {
       if (path === "/schedules/schedule-1") return detail;
       if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };
       if (path === "/schedules/schedule-1/versions") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1/rule-sets") return emptyRuleSetList;
       throw new Error(`unexpected API path: ${path}`);
     });
 
@@ -242,6 +353,7 @@ describe("SchedulePage", () => {
       if (path === "/schedules/schedule-1") return { ...detail, participants };
       if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };
       if (path === "/schedules/schedule-1/versions") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1/rule-sets") return emptyRuleSetList;
       throw new Error(`unexpected API path: ${path}`);
     });
 
@@ -274,6 +386,7 @@ describe("SchedulePage", () => {
           inverseOperations: [{ type: "LOCK_WAVE", waveId: "wave-1", locked: false }],
         };
       }
+      if (path === "/schedules/schedule-1/rule-sets") return emptyRuleSetList;
       throw new Error(`unexpected API path: ${path}`);
     });
 
@@ -283,7 +396,7 @@ describe("SchedulePage", () => {
 
     expect(await screen.findByRole("button", { name: /解锁波次/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /撤销/ })).toBeEnabled();
-  });
+  }, 15_000);
 
   it("previews copy configuration before creating the new schedule", async () => {
     vi.mocked(api).mockImplementation(async (path: string) => {
@@ -325,6 +438,7 @@ describe("SchedulePage", () => {
       if (path === "/schedules/schedule-1/copy") {
         return { ...detail, id: "schedule-2", name: "周六团 - 副本" };
       }
+      if (path === "/schedules/schedule-1/rule-sets") return emptyRuleSetList;
       throw new Error(`unexpected API path: ${path}`);
     });
 
@@ -347,7 +461,7 @@ describe("SchedulePage", () => {
       targetDungeonVersionId: "version-1",
       waveCount: 1,
     });
-  });
+  }, 15_000);
 
   it("generates a schedule and displays the persisted solver summary", async () => {
     vi.mocked(api).mockImplementation(async (path: string) => {
@@ -431,6 +545,7 @@ describe("SchedulePage", () => {
           },
         };
       }
+      if (path === "/schedules/schedule-1/rule-sets") return emptyRuleSetList;
       throw new Error(`unexpected API path: ${path}`);
     });
 
@@ -471,6 +586,7 @@ describe("SchedulePage", () => {
           ],
         };
       }
+      if (path === "/schedules/schedule-1/rule-sets") return emptyRuleSetList;
       throw new Error(`unexpected API path: ${path}`);
     });
 
@@ -516,6 +632,7 @@ describe("SchedulePage", () => {
           total: 1,
         };
       }
+      if (path === "/schedules/schedule-1/rule-sets") return emptyRuleSetList;
       throw new Error(`unexpected API path: ${path}`);
     });
 

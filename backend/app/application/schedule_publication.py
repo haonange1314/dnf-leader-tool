@@ -21,7 +21,7 @@ from app.models.schedule import (
 from app.schemas.dungeon import SpecialRoleRules, StrengthOrderRules
 from app.schemas.schedule import IssueView, ScheduleDetail
 
-SNAPSHOT_SCHEMA_VERSION = 2
+SNAPSHOT_SCHEMA_VERSION = 3
 
 
 def create_schedule_snapshot(
@@ -64,6 +64,32 @@ def create_schedule_snapshot(
         "config": version.formula_version.config,
     }
     snapshot["issues"] = [issue.model_dump(mode="json") for issue in issues]
+    if schedule.active_rule_set is not None:
+        matching_runs = [
+            run
+            for run in schedule.generation_runs
+            if run.schedule_rule_set_id == schedule.active_rule_set.id
+            and run.rule_evaluation is not None
+        ]
+        latest_run = max(matching_runs, key=lambda run: run.created_at, default=None)
+        snapshot["ruleSet"] = {
+            "id": str(schedule.active_rule_set.id),
+            "sourceText": schedule.active_rule_set.source_text,
+            "sourceHash": schedule.active_rule_set.source_hash,
+            "contextHash": schedule.active_rule_set.context_hash,
+            "modelProvider": schedule.active_rule_set.model_provider,
+            "modelName": schedule.active_rule_set.model_name,
+            "promptVersion": schedule.active_rule_set.prompt_version,
+            "schemaVersion": schedule.active_rule_set.schema_version,
+            "parsedRules": schedule.active_rule_set.parsed_rules,
+            "resolvedReferences": schedule.active_rule_set.resolved_references,
+            "compilerVersion": (
+                latest_run.rule_compiler_version if latest_run is not None else None
+            ),
+            "evaluation": latest_run.rule_evaluation if latest_run is not None else None,
+        }
+    else:
+        snapshot["ruleSet"] = None
     serialized = json.dumps(
         snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode()

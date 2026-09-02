@@ -180,6 +180,7 @@ class ScheduleSummary(BaseModel):
     status: str
     revision: int
     validation_summary: dict[str, Any] | None
+    active_rule_set_id: uuid.UUID | None
     created_at: datetime
     updated_at: datetime
 
@@ -291,6 +292,7 @@ class GenerationRequest(BaseModel):
 
     base_revision: int = Field(gt=0)
     preserve_locks: bool = True
+    expected_rule_set_id: uuid.UUID | None = None
     random_seed: int | None = Field(default=None, ge=0, le=2_147_483_647)
     time_limit_seconds: int | None = Field(default=None, ge=1, le=60)
 
@@ -306,6 +308,10 @@ class GenerationRunView(BaseModel):
     input_hash: str
     solver_version: str
     formula_version_id: uuid.UUID
+    schedule_rule_set_id: uuid.UUID | None
+    rule_compiler_version: str | None
+    effective_rules: list[dict[str, Any]] | None
+    rule_evaluation: list[dict[str, Any]] | None
     random_seed: int
     time_limit_seconds: int
     duration_ms: int | None

@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -38,6 +38,17 @@ class Settings(BaseSettings):
     bootstrap_owner_password: str | None = None
     import_max_bytes: int = Field(default=10 * 1024 * 1024, ge=1024)
     import_max_rows: int = Field(default=10_000, ge=1, le=100_000)
+    natural_language_rules_enabled: bool = False
+    deepseek_api_key: SecretStr | None = None
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_model: str = "deepseek-v4-flash"
+    deepseek_timeout_seconds: int = Field(default=20, ge=1, le=120)
+    rule_prompt_version: str = Field(default="schedule-rules-v1", min_length=1, max_length=40)
+    natural_language_rule_max_chars: int = Field(default=2000, ge=100, le=10_000)
+    natural_language_rule_rate_limit_requests: int = Field(default=10, ge=1, le=1000)
+    natural_language_rule_rate_limit_window_seconds: int = Field(
+        default=60, ge=10, le=86_400
+    )
 
     @property
     def effective_edit_lock_heartbeat_seconds(self) -> int:
@@ -49,6 +60,15 @@ class Settings(BaseSettings):
             raise ValueError(
                 "LOGIN_RATE_LIMIT_SOURCE_ATTEMPTS must be at least LOGIN_RATE_LIMIT_ATTEMPTS"
             )
+        if self.natural_language_rules_enabled:
+            if self.deepseek_api_key is None or not self.deepseek_api_key.get_secret_value():
+                raise ValueError(
+                    "NATURAL_LANGUAGE_RULES_ENABLED requires DEEPSEEK_API_KEY"
+                )
+            if not self.deepseek_base_url.startswith("https://"):
+                raise ValueError("DEEPSEEK_BASE_URL must use HTTPS")
+            if not self.deepseek_model.startswith("deepseek-v4-"):
+                raise ValueError("DEEPSEEK_MODEL must select a DeepSeek V4 API model")
         if self.environment.casefold() != "production":
             return self
         if not self.cookie_secure:

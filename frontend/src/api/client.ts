@@ -146,6 +146,7 @@ export interface ScheduleSummary {
   status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
   revision: number;
   validationSummary: Record<string, number> | null;
+  activeRuleSetId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -257,6 +258,16 @@ export interface GenerationRun {
   inputHash: string;
   solverVersion: string;
   formulaVersionId: string;
+  scheduleRuleSetId: string | null;
+  ruleCompilerVersion: string | null;
+  effectiveRules: Array<Record<string, unknown>> | null;
+  ruleEvaluation: Array<{
+    ruleId: string;
+    type: string;
+    status: "SATISFIED" | "UNSATISFIED" | "BLOCKED" | "NOT_APPLICABLE";
+    explanation: string;
+    reason?: string;
+  }> | null;
   randomSeed: number;
   timeLimitSeconds: number;
   durationMs: number | null;
@@ -298,6 +309,53 @@ export interface GenerationRun {
 export interface GenerationResponse {
   run: GenerationRun;
   schedule: ScheduleDetail;
+}
+export interface RuleResolutionIssue {
+  code: string;
+  candidateId: string | null;
+  field: string | null;
+  reference: string | null;
+  matches: string[];
+}
+export interface ScheduleRuleSet {
+  id: string;
+  scheduleId: string;
+  inputRevision: number;
+  sourceText: string;
+  sourceHash: string;
+  contextHash: string;
+  status: "PARSED" | "CONFIRMED" | "STALE" | "SUPERSEDED" | "FAILED";
+  modelProvider: string;
+  modelName: string;
+  providerResponseId: string | null;
+  promptVersion: string;
+  schemaVersion: number;
+  parsedRules: Array<{
+    candidateId: string;
+    type: string;
+    enforcement: "HARD" | "SOFT";
+    explanation: string;
+    [key: string]: unknown;
+  }>;
+  resolvedReferences: Record<string, unknown>;
+  issues: RuleResolutionIssue[];
+  createdBy: string;
+  confirmedBy: string | null;
+  createdAt: string;
+  confirmedAt: string | null;
+}
+export interface ScheduleRuleSetList {
+  items: ScheduleRuleSet[];
+  total: number;
+  activeRuleSetId: string | null;
+  revision: number;
+  maxSourceChars: number;
+  parsingEnabled: boolean;
+}
+export interface ScheduleRuleSetMutationResponse {
+  revision: number;
+  activeRuleSetId: string | null;
+  ruleSet: ScheduleRuleSet | null;
 }
 export interface ScheduleOperation {
   type:

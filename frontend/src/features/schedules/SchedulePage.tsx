@@ -62,6 +62,9 @@ import {
   type ScheduleDetail,
   type ScheduleOperation,
   type SchedulePublicationCheck,
+  type ScheduleRuleSet,
+  type ScheduleRuleSetList,
+  type ScheduleRuleSetMutationResponse,
   type ScheduleParticipant,
   type SchedulePublishResponse,
   type SchedulePreference,
@@ -122,6 +125,28 @@ const OBJECTIVE_STAGE_LABELS: Record<string, string> = {
   BALANCE_BUFFER: "奶跨波平衡",
   SPECIAL_COMPANION: "核心搭配",
   PLAYER_PREFERENCE: "玩家偏好",
+  SCHEDULE_RULES: "本次排表要求",
+};
+
+const RULE_TYPE_LABELS: Record<string, string> = {
+  PLAYER_ALLOWED_WAVES: "玩家仅可用波次",
+  PLAYER_FORBIDDEN_WAVES: "玩家禁用波次",
+  PLAYERS_NOT_SAME_WAVE: "玩家不同波",
+  CHARACTER_REQUIRED_WAVE: "角色固定波次",
+  CHARACTER_REQUIRED_TEAM: "角色固定队伍",
+  PLAYER_PREFER_WAVE_RANGE: "玩家偏好波次",
+  PLAYER_PREFER_CONTIGUOUS: "玩家连续上号",
+  CHARACTER_PREFER_TEAM: "角色偏好队伍",
+};
+
+const RULE_EVALUATION_LABELS: Record<
+  NonNullable<GenerationRun["ruleEvaluation"]>[number]["status"],
+  { label: string; color?: string }
+> = {
+  SATISFIED: { label: "已满足", color: "green" },
+  UNSATISFIED: { label: "未满足", color: "orange" },
+  BLOCKED: { label: "被阻断", color: "red" },
+  NOT_APPLICABLE: { label: "未执行" },
 };
 
 const OBJECTIVE_OUTCOME_LABELS = {
@@ -175,6 +200,12 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
   const [generationTimeLimit, setGenerationTimeLimit] = useState(10);
   const [generationSeed, setGenerationSeed] = useState(42);
   const [latestGeneration, setLatestGeneration] = useState<GenerationRun | null>(null);
+  const [ruleSets, setRuleSets] = useState<ScheduleRuleSet[]>([]);
+  const [ruleSourceText, setRuleSourceText] = useState("");
+  const [ruleMaxSourceChars, setRuleMaxSourceChars] = useState(2000);
+  const [ruleParsingEnabled, setRuleParsingEnabled] = useState(false);
+  const [rulePending, setRulePending] = useState(false);
+  const [rulePanelOpen, setRulePanelOpen] = useState(false);
   const [editorPending, setEditorPending] = useState(false);
   const [versions, setVersions] = useState<ScheduleVersionSummary[]>([]);
   const [publishOpen, setPublishOpen] = useState(false);
@@ -280,6 +311,11 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
     );
     setValidation(null);
     setLatestGeneration(null);
+    setRuleSets([]);
+    setRuleSourceText("");
+    setRuleMaxSourceChars(2000);
+    setRuleParsingEnabled(false);
+    setRulePanelOpen(false);
   };
 
   const rememberEditLock = (lock: EditLock) => {
@@ -346,10 +382,11 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
   const openSchedule = async (scheduleId: string) => {
     try {
       await releaseCurrentEditLock();
-      const [schedule, runs, versionResult] = await Promise.all([
+      const [schedule, runs, versionResult, ruleSetResult] = await Promise.all([
         api<ScheduleDetail>(`/schedules/${scheduleId}`),
         api<{ items: GenerationRun[] }>(`/schedules/${scheduleId}/generation-runs`),
         api<{ items: ScheduleVersionSummary[] }>(`/schedules/${scheduleId}/versions`),
+        api<ScheduleRuleSetList>(`/schedules/${scheduleId}/rule-sets`),
       ]);
       applyDetail(schedule);
       const selectedParticipantCount = schedule.participants.filter(
@@ -360,6 +397,13 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
       resetEditor();
       setLatestGeneration(runs.items[0] ?? null);
       setVersions(versionResult.items);
+      setRuleSets(ruleSetResult.items);
+      setRuleMaxSourceChars(ruleSetResult.maxSourceChars);
+      setRuleParsingEnabled(ruleSetResult.parsingEnabled);
+      const activeRuleSet = ruleSetResult.items.find(
+        (ruleSet) => ruleSet.id === ruleSetResult.activeRuleSetId,
+      );
+      setRuleSourceText(activeRuleSet?.sourceText ?? ruleSetResult.items[0]?.sourceText ?? "");
       await establishEditLock(scheduleId);
     } catch (error) {
       onError(error);
@@ -644,6 +688,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
           preserveLocks: generationPreserveLocks,
           randomSeed: generationSeed,
           timeLimitSeconds: generationTimeLimit,
+          expectedRuleSetId: detail.activeRuleSetId,
         }),
       });
       applyDetail(response.schedule);
@@ -659,6 +704,86 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
       onError(error);
     } finally {
       setGenerationPending(false);
+    }
+  };
+
+  const refreshRuleState = async () => {
+    if (!detail) return;
+    const [schedule, result] = await Promise.all([
+      api<ScheduleDetail>(`/schedules/${detail.id}`),
+      api<ScheduleRuleSetList>(`/schedules/${detail.id}/rule-sets`),
+    ]);
+    applyDetail(schedule);
+    setRuleSets(result.items);
+    setRuleMaxSourceChars(result.maxSourceChars);
+    setRuleParsingEnabled(result.parsingEnabled);
+  };
+
+  const parseRuleSource = async () => {
+    if (!detail || !ruleSourceText.trim()) return;
+    setRulePending(true);
+    try {
+      const parsed = await api<ScheduleRuleSet>(`/schedules/${detail.id}/rule-sets/parse`, {
+        method: "POST",
+        body: JSON.stringify({
+          baseRevision: detail.revision,
+          sourceText: ruleSourceText.trim(),
+        }),
+      });
+      setRuleSets((current) => [parsed, ...current.filter((item) => item.id !== parsed.id)]);
+      onSuccess(
+        parsed.issues.length
+          ? "解析完成，请先处理歧义或不支持项"
+          : "解析完成，请确认结构化规则",
+      );
+    } catch (error) {
+      onError(error);
+    } finally {
+      setRulePending(false);
+    }
+  };
+
+  const confirmRuleSet = async (ruleSet: ScheduleRuleSet) => {
+    if (!detail) return;
+    setRulePending(true);
+    try {
+      await api<ScheduleRuleSetMutationResponse>(
+        `/schedules/${detail.id}/rule-sets/${ruleSet.id}/confirm`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            baseRevision: detail.revision,
+            sourceHash: ruleSet.sourceHash,
+            contextHash: ruleSet.contextHash,
+          }),
+        },
+      );
+      await refreshRuleState();
+      onSuccess("本次排表要求已确认，将在自动排表时生效");
+    } catch (error) {
+      onError(error);
+    } finally {
+      setRulePending(false);
+    }
+  };
+
+  const clearActiveRuleSet = async () => {
+    if (!detail) return;
+    setRulePending(true);
+    try {
+      await api<ScheduleRuleSetMutationResponse>(
+        `/schedules/${detail.id}/rule-sets/clear`,
+        {
+          method: "POST",
+          body: JSON.stringify({ baseRevision: detail.revision }),
+        },
+      );
+      await refreshRuleState();
+      onSuccess("已停用本次排表要求");
+    } catch (error) {
+      onError(error);
+    } finally {
+      setRulePending(false);
     }
   };
 
@@ -991,6 +1116,8 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
       : detail.waves.filter((wave) => wave.waveNo === selectedWaveNo);
   const canEditSchedule = userRole !== "VIEWER" && Boolean(editLock?.ownedByCurrentUser);
   const canCreateContent = userRole !== "VIEWER";
+  const activeRuleSet = ruleSets.find((ruleSet) => ruleSet.id === detail.activeRuleSetId);
+  const parsedRuleSet = ruleSets.find((ruleSet) => ruleSet.status === "PARSED");
 
   return (
     <section>
@@ -1147,6 +1274,139 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
           description="请先保存参团角色选择或更新波数，再进行复制、角色同步和预检查。"
         />
       ) : null}
+
+      <Card
+        title="本次排表要求"
+        className="schedule-panel schedule-rule-card"
+        size="small"
+        extra={
+          <Space size={4}>
+            {activeRuleSet ? (
+              <>
+              <Tag color="green">已确认 {activeRuleSet.parsedRules.length} 条</Tag>
+              <Button
+                type="link"
+                size="small"
+                danger
+                loading={rulePending}
+                disabled={!canEditSchedule || hasUnsavedChanges}
+                onClick={() => void clearActiveRuleSet()}
+              >
+                停用
+              </Button>
+              </>
+            ) : (
+              <Tag>未启用</Tag>
+            )}
+            <Button
+              type="text"
+              size="small"
+              icon={<EyeOutlined />}
+              onClick={() => setRulePanelOpen((open) => !open)}
+            >
+              {rulePanelOpen ? "收起" : "配置"}
+            </Button>
+          </Space>
+        }
+      >
+        {!rulePanelOpen ? (
+          <Typography.Text type="secondary">
+            {activeRuleSet
+              ? activeRuleSet.sourceText
+              : "可用自然语言补充只对当前排表生效的硬规则和软目标。"}
+          </Typography.Text>
+        ) : (
+          <>
+        <Typography.Paragraph type="secondary" className="compact-description">
+          {ruleParsingEnabled
+            ? "DeepSeek 仅把本次要求解析成白名单规则；确认后由 OR-Tools 执行，不会修改副本版本。"
+            : "当前环境未启用自然语言规则解析，请联系管理员配置后使用。"}
+        </Typography.Paragraph>
+        <Input.TextArea
+          value={ruleSourceText}
+          maxLength={ruleMaxSourceChars}
+          showCount
+          rows={3}
+          placeholder="例如：韩亚尽量安排在前 6 波；剑来和点评不能在同一波。"
+          disabled={!canEditSchedule || !ruleParsingEnabled}
+          onChange={(event) => setRuleSourceText(event.target.value)}
+        />
+        <div className="schedule-rule-actions">
+          <Button
+            size="small"
+            type="primary"
+            loading={rulePending}
+            disabled={
+              !canEditSchedule ||
+              !ruleParsingEnabled ||
+              hasUnsavedChanges ||
+              !ruleSourceText.trim()
+            }
+            onClick={() => void parseRuleSource()}
+          >
+            解析要求
+          </Button>
+          {activeRuleSet ? (
+            <Typography.Text type="secondary">
+              当前生效版本由 {activeRuleSet.modelName} 解析；修改文字后需重新解析并确认。
+            </Typography.Text>
+          ) : null}
+        </div>
+        {parsedRuleSet ? (
+          <div className="schedule-rule-preview">
+            <div className="schedule-rule-preview-heading">
+              <Typography.Text strong>解析预览</Typography.Text>
+              <Space size={4}>
+                <Tag color="red">
+                  硬规则 {parsedRuleSet.parsedRules.filter((rule) => rule.enforcement === "HARD").length}
+                </Tag>
+                <Tag color="blue">
+                  软目标 {parsedRuleSet.parsedRules.filter((rule) => rule.enforcement === "SOFT").length}
+                </Tag>
+              </Space>
+            </div>
+            <Space wrap size={[4, 4]}>
+              {parsedRuleSet.parsedRules.map((rule) => (
+                <Tag
+                  key={rule.candidateId}
+                  color={rule.enforcement === "HARD" ? "red" : "blue"}
+                >
+                  {RULE_TYPE_LABELS[rule.type] ?? rule.type} · {rule.explanation}
+                </Tag>
+              ))}
+            </Space>
+            {parsedRuleSet.issues.map((issue, index) => (
+              <Alert
+                key={`${issue.code}-${index}`}
+                type="warning"
+                showIcon
+                title={issue.code}
+                description={
+                  issue.reference
+                    ? `无法确认引用“${issue.reference}”${issue.matches.length ? `；候选：${issue.matches.join("、")}` : ""}`
+                    : "该要求当前不受支持"
+                }
+              />
+            ))}
+            <Button
+              size="small"
+              type="primary"
+              loading={rulePending}
+              disabled={
+                !canEditSchedule ||
+                hasUnsavedChanges ||
+                Boolean(parsedRuleSet.issues.length) ||
+                !parsedRuleSet.parsedRules.length
+              }
+              onClick={() => void confirmRuleSet(parsedRuleSet)}
+            >
+              确认并用于自动排表
+            </Button>
+          </div>
+        ) : null}
+          </>
+        )}
+      </Card>
 
       <Card className="schedule-panel schedule-overview-card" size="small">
         <div className="schedule-overview-grid">
@@ -2221,6 +2481,25 @@ function GenerationSummary({
                 title={`目标值 ${stage.value} · 用时 ${stage.durationMs} ms`}
               >
                 {OBJECTIVE_STAGE_LABELS[stage.code] ?? stage.code} · {OBJECTIVE_OUTCOME_LABELS[stage.outcome]}
+              </Tag>
+            ))}
+          </Space>
+        </div>
+      ) : null}
+      {run.ruleEvaluation?.length ? (
+        <div className="generation-objective-stages">
+          <Typography.Text strong>本次排表要求</Typography.Text>
+          <Space wrap size={[4, 4]}>
+            {run.ruleEvaluation.map((evaluation) => (
+              <Tag
+                key={evaluation.ruleId}
+                color={RULE_EVALUATION_LABELS[evaluation.status].color}
+                title={evaluation.reason}
+              >
+                {RULE_TYPE_LABELS[evaluation.type] ?? evaluation.type} ·{
+                  RULE_EVALUATION_LABELS[evaluation.status].label
+                } · {evaluation.explanation}
+                {evaluation.reason ? ` · ${evaluation.reason}` : ""}
               </Tag>
             ))}
           </Space>

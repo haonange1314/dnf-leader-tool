@@ -1,5 +1,11 @@
 from app.models.dungeon import Dungeon, DungeonTeamTemplate, DungeonVersion, FormulaVersion
-from app.models.identity import AuditLog, LoginRateLimit, User, UserSession
+from app.models.identity import (
+    AuditLog,
+    LoginRateLimit,
+    NaturalLanguageRateLimit,
+    User,
+    UserSession,
+)
 from app.models.imports import ImportBatch, ImportRow
 from app.models.personnel import Character, Player
 from app.models.schedule import (
@@ -9,6 +15,7 @@ from app.models.schedule import (
     ScheduleEditOperation,
     ScheduleParticipant,
     SchedulePlayerPreference,
+    ScheduleRuleSet,
     ScheduleVersion,
     ShareLink,
     Team,
@@ -29,11 +36,13 @@ __all__ = [
     "ImportBatch",
     "ImportRow",
     "LoginRateLimit",
+    "NaturalLanguageRateLimit",
     "Player",
     "Schedule",
     "ScheduleEditOperation",
     "ScheduleParticipant",
     "SchedulePlayerPreference",
+    "ScheduleRuleSet",
     "ScheduleVersion",
     "ShareLink",
     "Team",

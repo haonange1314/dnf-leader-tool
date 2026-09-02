@@ -27,6 +27,7 @@ from app.solver import (
     SolverPlayerPreference,
     SolverResult,
 )
+from app.solver.models import SolverScheduleRule
 
 SOLVER_VERSION = "cp-sat-v3"
 
@@ -39,6 +40,7 @@ def build_solver_input(
     preserve_locks: bool,
     random_seed: int,
     time_limit_seconds: int,
+    schedule_rules: tuple[SolverScheduleRule, ...] = (),
 ) -> SolverInput:
     formula = FormulaDefinition(
         code=formula_version.code,
@@ -144,6 +146,7 @@ def build_solver_input(
         wave_count=schedule.wave_count,
         participants=participants,
         player_preferences=player_preferences,
+        schedule_rules=schedule_rules,
         locked_assignments=tuple(locked_assignments),
         locked_empty_slots=tuple(locked_empty_slots),
         random_seed=random_seed,

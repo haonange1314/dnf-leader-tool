@@ -899,7 +899,7 @@ assert isinstance(published_schedule, dict)
 assert published_schedule["schedule"]["status"] == "PUBLISHED"
 assert published_schedule["schedule"]["revision"] == 6
 assert published_schedule["version"]["versionNo"] == 1
-assert published_schedule["version"]["snapshot"]["schemaVersion"] == 2
+assert published_schedule["version"]["snapshot"]["schemaVersion"] == 3
 assert published_schedule["version"]["snapshot"]["dungeon"]["versionId"] == published["id"]
 assert published_schedule["version"]["snapshot"]["formula"]["code"]
 assert "issues" in published_schedule["version"]["snapshot"]

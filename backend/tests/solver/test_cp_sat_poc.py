@@ -9,6 +9,8 @@ from app.solver import (
     ObjectiveStageOutcome,
     SolverInput,
     SolverParticipant,
+    SolverScheduleRule,
+    SolverScheduleRuleType,
     SolverStatus,
     solve,
 )
@@ -95,6 +97,80 @@ def test_custom_single_team_four_person_dungeon() -> None:
         RoleType.BUFFER: 1,
     }
     assert result.special_assignments == ()
+
+
+def test_confirmed_schedule_hard_rules_are_enforced_by_solver() -> None:
+    base = custom_party_4_input()
+    participants = tuple(
+        SolverParticipant(
+            participant_id=f"{participant.participant_id}-{wave_no}",
+            player_id=(
+                participant.player_id
+                if wave_no == 1
+                else f"{participant.player_id}-{wave_no}"
+            ),
+            role_type=participant.role_type,
+            score=participant.score,
+        )
+        for wave_no in (1, 2)
+        for participant in base.participants
+    )
+    rules = (
+        SolverScheduleRule(
+            "R1",
+            SolverScheduleRuleType.CHARACTER_REQUIRED_WAVE,
+            participant_id="damage-a-1",
+            waves=(2,),
+        ),
+        SolverScheduleRule(
+            "R2",
+            SolverScheduleRuleType.PLAYERS_NOT_SAME_WAVE,
+            player_ids=("player-b", "player-b-2"),
+        ),
+    )
+
+    result = solve(
+        SolverInput(
+            dungeon=base.dungeon,
+            wave_count=2,
+            participants=participants,
+            schedule_rules=rules,
+            time_limit_seconds=3,
+        )
+    )
+    locations = {
+        assignment.participant_id: assignment.wave_no for assignment in result.assignments
+    }
+
+    assert locations["damage-a-1"] == 2
+    assert locations["damage-b-1"] != locations["damage-b-2"]
+
+
+def test_confirmed_schedule_soft_rule_has_its_own_objective_stage() -> None:
+    base = custom_party_4_input()
+    rule = SolverScheduleRule(
+        "R1",
+        SolverScheduleRuleType.PLAYER_PREFER_WAVE_RANGE,
+        player_ids=("player-a",),
+        waves=(1,),
+    )
+
+    result = solve(
+        SolverInput(
+            dungeon=base.dungeon,
+            wave_count=2,
+            participants=base.participants,
+            schedule_rules=(rule,),
+            time_limit_seconds=3,
+        )
+    )
+
+    assert next(
+        assignment.wave_no
+        for assignment in result.assignments
+        if assignment.participant_id == "damage-a"
+    ) == 1
+    assert "SCHEDULE_RULES" in {stage.code for stage in result.objective_stages}
 
 
 def test_participant_can_be_restricted_to_definition_team_keys() -> None:
