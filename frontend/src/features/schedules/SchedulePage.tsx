@@ -210,6 +210,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
   const [generationTimeLimit, setGenerationTimeLimit] = useState(10);
   const [generationSeed, setGenerationSeed] = useState(42);
   const [latestGeneration, setLatestGeneration] = useState<GenerationRun | null>(null);
+  const [previousGeneration, setPreviousGeneration] = useState<GenerationRun | null>(null);
   const [ruleSets, setRuleSets] = useState<ScheduleRuleSet[]>([]);
   const [ruleSourceText, setRuleSourceText] = useState("");
   const [ruleMaxSourceChars, setRuleMaxSourceChars] = useState(2000);
@@ -321,6 +322,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
     );
     setValidation(null);
     setLatestGeneration(null);
+    setPreviousGeneration(null);
     setRuleSets([]);
     setRuleSourceText("");
     setRuleMaxSourceChars(2000);
@@ -689,6 +691,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
 
   const generate = async () => {
     if (!detail) return;
+    const comparedRun = latestGeneration;
     setGenerationPending(true);
     try {
       const response = await api<GenerationResponse>(`/schedules/${detail.id}/generate`, {
@@ -702,6 +705,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
         }),
       });
       applyDetail(response.schedule);
+      setPreviousGeneration(comparedRun);
       setLatestGeneration(response.run);
       setGenerationOpen(false);
       await loadList();
@@ -1471,7 +1475,16 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
       ) : null}
 
       {latestGeneration ? (
-        <GenerationSummary run={latestGeneration} participants={detail.participants} />
+        <GenerationSummary
+          run={latestGeneration}
+          previousRun={previousGeneration}
+          participants={detail.participants}
+          canTryAlternative={canEditSchedule && !hasUnsavedChanges}
+          onTryAlternative={() => {
+            setGenerationSeed((seed) => (seed >= 2_147_483_647 ? 1 : seed + 1));
+            setGenerationOpen(true);
+          }}
+        />
       ) : null}
 
       <Card
@@ -1900,16 +1913,28 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
               />
             </Col>
             <Col span={12}>
-              <Typography.Text type="secondary">随机种子</Typography.Text>
-              <InputNumber
-                min={0}
-                max={2_147_483_647}
-                className="full-width"
-                value={generationSeed}
-                onChange={(value) => setGenerationSeed(value ?? 42)}
-              />
+              <Typography.Text type="secondary">方案种子</Typography.Text>
+              <Space.Compact className="full-width">
+                <InputNumber
+                  min={0}
+                  max={2_147_483_647}
+                  className="full-width"
+                  value={generationSeed}
+                  onChange={(value) => setGenerationSeed(value ?? 42)}
+                />
+                <Button
+                  aria-label="更换方案种子"
+                  icon={<ReloadOutlined />}
+                  onClick={() =>
+                    setGenerationSeed((seed) => (seed >= 2_147_483_647 ? 1 : seed + 1))
+                  }
+                />
+              </Space.Compact>
             </Col>
           </Row>
+          <Typography.Text type="secondary">
+            相同数据、规则、锁定和种子可复现同一方案；更换种子可探索同等硬约束下的其他可行编队。
+          </Typography.Text>
         </Space>
       </Modal>
 
@@ -2431,18 +2456,40 @@ function ParticipantLabel({
 
 function GenerationSummary({
   run,
+  previousRun,
   participants,
+  canTryAlternative,
+  onTryAlternative,
 }: {
   run: GenerationRun;
+  previousRun: GenerationRun | null;
   participants: ScheduleParticipant[];
+  canTryAlternative: boolean;
+  onTryAlternative: () => void;
 }) {
   const summary = run.objectiveSummary;
   const participantById = new Map(participants.map((participant) => [participant.id, participant]));
   const unassigned = run.diagnostics?.unassigned ?? [];
   const issues = run.diagnostics?.issues ?? [];
   const objectiveStages = run.diagnostics?.objectiveStages ?? [];
+  const comparison = compareGenerationRuns(run, previousRun);
   return (
-    <Card title="最近一次自动排表" className="schedule-panel" size="small">
+    <Card
+      title="最近一次自动排表"
+      className="schedule-panel generation-summary-card"
+      size="small"
+      extra={
+        <Button
+          type="text"
+          size="small"
+          icon={<ReloadOutlined />}
+          disabled={!canTryAlternative}
+          onClick={onTryAlternative}
+        >
+          换一个方案
+        </Button>
+      }
+    >
       <Space wrap className="generation-summary-tags">
         <Tag color={run.status === "SUCCEEDED" ? "green" : "orange"}>
           {GENERATION_STATUS_LABELS[run.status]}
@@ -2470,6 +2517,15 @@ function GenerationSummary({
           </>
         ) : null}
       </Space>
+      {comparison ? (
+        <Alert
+          className="generation-comparison"
+          type={comparison.improved ? "success" : comparison.declined ? "warning" : "info"}
+          showIcon
+          title={comparison.title}
+          description={comparison.description}
+        />
+      ) : null}
       {objectiveStages.length ? (
         <div className="generation-objective-stages">
           <Typography.Text strong>优化阶段</Typography.Text>
@@ -2548,6 +2604,88 @@ function GenerationSummary({
       ) : null}
     </Card>
   );
+}
+
+export function compareGenerationRuns(
+  current: GenerationRun,
+  previous: GenerationRun | null,
+): { improved: boolean; declined: boolean; title: string; description: string } | null {
+  const currentSummary = current.objectiveSummary;
+  const previousSummary = previous?.objectiveSummary;
+  if (!currentSummary || !previousSummary) return null;
+  const metrics = [
+    {
+      label: "已安排",
+      current: currentSummary.assignedCount,
+      previous: previousSummary.assignedCount,
+      lowerIsBetter: false,
+    },
+    {
+      label: "完整波次",
+      current: currentSummary.completeWaveCount,
+      previous: previousSummary.completeWaveCount,
+      lowerIsBetter: false,
+    },
+    {
+      label: "完整队伍",
+      current: currentSummary.completeTeamCount,
+      previous: previousSummary.completeTeamCount,
+      lowerIsBetter: false,
+    },
+    {
+      label: "优先组成",
+      current: currentSummary.preferredCompositionCount,
+      previous: previousSummary.preferredCompositionCount,
+      lowerIsBetter: false,
+    },
+    {
+      label: "核心满足",
+      current: currentSummary.specialRuleSatisfiedCount,
+      previous: previousSummary.specialRuleSatisfiedCount,
+      lowerIsBetter: false,
+    },
+    {
+      label: "强度顺序冲突",
+      current: currentSummary.strengthOrderViolationCount,
+      previous: previousSummary.strengthOrderViolationCount,
+      lowerIsBetter: true,
+    },
+    {
+      label: "C 跨波差",
+      current: currentSummary.damageSpread,
+      previous: previousSummary.damageSpread,
+      lowerIsBetter: true,
+    },
+    {
+      label: "奶跨波差",
+      current: currentSummary.bufferSpread,
+      previous: previousSummary.bufferSpread,
+      lowerIsBetter: true,
+    },
+  ];
+  const firstDifference = metrics.find((metric) => metric.current !== metric.previous);
+  const changed = metrics
+    .filter((metric) => metric.current !== metric.previous)
+    .map((metric) => `${metric.label} ${metric.previous} → ${metric.current}`);
+  if (!firstDifference) {
+    return {
+      improved: false,
+      declined: false,
+      title: `与种子 ${previous.randomSeed} 的关键质量指标相同`,
+      description: "角色位置可能不同；硬约束和主要质量指标没有变化。",
+    };
+  }
+  const improved = firstDifference.lowerIsBetter
+    ? firstDifference.current < firstDifference.previous
+    : firstDifference.current > firstDifference.previous;
+  return {
+    improved,
+    declined: !improved,
+    title: improved
+      ? `关键指标优于种子 ${previous.randomSeed}`
+      : `关键指标不优于种子 ${previous.randomSeed}`,
+    description: changed.join("；"),
+  };
 }
 
 function allScheduleSlots(schedule: ScheduleDetail): ScheduleSlot[] {
