@@ -505,6 +505,26 @@ def _natural_rule_with_player_limits() -> QualityScenario:
     )
 
 
+def _character_rule_with_player_limits() -> QualityScenario:
+    base = _fixed_lead_buffer_with_player_limits()
+    return QualityScenario(
+        name="character-rule-with-player-limits",
+        solver_input=replace(
+            base.solver_input,
+            schedule_rules=(
+                SolverScheduleRule(
+                    rule_id="R1",
+                    type=SolverScheduleRuleType.CHARACTER_REQUIRED_WAVE,
+                    explanation="指定 C 角色必须参加第 1 波",
+                    participant_id="limited-damage-00-00",
+                    waves=(1,),
+                ),
+            ),
+        ),
+        expectation=replace(base.expectation, max_damage_spread=76_000),
+    )
+
+
 SCENARIOS = (
     _balanced_complete(),
     _buffer_surplus_fallback(),
@@ -518,6 +538,7 @@ SCENARIOS = (
     _split_availability_complete_profile(),
     _fixed_lead_buffer_with_player_limits(),
     _natural_rule_with_player_limits(),
+    _character_rule_with_player_limits(),
 )
 
 
