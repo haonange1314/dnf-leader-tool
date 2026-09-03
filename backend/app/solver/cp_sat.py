@@ -25,6 +25,8 @@ _AGGREGATE_HINT_SUPPORTED_RULE_TYPES = frozenset(
         SolverScheduleRuleType.PLAYER_ALLOWED_WAVES,
         SolverScheduleRuleType.PLAYER_FORBIDDEN_WAVES,
         SolverScheduleRuleType.PLAYERS_NOT_SAME_WAVE,
+        SolverScheduleRuleType.CHARACTER_REQUIRED_WAVE,
+        SolverScheduleRuleType.CHARACTER_REQUIRED_TEAM,
         SolverScheduleRuleType.PLAYER_PREFER_WAVE_RANGE,
         SolverScheduleRuleType.PLAYER_PREFER_CONTIGUOUS,
         SolverScheduleRuleType.CHARACTER_PREFER_TEAM,
@@ -985,16 +987,79 @@ def _find_assignment_target_hint(
             <= len(participant_indices_by_group[group_key])
         )
 
+    identity_allowed_locations: dict[int, set[tuple[int, int]]] = {}
+
+    def restrict_identity(
+        participant_index: int,
+        allowed_locations: set[tuple[int, int]],
+    ) -> None:
+        participant = participants[participant_index]
+        participant_waves = set(
+            waves if participant.allowed_waves is None else participant.allowed_waves
+        )
+        participant_teams = {
+            team_index
+            for team_index, team in enumerate(teams)
+            if participant.allowed_team_keys is None
+            or team.team_key in participant.allowed_team_keys
+        }
+        current = identity_allowed_locations.setdefault(
+            participant_index,
+            {
+                (wave_no, team_index)
+                for wave_no in participant_waves
+                for team_index in participant_teams
+            },
+        )
+        current.intersection_update(allowed_locations)
+
     for locked in solver_input.locked_assignments:
-        participant_index = participant_index_by_id[locked.participant_id]
+        restrict_identity(
+            participant_index_by_id[locked.participant_id],
+            {(locked.wave_no, team_index_by_key[locked.team_key])},
+        )
+    for schedule_rule in solver_input.schedule_rules:
+        if schedule_rule.type == SolverScheduleRuleType.CHARACTER_REQUIRED_WAVE:
+            restrict_identity(
+                participant_index_by_id[schedule_rule.participant_id or ""],
+                {
+                    (schedule_rule.waves[0], team_index)
+                    for team_index, _team in enumerate(teams)
+                },
+            )
+        elif schedule_rule.type == SolverScheduleRuleType.CHARACTER_REQUIRED_TEAM:
+            restrict_identity(
+                participant_index_by_id[schedule_rule.participant_id or ""],
+                {
+                    (wave_no, team_index_by_key[schedule_rule.team_key or ""])
+                    for wave_no in waves
+                },
+            )
+
+    identity_assignment: dict[tuple[int, int, int], cp_model.IntVar] = {}
+    identities_by_group_position: dict[
+        tuple[int, int, int], list[tuple[int, cp_model.IntVar]]
+    ] = defaultdict(list)
+    for participant_index, allowed_locations in identity_allowed_locations.items():
         group_index = group_index_by_key[group_key_by_participant[participant_index]]
+        variables: list[cp_model.IntVar] = []
+        for wave_no, team_index in sorted(allowed_locations):
+            variable = model.new_bool_var(
+                f"target_identity_{participant_index}_{wave_no}_{team_index}"
+            )
+            model.add(variable <= group_assignment[group_index, wave_no, team_index])
+            identity_assignment[participant_index, wave_no, team_index] = variable
+            identities_by_group_position[group_index, wave_no, team_index].append(
+                (participant_index, variable)
+            )
+            variables.append(variable)
+        model.add(sum(variables) == 1)
+    for (group_index, wave_no, team_index), identities in (
+        identities_by_group_position.items()
+    ):
         model.add(
-            group_assignment[
-                group_index,
-                locked.wave_no,
-                team_index_by_key[locked.team_key],
-            ]
-            == 1
+            sum(variable for _participant_index, variable in identities)
+            <= group_assignment[group_index, wave_no, team_index]
         )
 
     group_indices_by_player: dict[str, list[int]] = defaultdict(list)
@@ -1123,6 +1188,29 @@ def _find_assignment_target_hint(
                 treasure_used[group_index, wave_no, team_index] = variable
                 group_treasure_variables.append(variable)
         model.add(sum(group_treasure_variables) <= treasure_count)
+    for (group_index, wave_no, team_index), identities in (
+        identities_by_group_position.items()
+    ):
+        treasure_variable = treasure_used.get((group_index, wave_no, team_index))
+        if treasure_variable is None:
+            continue
+        treasure_identities = [
+            variable
+            for participant_index, variable in identities
+            if participants[participant_index].is_treasure_damage
+        ]
+        non_treasure_identities = [
+            variable
+            for participant_index, variable in identities
+            if not participants[participant_index].is_treasure_damage
+        ]
+        if treasure_identities:
+            model.add(treasure_variable >= sum(treasure_identities))
+        if non_treasure_identities:
+            model.add(
+                treasure_variable + sum(non_treasure_identities)
+                <= group_assignment[group_index, wave_no, team_index]
+            )
     for locked in solver_input.locked_assignments:
         participant_index = participant_index_by_id[locked.participant_id]
         group_index = group_index_by_key[group_key_by_participant[participant_index]]
@@ -1187,13 +1275,12 @@ def _find_assignment_target_hint(
         for wave_no in waves
         for team_index, _team in enumerate(teams)
     }
-    locks_by_group: dict[int, list[tuple[int, int, int]]] = defaultdict(list)
-    for locked in solver_input.locked_assignments:
-        participant_index = participant_index_by_id[locked.participant_id]
+    identities_by_group: dict[int, list[tuple[int, int, int]]] = defaultdict(list)
+    for (participant_index, wave_no, team_index), variable in identity_assignment.items():
+        if not solver.value(variable):
+            continue
         group_index = group_index_by_key[group_key_by_participant[participant_index]]
-        locks_by_group[group_index].append(
-            (participant_index, locked.wave_no, team_index_by_key[locked.team_key])
-        )
+        identities_by_group[group_index].append((participant_index, wave_no, team_index))
     for group_index, group_key in enumerate(group_keys):
         selected_positions = {
             (wave_no, team_index)
@@ -1202,7 +1289,7 @@ def _find_assignment_target_hint(
             if solver.value(group_assignment[group_index, wave_no, team_index])
         }
         locked_participant_indices: set[int] = set()
-        for participant_index, wave_no, team_index in locks_by_group[group_index]:
+        for participant_index, wave_no, team_index in identities_by_group[group_index]:
             hint[participant_index, wave_no, team_index] = 1
             selected_positions.remove((wave_no, team_index))
             locked_participant_indices.add(participant_index)

@@ -211,40 +211,74 @@ def test_aggregate_hint_respects_supported_player_hard_rules() -> None:
         )
 
 
-def test_character_hard_rule_uses_conservative_full_model_fallback(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    base = custom_party_4_input(include_player_conflict=True)
+def test_aggregate_hint_preserves_character_hard_rule_identity() -> None:
+    definition = default_raid_12_input().dungeon
+    participants = tuple(
+        [
+            SolverParticipant(
+                f"damage-{index}",
+                f"damage-player-{index}",
+                RoleType.DAMAGE,
+                10_000 - index * 100,
+            )
+            for index in range(9)
+        ]
+        + [
+            SolverParticipant(
+                "required-damage",
+                "damage-player-0",
+                RoleType.DAMAGE,
+                10_500,
+            )
+        ]
+        + [
+            SolverParticipant(
+                f"buffer-{index}",
+                f"buffer-player-{index}",
+                RoleType.BUFFER,
+                500 - index * 10,
+            )
+            for index in range(3)
+        ]
+    )
     solver_input = SolverInput(
-        dungeon=base.dungeon,
+        dungeon=definition,
         wave_count=1,
-        participants=base.participants,
+        participants=participants,
         schedule_rules=(
             SolverScheduleRule(
                 "R1",
                 SolverScheduleRuleType.CHARACTER_REQUIRED_WAVE,
-                participant_id="damage-a",
+                participant_id="required-damage",
                 waves=(1,),
+            ),
+            SolverScheduleRule(
+                "R2",
+                SolverScheduleRuleType.CHARACTER_REQUIRED_TEAM,
+                participant_id="required-damage",
+                team_key="YELLOW",
             ),
         ),
         time_limit_seconds=3,
     )
 
-    def fail_if_called(*_args, **_kwargs):
-        raise AssertionError("角色级硬规则不能进入丢失角色身份的聚合热启动")
-
-    monkeypatch.setattr(
-        cp_sat_module,
-        "_find_assignment_target_hint",
-        fail_if_called,
+    hint, _elapsed, count = cp_sat_module._find_assignment_target_hint(
+        solver_input,
+        assignment_target=12,
+        time_limit_seconds=1,
     )
 
-    result = solve(solver_input)
-
-    assert any(
-        assignment.participant_id == "damage-a" and assignment.wave_no == 1
-        for assignment in result.assignments
+    assert hint is not None
+    assert count == 12
+    required_index = next(
+        index
+        for index, participant in enumerate(participants)
+        if participant.participant_id == "required-damage"
     )
+    yellow_index = next(
+        index for index, team in enumerate(definition.teams) if team.team_key == "YELLOW"
+    )
+    assert hint[required_index, 1, yellow_index] == 1
 
 
 def test_confirmed_schedule_soft_rule_has_its_own_objective_stage() -> None:
