@@ -943,6 +943,10 @@ def _find_assignment_target_hint(
         participant_indices_by_group[group_key].append(participant_index)
     group_keys = tuple(participant_indices_by_group)
     group_index_by_key = {group_key: index for index, group_key in enumerate(group_keys)}
+    team_rank_by_role = {
+        order.metric: {team_key: rank for rank, team_key in enumerate(order.teams)}
+        for order in solver_input.dungeon.strength_order_rules.orders
+    }
 
     group_assignment: dict[tuple[int, int, int], cp_model.IntVar] = {}
     for group_index, group_key in enumerate(group_keys):
@@ -1180,13 +1184,28 @@ def _find_assignment_target_hint(
             hint[participant_index, wave_no, team_index] = 1
             selected_positions.remove((wave_no, team_index))
             locked_participant_indices.add(participant_index)
-        available_indices = (
+        available_indices = [
             participant_index
             for participant_index in participant_indices_by_group[group_key]
             if participant_index not in locked_participant_indices
+        ][: len(selected_positions)]
+        available_indices.sort(
+            key=lambda participant_index: (
+                -participants[participant_index].score,
+                participants[participant_index].participant_id,
+            )
+        )
+        role_team_ranks = team_rank_by_role.get(group_key[1], {})
+        ordered_positions = sorted(
+            selected_positions,
+            key=lambda position: (
+                role_team_ranks.get(teams[position[1]].team_key, len(teams)),
+                position[0],
+                position[1],
+            ),
         )
         for participant_index, (wave_no, team_index) in zip(
-            available_indices, sorted(selected_positions), strict=False
+            available_indices, ordered_positions, strict=False
         ):
             hint[participant_index, wave_no, team_index] = 1
     return hint, solver.wall_time, round(solver.value(assigned_total))
