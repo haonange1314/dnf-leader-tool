@@ -96,6 +96,26 @@ def test_resolve_and_compile_supported_rules() -> None:
     assert compiled[1].participant_id == "participant-1"
 
 
+def test_numeric_provider_candidate_ids_are_normalized_as_opaque_strings() -> None:
+    output = RuleProviderOutput.model_validate(
+        {
+            "schemaVersion": 1,
+            "rules": [
+                {
+                    "candidateId": 1,
+                    "type": "PLAYER_PREFER_CONTIGUOUS",
+                    "enforcement": "SOFT",
+                    "playerReference": {"text": "韩亚"},
+                    "explanation": "韩亚尽量连续上号",
+                }
+            ],
+            "unsupportedItems": [],
+        }
+    )
+
+    assert output.rules[0].candidate_id == "1"
+
+
 def test_ambiguous_character_and_unknown_rule_are_blocking_issues() -> None:
     output = RuleProviderOutput.model_validate(
         {
@@ -329,6 +349,9 @@ def test_deepseek_provider_requests_json_and_validates_response() -> None:
     assert result.output.rules[0].candidate_id == "R1"
     assert captured["response_format"] == {"type": "json_object"}
     assert captured["thinking"] == {"type": "disabled"}
+    system_content = captured["messages"][0]["content"]
+    assert 'playerReference={"text":"玩家显示名"}' in system_content
+    assert "不得把引用缩写为 player、character 或 team 字符串" in system_content
     user_content = json.loads(captured["messages"][1]["content"])
     assert user_content["context"]["participants"][0] == {
         "playerName": "韩亚",

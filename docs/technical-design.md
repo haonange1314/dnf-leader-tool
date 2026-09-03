@@ -1284,7 +1284,7 @@ CHARACTER_PREFER_TEAM
 
 DeepSeek 适配器具备超时、一次有界重试、响应大小限制、不记录完整提示/响应和 PostgreSQL 持久化的按用户限流。API Key 只存在于后端密钥配置，绝不写入前端构建变量、提示词快照或数据库。Provider 不可用时仅禁用自然语言解析，结构化副本配置、已有确认规则集、手动编辑和 OR-Tools 生成继续工作。
 
-首批配置键为 `NATURAL_LANGUAGE_RULES_ENABLED`、`DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL`、`DEEPSEEK_TIMEOUT_SECONDS`、`RULE_PROMPT_VERSION`、`NATURAL_LANGUAGE_RULE_MAX_CHARS`、`NATURAL_LANGUAGE_RULE_RATE_LIMIT_REQUESTS` 和 `NATURAL_LANGUAGE_RULE_RATE_LIMIT_WINDOW_SECONDS`。生产环境仅在功能开关启用时要求 DeepSeek 配置完整并 fail-fast；开发和测试通过 MockTransport 验证同一 Provider 协议，不依赖公网模型。
+首批配置键为 `NATURAL_LANGUAGE_RULES_ENABLED`、`DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL`、`DEEPSEEK_TIMEOUT_SECONDS`、`RULE_PROMPT_VERSION`、`NATURAL_LANGUAGE_RULE_MAX_CHARS`、`NATURAL_LANGUAGE_RULE_RATE_LIMIT_REQUESTS` 和 `NATURAL_LANGUAGE_RULE_RATE_LIMIT_WINDOW_SECONDS`。生产环境仅在功能开关启用时要求 DeepSeek 配置完整并 fail-fast；单元测试通过 MockTransport 验证 Provider 协议，隔离 E2E 栈通过仅在 `test` 环境可访问的 DeepSeek 兼容夹具服务验证真实 HTTP、API、数据库、确认和 OR-Tools 链路，两者都不依赖公网模型。非测试环境的 Provider 地址必须使用 HTTPS。
 
 规则解释结果不保存或展示模型的隐式推理过程。持久化范围仅包括原文、结构化输出、引用解析、可公开的简短说明、模型/提示词/Schema 版本和供应商追踪 ID。
 
@@ -1809,9 +1809,10 @@ MVP 先通过数据库和日志记录：
 → 复制为新排表
 ```
 
-当前自动化以 Playwright Chromium 覆盖 Owner 登录、人员/角色创建，以及两个独立浏览器
-会话争用同一排表编辑租约时的只读降级。完整 API 业务闭环、导出一致性、迁移和恢复由
-隔离 Docker/PostgreSQL 全栈测试覆盖，两者共同纳入 `make check`。
+当前自动化以 Playwright Chromium 覆盖 Owner 登录、人员/角色创建、两个独立浏览器
+会话争用同一排表编辑租约时的只读降级，以及“自然语言输入 → Provider HTTP → 解析预览
+→ 确认 → OR-Tools 生成 → 满足状态”的完整规则闭环。完整 API 业务闭环、导出一致性、迁移
+和恢复由隔离 Docker/PostgreSQL 全栈测试覆盖，两者共同纳入 `make check`。
 
 ### 19.6 性能基线
 

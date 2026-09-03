@@ -1,4 +1,5 @@
 from functools import lru_cache
+from urllib.parse import urlparse
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -43,12 +44,10 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-v4-flash"
     deepseek_timeout_seconds: int = Field(default=20, ge=1, le=120)
-    rule_prompt_version: str = Field(default="schedule-rules-v1", min_length=1, max_length=40)
+    rule_prompt_version: str = Field(default="schedule-rules-v2", min_length=1, max_length=40)
     natural_language_rule_max_chars: int = Field(default=2000, ge=100, le=10_000)
     natural_language_rule_rate_limit_requests: int = Field(default=10, ge=1, le=1000)
-    natural_language_rule_rate_limit_window_seconds: int = Field(
-        default=60, ge=10, le=86_400
-    )
+    natural_language_rule_rate_limit_window_seconds: int = Field(default=60, ge=10, le=86_400)
 
     @property
     def effective_edit_lock_heartbeat_seconds(self) -> int:
@@ -62,11 +61,15 @@ class Settings(BaseSettings):
             )
         if self.natural_language_rules_enabled:
             if self.deepseek_api_key is None or not self.deepseek_api_key.get_secret_value():
-                raise ValueError(
-                    "NATURAL_LANGUAGE_RULES_ENABLED requires DEEPSEEK_API_KEY"
-                )
-            if not self.deepseek_base_url.startswith("https://"):
-                raise ValueError("DEEPSEEK_BASE_URL must use HTTPS")
+                raise ValueError("NATURAL_LANGUAGE_RULES_ENABLED requires DEEPSEEK_API_KEY")
+            provider_url = urlparse(self.deepseek_base_url)
+            allow_e2e_http = (
+                self.environment.casefold() == "test"
+                and provider_url.scheme == "http"
+                and provider_url.hostname in {"localhost", "127.0.0.1", "rule-provider"}
+            )
+            if provider_url.scheme != "https" and not allow_e2e_http:
+                raise ValueError("DEEPSEEK_BASE_URL must use HTTPS outside isolated tests")
             if not self.deepseek_model.startswith("deepseek-v4-"):
                 raise ValueError("DEEPSEEK_MODEL must select a DeepSeek V4 API model")
         if self.environment.casefold() != "production":

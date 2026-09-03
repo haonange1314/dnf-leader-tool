@@ -23,6 +23,7 @@ def test_rule_parse_quota_blocks_requests_after_the_user_limit() -> None:
     db = MagicMock()
     db.scalar.return_value = row
     settings = Settings(
+        _env_file=None,
         natural_language_rule_rate_limit_requests=2,
         natural_language_rule_rate_limit_window_seconds=60,
     )
@@ -46,7 +47,7 @@ def test_rule_parse_quota_resets_an_expired_window() -> None:
     )
     db = MagicMock()
     db.scalar.return_value = row
-    settings = Settings(natural_language_rule_rate_limit_window_seconds=60)
+    settings = Settings(_env_file=None, natural_language_rule_rate_limit_window_seconds=60)
 
     consume_rule_parse_quota(db, user_id, settings)
 

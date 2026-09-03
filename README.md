@@ -143,7 +143,7 @@ Owner 登录后可从“账号与审计”创建 Editor 或 Viewer，并查看�
 make test          # 后端 pytest + 前端 Vitest
 make check         # 静态检查、前后端、全栈恢复、性能及浏览器完整验收
 make test-stack    # 验证迁移、种子、编辑、发布、导出、鉴权和反向代理
-make test-e2e      # 在隔离容器栈上运行 Playwright Chromium 闭环
+make test-e2e      # 验证人员维护、编辑租约和自然语言规则到 OR-Tools 的浏览器闭环
 make test-performance # 运行显式 1/12/30/50 波性能基线
 make test-quality  # 运行 12 人团本质量场景并输出 JSON 指标
 make solver-poc    # 运行默认 12 波团本和自定义单队 4 人 CP-SAT PoC
