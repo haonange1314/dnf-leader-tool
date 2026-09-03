@@ -202,7 +202,8 @@ dnf/
 - 版本编辑器按“波次与队伍 / 队伍组成 / 自动排表规则”分区，使用 `Form.List` 维护任意数量队伍和组成规则；`displayOrder` 来自队伍列表顺序。C 与奶的强度顺序分别编辑并按选择顺序无损回写 `strengthOrderRules`，不从 `strengthRank` 推导，也不写死队伍键；`strengthRank` 只用于标识固定主队规则的目标队伍。
 - 评分公式在当前编辑器中只读，创建首个 12 人团本草稿使用 `TEAM_SCORE v2`，复制版本则保留来源公式快照。
 - 保存前执行轻量的队伍标识、强度排名、组成容量和规则覆盖检查，服务端 `DungeonVersionDefinition` 仍是最终规则真源。
-- 版本历史提供只读查看、复制草稿、显式校验、发布和退役；所有写入口继续按 Owner/Editor 权限禁用，Viewer 保持只读。
+- 版本历史提供只读查看、复制草稿、显式校验、发布和退役；所有入口按副本读写权限控制，
+  不具备写权限的角色保持只读。
 
 内置 12 人团本使用同一数据结构和页面展示，不在前端写特殊页面分支。
 
@@ -377,6 +378,9 @@ MVP 使用 SQLAlchemy 2 的同步 Session：
 ```mermaid
 erDiagram
     USERS ||--o{ USER_SESSIONS : owns
+    ROLES ||--o{ USERS : assigns
+    ROLES ||--o{ ROLE_PERMISSIONS : grants
+    PERMISSIONS ||--o{ ROLE_PERMISSIONS : contains
     DUNGEONS ||--o{ DUNGEON_VERSIONS : versions
     DUNGEON_VERSIONS ||--|{ DUNGEON_TEAM_TEMPLATES : defines
     DUNGEON_VERSIONS ||--o{ SCHEDULES : configures
@@ -528,6 +532,14 @@ unique `(dungeon_version_id, team_key)` 和 `(dungeon_version_id, display_order)
 
 ### 8.4 用户与会话
 
+#### `roles` / `permissions` / `role_permissions`
+
+`roles` 保存稳定编码、显示名称、说明、系统内置标志和启用状态；`permissions` 保存权限码、
+模块、名称和说明；`role_permissions` 使用复合主键保存多对多授权。系统迁移内置 Owner、Editor、
+Viewer 三个角色并把旧 `users.role` 数据转换为外键。Owner 角色不可停用或移除权限；其他内置
+角色与自定义角色可调整权限，修改后撤销关联账号会话。写权限必须同时包含对应读取权限，
+智能生成和发布还依赖排表编辑权限。
+
 #### `users`
 
 | 列 | 类型 | 约束 |
@@ -535,7 +547,7 @@ unique `(dungeon_version_id, team_key)` 和 `(dungeon_version_id, display_order)
 | `id` | uuid | PK |
 | `username` | varchar(80) | unique, not null |
 | `password_hash` | text | not null |
-| `role` | varchar(16) | `OWNER/EDITOR/VIEWER` |
+| `role_id` | uuid | FK roles, not null |
 | `is_active` | boolean | default true |
 | `created_at` | timestamptz | not null |
 | `updated_at` | timestamptz | not null |
@@ -917,13 +929,26 @@ POST   /dungeon-versions/{versionId}/retire
 
 只有 DRAFT 副本版本允许修改。`publish` 在事务中完成完整规则校验并将版本设为不可变。
 
-### 9.2 身份
+### 9.2 身份、用户与 RBAC
 
 ```text
 POST   /auth/login
 POST   /auth/logout
 GET    /auth/me
+GET    /users
+POST   /users
+PATCH  /users/{userId}
+POST   /users/{userId}/revoke-sessions
+GET    /roles
+POST   /roles
+PATCH  /roles/{roleId}
+GET    /permissions
+GET    /audit-logs
 ```
+
+用户列表支持用户名、角色和启用状态筛选，并返回最近登录时间及有效会话数。角色接口以
+`permissionCodes` 读写权限矩阵；操作日志接口独立分页，支持账号、结果、动作、资源、时间及
+关键字筛选。认证响应返回当前角色 ID、编码、名称和权限码，前端据此渲染入口和只读状态。
 
 ### 9.3 人员和角色
 
@@ -1664,7 +1689,8 @@ class SolverResult:
 ### 17.1 本地阶段
 
 - 初始化命令创建 Owner。
-- Owner 可创建、停用和调整 Editor/Viewer 账号，并查看最近审计记录。
+- 具备用户管理权限的账号可创建、停用和调整账号、重置密码及撤销会话；角色权限和操作日志
+  分别使用独立页面和权限。
 - 使用用户名和密码登录。
 - 密码采用 Argon2id 等现代密码哈希。
 - 会话令牌存入 HttpOnly、SameSite Cookie。
@@ -1683,7 +1709,7 @@ class SolverResult:
 
 ### 17.3 权限矩阵
 
-| 能力 | Owner | Editor | Viewer |
+| 能力 | Owner 默认 | Editor 默认 | Viewer 默认 |
 | --- | --- | --- | --- |
 | 查看人员和排表 | 是 | 是 | 是 |
 | 编辑人员 | 是 | 是 | 否 |
@@ -1692,11 +1718,24 @@ class SolverResult:
 | 管理用户 | 是 | 否 | 否 |
 | 归档/删除分享链接 | 是 | 可撤销自己创建的链接 | 否 |
 
-首期可以只创建 Owner 账号，但表结构和权限依赖按此设计实现，避免公网化时重构核心表。
+实际授权不再通过角色名称分支判断，而由以下稳定权限码决定：
 
-当前接口实现为：`POST /auth/login`、`POST /auth/logout`、`GET /auth/me`；Owner
-专用的 `GET/POST/PATCH /users` 和 `GET /audit-logs`；业务写接口统一依赖
-Owner/Editor 权限。`user_sessions.csrf_token_hash` 将 CSRF 令牌绑定到会话，
+```text
+DUNGEON_READ / DUNGEON_WRITE
+ROSTER_READ / ROSTER_WRITE / ROSTER_IMPORT
+SCHEDULE_READ / SCHEDULE_WRITE / SCHEDULE_GENERATE / SCHEDULE_PUBLISH
+SCHEDULE_EXPORT / SHARE_MANAGE
+USER_READ / USER_WRITE
+ROLE_READ / ROLE_WRITE
+AUDIT_READ
+```
+
+内置角色提供兼容默认值，自定义角色可以组合权限。服务端依赖首先验证会话和 CSRF，再校验
+接口要求的权限码；前端权限控制只改善体验，不作为安全边界。Owner 角色始终启用并拥有全部
+权限，最后一个启用 Owner 账号不能被降权或停用。
+
+当前接口实现为：`POST /auth/login`、`POST /auth/logout`、`GET /auth/me`；用户、角色、权限
+和操作日志使用独立 API；业务接口按模块权限校验。`user_sessions.csrf_token_hash` 将 CSRF 令牌绑定到会话，
 `login_rate_limits` 保存登录失败窗口，`audit_logs` 保存登录与已认证写请求结果。
 
 ## 18. 可观测性
@@ -1806,6 +1845,7 @@ MVP 先通过数据库和日志记录：
 - 编辑锁丢失后切换只读。
 - issue 定位和确认发布。
 - 自然语言规则输入、解析预览、歧义阻断、确认替换和 Viewer 只读。
+- 用户筛选、账号编辑、会话撤销、角色权限矩阵和独立操作日志分页详情。
 
 ### 19.5 端到端测试
 
@@ -1955,7 +1995,7 @@ flowchart TD
 
 ### 阶段 5：公网化
 
-- 多账号、Owner/Editor/Viewer 权限、CSRF、登录限流和审计基线（已完成）。
+- 多账号、可配置 RBAC、独立用户/角色/操作日志、CSRF、登录限流和审计基线（已完成）。
 - 单编辑会话锁、心跳、超时接管和 Viewer 前端只读降级（已完成）。
 - HTTPS、生产配置、备份和隔离恢复演练（已完成）。
 - Playwright 浏览器闭环和 1/12/30/50 波性能回归（已完成）。
@@ -2037,6 +2077,7 @@ flowchart TD
 | 草稿模型 | 关系表 | 支持高频拖拽、校验和局部更新 |
 | 排表变量 | 角色×波次×配置队伍 | 比角色×位置更少，且不硬编码三支队伍 |
 | 数据删除 | 软停用 | 保留历史引用和导入匹配稳定性 |
+| 授权模型 | 用户单角色 RBAC | 权限码是后端安全边界，内置角色兼容旧账号并支持自定义分工 |
 | 自然语言规则归属 | 当前排表的确认规则集 | 本次要求不会污染可复用副本版本 |
 | LLM 职责 | 解释器，不是求解器 | 白名单 Schema、确定性编译和 OR-Tools 保证可校验与可复现 |
 | LLM 生成排表 | 长期实验性 Hint | 不裁剪候选池、不绕过约束，最终结果仍由 OR-Tools 决策 |

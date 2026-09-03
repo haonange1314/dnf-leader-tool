@@ -35,6 +35,7 @@ import {
 
 interface Props {
   userRole: User["role"];
+  permissions?: string[];
   onError: (error: unknown) => void;
   onSuccess: (message: string) => void;
 }
@@ -63,8 +64,10 @@ const statusLabel = {
   RETIRED: "已退役",
 } as const;
 
-export function DungeonPage({ userRole, onError, onSuccess }: Props) {
-  const canEdit = userRole !== "VIEWER";
+export function DungeonPage({ userRole, permissions, onError, onSuccess }: Props) {
+  const canEdit = permissions
+    ? permissions.includes("DUNGEON_WRITE")
+    : userRole !== "VIEWER";
   const [items, setItems] = useState<Dungeon[]>([]);
   const [loading, setLoading] = useState(true);
   const [dungeonModalOpen, setDungeonModalOpen] = useState(false);

@@ -2,13 +2,16 @@ import {
   CalendarOutlined,
   CrownOutlined,
   DatabaseOutlined,
+  FileSearchOutlined,
   LogoutOutlined,
   SafetyCertificateOutlined,
   TeamOutlined,
+  UserOutlined,
 } from "@ant-design/icons";
 import {
   Button,
   ConfigProvider,
+  Empty,
   Layout,
   Menu,
   Skeleton,
@@ -42,8 +45,26 @@ const UserPage = lazy(() =>
     default: module.UserPage,
   })),
 );
+const RolePage = lazy(() =>
+  import("../features/users/RolePage").then((module) => ({ default: module.RolePage })),
+);
+const AuditLogPage = lazy(() =>
+  import("../features/users/AuditLogPage").then((module) => ({ default: module.AuditLogPage })),
+);
 
 const { Content, Header, Sider } = Layout;
+
+function firstAllowedSection(user: User): string {
+  const entries = [
+    ["DUNGEON_READ", "dungeons"],
+    ["ROSTER_READ", "personnel"],
+    ["SCHEDULE_READ", "schedules"],
+    ["USER_READ", "users"],
+    ["ROLE_READ", "roles"],
+    ["AUDIT_READ", "audit"],
+  ];
+  return entries.find(([permission]) => user.permissions.includes(permission))?.[1] ?? "none";
+}
 
 export function App() {
   const shareToken = window.location.pathname.match(/^\/share\/([^/]+)$/)?.[1] ?? null;
@@ -58,7 +79,10 @@ export function App() {
       return;
     }
     api<User>("/auth/me")
-      .then(setUser)
+      .then((currentUser) => {
+        setUser(currentUser);
+        setSection(firstAllowedSection(currentUser));
+      })
       .catch(() => setUser(null))
       .finally(() => setChecking(false));
   }, [shareToken]);
@@ -67,12 +91,12 @@ export function App() {
   const login = async (username: string, password: string) => {
     setLoginLoading(true);
     try {
-      setUser(
-        await api<User>("/auth/login", {
+      const currentUser = await api<User>("/auth/login", {
           method: "POST",
           body: JSON.stringify({ username, password }),
-        }),
-      );
+        });
+      setUser(currentUser);
+      setSection(firstAllowedSection(currentUser));
     } catch (error) {
       onError(error);
     } finally {
@@ -169,7 +193,7 @@ export function App() {
             </div>
             <div className="user-actions">
               <Typography.Text className="user-name">
-                {user.username} · {user.role}
+                {user.username} · {user.role_name}
               </Typography.Text>
               <Button type="text" icon={<LogoutOutlined />} onClick={logout}>
                 退出
@@ -188,30 +212,24 @@ export function App() {
                 selectedKeys={[section]}
                 onSelect={({ key }) => setSection(key)}
                 items={[
-                  {
+                  ...(user.permissions.includes("DUNGEON_READ") ? [{
                     key: "dungeons",
                     icon: <DatabaseOutlined />,
                     label: "副本管理",
-                  },
-                  {
+                  }] : []),
+                  ...(user.permissions.includes("ROSTER_READ") ? [{
                     key: "personnel",
                     icon: <TeamOutlined />,
                     label: "人员管理",
-                  },
-                  {
+                  }] : []),
+                  ...(user.permissions.includes("SCHEDULE_READ") ? [{
                     key: "schedules",
                     icon: <CalendarOutlined />,
                     label: "排表管理",
-                  },
-                  ...(user.role === "OWNER"
-                    ? [
-                        {
-                          key: "users",
-                          icon: <SafetyCertificateOutlined />,
-                          label: "账号与审计",
-                        },
-                      ]
-                    : []),
+                  }] : []),
+                  ...(user.permissions.includes("USER_READ") ? [{ key: "users", icon: <UserOutlined />, label: "用户管理" }] : []),
+                  ...(user.permissions.includes("ROLE_READ") ? [{ key: "roles", icon: <SafetyCertificateOutlined />, label: "角色与权限" }] : []),
+                  ...(user.permissions.includes("AUDIT_READ") ? [{ key: "audit", icon: <FileSearchOutlined />, label: "操作日志" }] : []),
                 ]}
               />
             </Sider>
@@ -220,27 +238,37 @@ export function App() {
                 {section === "dungeons" ? (
                   <DungeonPage
                     userRole={user.role}
+                    permissions={user.permissions}
                     onError={onError}
                     onSuccess={messageApi.success}
                   />
                 ) : section === "personnel" ? (
                   <PersonnelPage
                     userRole={user.role}
+                    permissions={user.permissions}
                     onError={onError}
                     onSuccess={messageApi.success}
                   />
                 ) : section === "schedules" ? (
                   <SchedulePage
                     userRole={user.role}
+                    permissions={user.permissions}
                     onError={onError}
                     onSuccess={messageApi.success}
                   />
-                ) : (
+                ) : section === "users" ? (
                   <UserPage
                     currentUserId={user.id}
+                    permissions={user.permissions}
                     onError={onError}
                     onSuccess={messageApi.success}
                   />
+                ) : section === "roles" ? (
+                  <RolePage permissions={user.permissions} onError={onError} onSuccess={messageApi.success} />
+                ) : section === "audit" ? (
+                  <AuditLogPage onError={onError} />
+                ) : (
+                  <Empty description="当前角色没有可访问的功能，请联系管理员分配权限" />
                 )}
               </Suspense>
             </Content>

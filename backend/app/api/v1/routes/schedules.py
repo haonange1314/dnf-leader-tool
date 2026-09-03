@@ -9,8 +9,9 @@ from sqlalchemy.orm import selectinload
 from app.api.dependencies import (
     CurrentUser,
     DbSession,
-    EditorUser,
     ScheduleEditor,
+    ScheduleReader,
+    ScheduleWriter,
     enforce_schedule_edit_lock,
 )
 from app.application.schedule_rules import invalidate_active_rule_set
@@ -417,7 +418,7 @@ def _sync_changes(
 
 
 @router.get("", response_model=ScheduleList)
-def list_schedules(db: DbSession, current_user: CurrentUser) -> ScheduleList:
+def list_schedules(db: DbSession, current_user: ScheduleReader) -> ScheduleList:
     del current_user
     items = list(db.scalars(select(Schedule).order_by(Schedule.updated_at.desc())))
     db.commit()
@@ -427,7 +428,9 @@ def list_schedules(db: DbSession, current_user: CurrentUser) -> ScheduleList:
 
 
 @router.post("", response_model=ScheduleDetail, status_code=201)
-def create_schedule(payload: ScheduleCreate, db: DbSession, current_user: EditorUser) -> Schedule:
+def create_schedule(
+    payload: ScheduleCreate, db: DbSession, current_user: ScheduleWriter
+) -> Schedule:
     version = db.scalar(
         select(DungeonVersion)
         .where(DungeonVersion.id == payload.dungeon_version_id)
@@ -553,7 +556,7 @@ def preview_schedule_copy(
     schedule_id: uuid.UUID,
     payload: ScheduleCopyPreviewRequest,
     db: DbSession,
-    current_user: CurrentUser,
+    current_user: ScheduleReader,
 ) -> ScheduleCopyPreview:
     del current_user
     source = _load(db, schedule_id)
@@ -574,7 +577,7 @@ def copy_schedule(
     schedule_id: uuid.UUID,
     payload: ScheduleCopy,
     db: DbSession,
-    current_user: EditorUser,
+    current_user: ScheduleWriter,
 ) -> Schedule:
     source = _load(db, schedule_id, for_update=True)
     if source.revision != payload.base_revision:
@@ -779,7 +782,7 @@ def copy_schedule(
 
 
 @router.get("/{schedule_id}", response_model=ScheduleDetail)
-def get_schedule(schedule_id: uuid.UUID, db: DbSession, current_user: CurrentUser) -> Schedule:
+def get_schedule(schedule_id: uuid.UUID, db: DbSession, current_user: ScheduleReader) -> Schedule:
     del current_user
     item = _load(db, schedule_id)
     db.commit()
@@ -978,7 +981,7 @@ def update_schedule_preferences(
 
 @router.post("/{schedule_id}/sync-characters/preview", response_model=ScheduleSyncPreview)
 def preview_schedule_character_sync(
-    schedule_id: uuid.UUID, db: DbSession, current_user: CurrentUser
+    schedule_id: uuid.UUID, db: DbSession, current_user: ScheduleReader
 ) -> ScheduleSyncPreview:
     del current_user
     item = _load(db, schedule_id)
@@ -1097,7 +1100,7 @@ def validate_schedule(
     payload: ValidationRequest,
     request: Request,
     db: DbSession,
-    current_user: CurrentUser,
+    current_user: ScheduleReader,
 ) -> ValidationReport:
     item = _load(db, schedule_id)
     if item.revision != payload.base_revision:
@@ -1107,7 +1110,7 @@ def validate_schedule(
             "排表已被其他操作修改，请刷新后重试",
             details={"expected": payload.base_revision, "current": item.revision},
         )
-    if current_user.role != "VIEWER":
+    if current_user.has_permission("SCHEDULE_WRITE"):
         enforce_schedule_edit_lock(schedule_id, request, db, current_user)
     version = db.get(DungeonVersion, item.dungeon_version_id)
     if version is None:
@@ -1308,7 +1311,7 @@ def validate_schedule(
         "info": sum(issue.severity == "INFO" for issue in issues),
     }
     report = ValidationReport(revision=item.revision, issues=issues, summary=summary)
-    if current_user.role == "VIEWER":
+    if not current_user.has_permission("SCHEDULE_WRITE"):
         return report
     validated_revision = db.scalar(
         update(Schedule)

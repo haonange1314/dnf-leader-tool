@@ -6,7 +6,7 @@ from fastapi import APIRouter
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.api.dependencies import CurrentUser, DbSession, ScheduleEditor
+from app.api.dependencies import DbSession, ScheduleGeneratorEditor, ScheduleReader
 from app.application.schedule_rules import (
     build_rule_context,
     build_rule_provider,
@@ -68,7 +68,7 @@ def parse_rule_set(
     schedule_id: uuid.UUID,
     payload: ScheduleRuleSetParseRequest,
     db: DbSession,
-    current_user: ScheduleEditor,
+    current_user: ScheduleGeneratorEditor,
 ) -> ScheduleRuleSetView:
     settings = get_settings()
     if not settings.natural_language_rules_enabled:
@@ -132,7 +132,7 @@ def parse_rule_set(
 def list_rule_sets(
     schedule_id: uuid.UUID,
     db: DbSession,
-    current_user: CurrentUser,
+    current_user: ScheduleReader,
 ) -> ScheduleRuleSetList:
     del current_user
     settings = get_settings()
@@ -163,7 +163,7 @@ def confirm_rule_set(
     rule_set_id: uuid.UUID,
     payload: ScheduleRuleSetConfirmRequest,
     db: DbSession,
-    current_user: ScheduleEditor,
+    current_user: ScheduleGeneratorEditor,
 ) -> ScheduleRuleSetMutationResponse:
     schedule = _load_schedule(db, schedule_id, for_update=True)
     _require_revision(schedule, payload.base_revision)
@@ -214,7 +214,7 @@ def clear_rule_set(
     schedule_id: uuid.UUID,
     payload: ScheduleRuleSetClearRequest,
     db: DbSession,
-    current_user: ScheduleEditor,
+    current_user: ScheduleGeneratorEditor,
 ) -> ScheduleRuleSetMutationResponse:
     schedule = _load_schedule(db, schedule_id, for_update=True)
     _require_revision(schedule, payload.base_revision)

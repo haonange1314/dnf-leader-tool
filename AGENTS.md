@@ -4,7 +4,7 @@
 
 - The project targets the DNF China PC client and is currently at the end of phase 5.
 - Phases 0 through 4 are implemented: project baseline, dungeon/personnel management, schedule foundations, CP-SAT generation, manual editing, publication, sharing, and exports.
-- Phase 5.1 is implemented: multi-account Owner/Editor/Viewer authorization, session-bound CSRF, database-backed login rate limiting, and audit records.
+- Phase 5.1 is implemented and extended: multi-account RBAC with protected built-in roles, custom roles, permission-based backend authorization, separate user/role/audit pages, session-bound CSRF, database-backed login rate limiting, and audit records.
 - Phase 5.2 is implemented: a per-schedule single-editor lease, heartbeat, timeout takeover, stale-token rejection, and Viewer/read-only UI degradation.
 - Phase 5.3 is implemented: Caddy HTTPS, a production Compose overlay with fail-fast security validation, backup/restore scripts, and an isolated pg_dump/pg_restore drill.
 - Phase 5.4 is implemented: Playwright Chromium browser acceptance and explicit 1/12/30/50-wave solver performance baselines are part of `make check`.

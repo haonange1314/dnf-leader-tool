@@ -5,7 +5,7 @@ from fastapi import APIRouter, Request
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.api.dependencies import CurrentUser, DbSession, ScheduleEditor
+from app.api.dependencies import DbSession, ScheduleGeneratorEditor, ScheduleReader
 from app.application.schedule_generation import (
     SOLVER_VERSION,
     apply_solver_result,
@@ -85,7 +85,7 @@ def generate_schedule(
     payload: GenerationRequest,
     request: Request,
     db: DbSession,
-    current_user: ScheduleEditor,
+    current_user: ScheduleGeneratorEditor,
 ) -> GenerationResponse:
     schedule = _load_schedule(db, schedule_id)
     if schedule.status == "ARCHIVED":
@@ -288,7 +288,7 @@ def generate_schedule(
     response_model=GenerationRunList,
 )
 def list_generation_runs(
-    schedule_id: uuid.UUID, db: DbSession, current_user: CurrentUser
+    schedule_id: uuid.UUID, db: DbSession, current_user: ScheduleReader
 ) -> GenerationRunList:
     del current_user
     if db.get(Schedule, schedule_id) is None:
@@ -308,7 +308,7 @@ def list_generation_runs(
 
 @router.get("/generation-runs/{run_id}", response_model=GenerationRunView)
 def get_generation_run(
-    run_id: uuid.UUID, db: DbSession, current_user: CurrentUser
+    run_id: uuid.UUID, db: DbSession, current_user: ScheduleReader
 ) -> GenerationRunView:
     del current_user
     run = db.get(GenerationRun, run_id)

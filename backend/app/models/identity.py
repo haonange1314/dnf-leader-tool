@@ -11,19 +11,80 @@ from app.db.base import Base
 from app.models.mixins import TimestampMixin
 
 
+class Permission(Base):
+    __tablename__ = "permissions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    code: Mapped[str] = mapped_column(String(80), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(80), nullable=False)
+    module: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    description: Mapped[str | None] = mapped_column(Text)
+
+    roles: Mapped[list[Role]] = relationship(
+        secondary="role_permissions", back_populates="permissions", viewonly=True
+    )
+
+
+class RolePermission(Base):
+    __tablename__ = "role_permissions"
+
+    role_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True
+    )
+    permission_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("permissions.id", ondelete="CASCADE"), primary_key=True
+    )
+
+
+class Role(TimestampMixin, Base):
+    __tablename__ = "roles"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    code: Mapped[str] = mapped_column(String(40), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(80), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    is_system: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    permissions: Mapped[list[Permission]] = relationship(
+        secondary="role_permissions", back_populates="roles", order_by=Permission.code
+    )
+    users: Mapped[list[User]] = relationship(back_populates="role_record")
+
+    def has_permission(self, code: str) -> bool:
+        return self.is_active and any(permission.code == code for permission in self.permissions)
+
+
 class User(TimestampMixin, Base):
     __tablename__ = "users"
-    __table_args__ = (CheckConstraint("role IN ('OWNER', 'EDITOR', 'VIEWER')", name="valid_role"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     username: Mapped[str] = mapped_column(String(80), nullable=False, unique=True)
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
-    role: Mapped[str] = mapped_column(String(16), nullable=False, default="OWNER")
+    role_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("roles.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
+    role_record: Mapped[Role] = relationship(back_populates="users", lazy="joined")
     sessions: Mapped[list[UserSession]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+
+    @property
+    def role(self) -> str:
+        return self.role_record.code
+
+    @property
+    def role_name(self) -> str:
+        return self.role_record.name
+
+    @property
+    def permissions(self) -> list[str]:
+        return [permission.code for permission in self.role_record.permissions]
+
+    def has_permission(self, code: str) -> bool:
+        return self.role_record.is_active and code in self.permissions
 
 
 class UserSession(Base):

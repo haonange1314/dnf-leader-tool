@@ -154,6 +154,64 @@ body {
   padding: 18px 20px 28px;
   overflow: auto;
 }
+.admin-stat-row {
+  margin-bottom: 12px;
+}
+.admin-stat-row .ant-card {
+  border: 1px solid rgb(0 0 0 / 7%);
+}
+.admin-stat-row .ant-statistic-title {
+  margin-bottom: 1px;
+  font-size: 11px;
+}
+.admin-stat-row .ant-statistic-content {
+  font-size: 21px;
+}
+.admin-filter-bar {
+  width: 100%;
+  margin-bottom: 10px;
+}
+.admin-security-alert {
+  margin-bottom: 12px;
+}
+.permission-group {
+  display: block;
+  width: 100%;
+}
+.permission-module {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid #e5e5ea;
+}
+.permission-module:last-child {
+  border-bottom: 0;
+}
+.permission-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(130px, 1fr));
+  gap: 8px 12px;
+}
+.audit-details {
+  max-height: 320px;
+  overflow: auto;
+  padding: 12px;
+  color: #343437;
+  background: #f5f5f7;
+  border: 1px solid #e5e5ea;
+  border-radius: 9px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 760px) {
+  .permission-module {
+    grid-template-columns: 1fr;
+  }
+  .permission-options {
+    grid-template-columns: 1fr;
+  }
+}
 .section-heading {
   display: flex;
   align-items: center;

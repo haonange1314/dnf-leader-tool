@@ -11,7 +11,14 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
-from app.api.dependencies import CurrentUser, DbSession, EditorUser, ScheduleEditor
+from app.api.dependencies import (
+    DbSession,
+    ScheduleExporter,
+    SchedulePublisherEditor,
+    ScheduleReader,
+    ScheduleWriter,
+    ShareManager,
+)
 from app.application.schedule_editor import recompute_schedule
 from app.application.schedule_exports import snapshot_png, snapshot_text, snapshot_workbook
 from app.application.schedule_publication import (
@@ -89,7 +96,7 @@ def check_schedule_publication(
     schedule_id: uuid.UUID,
     payload: ValidationRequest,
     db: DbSession,
-    current_user: CurrentUser,
+    current_user: ScheduleReader,
 ) -> SchedulePublicationCheck:
     del current_user
     schedule = _load_schedule(db, schedule_id)
@@ -117,7 +124,7 @@ def publish_schedule(
     schedule_id: uuid.UUID,
     payload: SchedulePublishRequest,
     db: DbSession,
-    current_user: ScheduleEditor,
+    current_user: SchedulePublisherEditor,
 ) -> SchedulePublishResponse:
     schedule = _load_schedule(db, schedule_id, for_update=True)
     if schedule.status == "ARCHIVED":
@@ -191,7 +198,7 @@ def publish_schedule(
 
 @router.get("/schedules/{schedule_id}/versions", response_model=ScheduleVersionList)
 def list_schedule_versions(
-    schedule_id: uuid.UUID, db: DbSession, current_user: CurrentUser
+    schedule_id: uuid.UUID, db: DbSession, current_user: ScheduleReader
 ) -> ScheduleVersionList:
     del current_user
     if db.get(Schedule, schedule_id) is None:
@@ -216,7 +223,7 @@ def get_schedule_version(
     schedule_id: uuid.UUID,
     version_no: int,
     db: DbSession,
-    current_user: CurrentUser,
+    current_user: ScheduleReader,
 ) -> ScheduleVersionView:
     del current_user
     version = db.scalar(
@@ -239,7 +246,7 @@ def restore_schedule_version(
     version_no: int,
     payload: ScheduleRestoreRequest,
     db: DbSession,
-    current_user: ScheduleEditor,
+    current_user: SchedulePublisherEditor,
 ) -> ScheduleDetail:
     schedule = _load_schedule(db, schedule_id, for_update=True)
     if schedule.status == "ARCHIVED":
@@ -279,7 +286,7 @@ def copy_schedule_version_as_draft(
     version_no: int,
     payload: ScheduleVersionCopyRequest,
     db: DbSession,
-    current_user: EditorUser,
+    current_user: ScheduleWriter,
 ) -> ScheduleDetail:
     version = db.scalar(
         select(ScheduleVersion).where(
@@ -327,7 +334,7 @@ def create_share_link(
     version_id: uuid.UUID,
     payload: ShareLinkCreate,
     db: DbSession,
-    current_user: EditorUser,
+    current_user: ShareManager,
 ) -> ShareLinkCreated:
     if db.get(ScheduleVersion, version_id) is None:
         raise AppError(404, "SCHEDULE_VERSION_NOT_FOUND", "排表发布版本不存在")
@@ -359,7 +366,7 @@ def create_share_link(
     response_model=ShareLinkList,
 )
 def list_share_links(
-    version_id: uuid.UUID, db: DbSession, current_user: CurrentUser
+    version_id: uuid.UUID, db: DbSession, current_user: ShareManager
 ) -> ShareLinkList:
     del current_user
     if db.get(ScheduleVersion, version_id) is None:
@@ -396,12 +403,12 @@ def list_share_links(
 
 @router.delete("/share-links/{share_link_id}", status_code=204)
 def revoke_share_link(
-    share_link_id: uuid.UUID, db: DbSession, current_user: EditorUser
+    share_link_id: uuid.UUID, db: DbSession, current_user: ShareManager
 ) -> Response:
     link = db.get(ShareLink, share_link_id)
     if link is None:
         raise AppError(404, "SHARE_LINK_NOT_FOUND", "分享链接不存在")
-    if current_user.role != "OWNER" and link.created_by != current_user.id:
+    if not current_user.has_permission("USER_WRITE") and link.created_by != current_user.id:
         raise AppError(403, "PERMISSION_DENIED", "只能撤销自己创建的分享链接")
     link.revoked_at = utc_now()
     db.commit()
@@ -434,7 +441,7 @@ def get_public_schedule(token: str, db: DbSession) -> PublicScheduleVersion:
 
 @router.get("/schedule-versions/{version_id}/exports/text")
 def export_schedule_text(
-    version_id: uuid.UUID, db: DbSession, current_user: CurrentUser
+    version_id: uuid.UUID, db: DbSession, current_user: ScheduleExporter
 ) -> Response:
     del current_user
     version = _version(db, version_id)
@@ -449,7 +456,7 @@ def export_schedule_text(
 
 @router.get("/schedule-versions/{version_id}/exports/excel")
 def export_schedule_excel(
-    version_id: uuid.UUID, db: DbSession, current_user: CurrentUser
+    version_id: uuid.UUID, db: DbSession, current_user: ScheduleExporter
 ) -> StreamingResponse:
     del current_user
     version = _version(db, version_id)
@@ -465,7 +472,7 @@ def export_schedule_excel(
 
 @router.get("/schedule-versions/{version_id}/exports/image")
 def export_schedule_image(
-    version_id: uuid.UUID, db: DbSession, current_user: CurrentUser
+    version_id: uuid.UUID, db: DbSession, current_user: ScheduleExporter
 ) -> StreamingResponse:
     del current_user
     version = _version(db, version_id)
@@ -480,7 +487,7 @@ def export_schedule_image(
 
 @router.get("/schedules/{schedule_id}/exports/text")
 def export_draft_text(
-    schedule_id: uuid.UUID, db: DbSession, current_user: CurrentUser
+    schedule_id: uuid.UUID, db: DbSession, current_user: ScheduleExporter
 ) -> Response:
     del current_user
     schedule, snapshot = _draft_snapshot(db, schedule_id)
@@ -495,7 +502,7 @@ def export_draft_text(
 
 @router.get("/schedules/{schedule_id}/exports/excel")
 def export_draft_excel(
-    schedule_id: uuid.UUID, db: DbSession, current_user: CurrentUser
+    schedule_id: uuid.UUID, db: DbSession, current_user: ScheduleExporter
 ) -> StreamingResponse:
     del current_user
     schedule, snapshot = _draft_snapshot(db, schedule_id)
@@ -513,7 +520,7 @@ def export_draft_excel(
 
 @router.get("/schedules/{schedule_id}/exports/image")
 def export_draft_image(
-    schedule_id: uuid.UUID, db: DbSession, current_user: CurrentUser
+    schedule_id: uuid.UUID, db: DbSession, current_user: ScheduleExporter
 ) -> StreamingResponse:
     del current_user
     schedule, snapshot = _draft_snapshot(db, schedule_id)

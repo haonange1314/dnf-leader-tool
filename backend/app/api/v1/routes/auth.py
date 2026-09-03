@@ -57,7 +57,7 @@ def login(payload: LoginRequest, request: Request, response: Response, db: DbSes
         user.password_hash if user is not None else DUMMY_PASSWORD_HASH,
         payload.password,
     )
-    if user is None or not user.is_active or not password_valid:
+    if user is None or not user.is_active or not user.role_record.is_active or not password_valid:
         attempts = record_login_failure(db, limit_buckets, settings)
         add_audit_log(
             db,
