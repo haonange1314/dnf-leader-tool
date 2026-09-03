@@ -50,12 +50,14 @@ import {
 
 interface Props {
   userRole: User["role"];
+  permissions?: string[];
   onError: (error: unknown) => void;
   onSuccess: (message: string) => void;
 }
 
-export function PersonnelPage({ userRole, onError, onSuccess }: Props) {
-  const canEdit = userRole !== "VIEWER";
+export function PersonnelPage({ userRole, permissions, onError, onSuccess }: Props) {
+  const canEdit = permissions ? permissions.includes("ROSTER_WRITE") : userRole !== "VIEWER";
+  const canImport = permissions ? permissions.includes("ROSTER_IMPORT") : userRole !== "VIEWER";
   const [players, setPlayers] = useState<Player[]>([]);
   const [search, setSearch] = useState("");
   const [playerOpen, setPlayerOpen] = useState(false);
@@ -335,8 +337,8 @@ export function PersonnelPage({ userRole, onError, onSuccess }: Props) {
           >
             下载 Excel 模板
           </Button>
-          <Upload disabled={!canEdit} accept=".xlsx" showUploadList={false} beforeUpload={preview}>
-            <Button disabled={!canEdit} icon={<UploadOutlined />}>上传并预览</Button>
+          <Upload disabled={!canImport} accept=".xlsx" showUploadList={false} beforeUpload={preview}>
+            <Button disabled={!canImport} icon={<UploadOutlined />}>上传并预览</Button>
           </Upload>
           {batch && (
             <>
@@ -347,7 +349,7 @@ export function PersonnelPage({ userRole, onError, onSuccess }: Props) {
               <Button
                 type="primary"
                 disabled={
-                  !canEdit || batch.summary.error > 0 || batch.status !== "PREVIEWED"
+                  !canImport || batch.summary.error > 0 || batch.status !== "PREVIEWED"
                 }
                 onClick={commit}
               >

@@ -15,7 +15,7 @@ from app.domain.schedule.rules import (
     resolve_rule_output,
 )
 from app.integrations.deepseek_rules import RuleProviderError
-from app.models.identity import User
+from app.models.identity import Role, User
 
 
 def seed() -> None:
@@ -42,11 +42,14 @@ def init_owner(username: str | None, password: str | None) -> None:
         if existing is not None:
             print(f"OWNER {resolved_username}: exists")
             return
+        owner_role = session.scalar(select(Role).where(Role.code == "OWNER", Role.is_active))
+        if owner_role is None:
+            raise SystemExit("缺少 OWNER 角色，请先执行 Alembic 迁移")
         session.add(
             User(
                 username=resolved_username,
                 password_hash=hash_password(resolved_password),
-                role="OWNER",
+                role_record=owner_role,
                 is_active=True,
             )
         )

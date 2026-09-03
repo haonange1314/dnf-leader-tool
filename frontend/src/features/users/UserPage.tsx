@@ -1,22 +1,34 @@
-import { PlusOutlined, ReloadOutlined } from "@ant-design/icons";
+import {
+  KeyOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  SearchOutlined,
+  StopOutlined,
+  UserOutlined,
+} from "@ant-design/icons";
 import {
   Button,
   Card,
+  Col,
   Form,
   Input,
   Modal,
+  Popconfirm,
+  Row,
   Select,
   Space,
+  Statistic,
   Switch,
   Table,
   Tag,
   Typography,
 } from "antd";
 import { useEffect, useMemo, useState } from "react";
-import { api, type AuditLog, type User } from "../../api/client";
+import { api, type ManagedUser, type Role } from "../../api/client";
 
 interface Props {
   currentUserId: string;
+  permissions: string[];
   onError: (error: unknown) => void;
   onSuccess: (message: string) => void;
 }
@@ -24,56 +36,75 @@ interface Props {
 interface UserFormValues {
   username: string;
   password?: string;
-  role: User["role"];
+  roleId: string;
   isActive: boolean;
 }
 
-const ROLE_LABELS: Record<User["role"], string> = {
-  OWNER: "Owner",
-  EDITOR: "编辑者",
-  VIEWER: "查看者",
-};
-
-export function UserPage({ currentUserId, onError, onSuccess }: Props) {
-  const [users, setUsers] = useState<User[]>([]);
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
-  const [auditTotal, setAuditTotal] = useState(0);
-  const [editing, setEditing] = useState<User | null>(null);
+export function UserPage({ currentUserId, permissions, onError, onSuccess }: Props) {
+  const canWrite = permissions.includes("USER_WRITE");
+  const [users, setUsers] = useState<ManagedUser[]>([]);
+  const [roles, setRoles] = useState<Role[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [editing, setEditing] = useState<ManagedUser | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [pending, setPending] = useState(false);
+  const [search, setSearch] = useState("");
+  const [roleFilter, setRoleFilter] = useState<string | undefined>();
+  const [activeFilter, setActiveFilter] = useState<boolean | undefined>();
+  const [page, setPage] = useState(1);
   const [form] = Form.useForm<UserFormValues>();
-  const userById = useMemo(() => new Map(users.map((user) => [user.id, user])), [users]);
 
   const load = async () => {
+    setLoading(true);
     try {
-      const [userResult, auditResult] = await Promise.all([
-        api<{ items: User[]; total: number }>("/users"),
-        api<{ items: AuditLog[]; total: number }>("/audit-logs?limit=100"),
+      const query = new URLSearchParams({ limit: "20", offset: String((page - 1) * 20) });
+      if (search.trim()) query.set("search", search.trim());
+      if (roleFilter) query.set("roleId", roleFilter);
+      if (activeFilter !== undefined) query.set("isActive", String(activeFilter));
+      const [userResult, roleResult] = await Promise.all([
+        api<{ items: ManagedUser[]; total: number }>(`/users?${query}`),
+        permissions.includes("ROLE_READ")
+          ? api<{ items: Role[]; total: number }>("/roles?includeInactive=false")
+          : Promise.resolve({ items: [], total: 0 }),
       ]);
       setUsers(userResult.items);
-      setAuditLogs(auditResult.items);
-      setAuditTotal(auditResult.total);
+      setTotal(userResult.total);
+      setRoles(roleResult.items);
     } catch (error) {
       onError(error);
+    } finally {
+      setLoading(false);
     }
   };
 
   useEffect(() => {
     void load();
-  }, []);
+  }, [page, roleFilter, activeFilter]);
+
+  const activeCount = useMemo(() => users.filter((user) => user.is_active).length, [users]);
+  const sessionCount = useMemo(
+    () => users.reduce((count, user) => count + user.active_session_count, 0),
+    [users],
+  );
 
   const openCreate = () => {
     setEditing(null);
-    form.setFieldsValue({ username: "", password: "", role: "EDITOR", isActive: true });
+    form.setFieldsValue({
+      username: "",
+      password: "",
+      roleId: roles.find((role) => role.code === "EDITOR")?.id ?? roles[0]?.id,
+      isActive: true,
+    });
     setModalOpen(true);
   };
 
-  const openEdit = (user: User) => {
+  const openEdit = (user: ManagedUser) => {
     setEditing(user);
     form.setFieldsValue({
       username: user.username,
       password: "",
-      role: user.role,
+      roleId: user.role_id,
       isActive: user.is_active,
     });
     setModalOpen(true);
@@ -83,24 +114,21 @@ export function UserPage({ currentUserId, onError, onSuccess }: Props) {
     setPending(true);
     try {
       if (editing) {
-        await api<User>(`/users/${editing.id}`, {
+        await api(`/users/${editing.id}`, {
           method: "PATCH",
           body: JSON.stringify({
-            role: values.role,
+            roleId: values.roleId,
             isActive: values.isActive,
             ...(values.password ? { password: values.password } : {}),
           }),
         });
       } else {
-        await api<User>("/users", {
-          method: "POST",
-          body: JSON.stringify(values),
-        });
+        await api("/users", { method: "POST", body: JSON.stringify(values) });
       }
       setModalOpen(false);
       form.resetFields();
       await load();
-      onSuccess(editing ? "账号已更新" : "账号已创建");
+      onSuccess(editing ? "账号已更新，相关旧会话已失效" : "账号已创建");
     } catch (error) {
       onError(error);
     } finally {
@@ -108,84 +136,106 @@ export function UserPage({ currentUserId, onError, onSuccess }: Props) {
     }
   };
 
-  return (
-    <Space orientation="vertical" size={16} className="full-width">
-      <Card
-        title="账号与权限"
-        extra={
-          <Space>
-            <Button icon={<ReloadOutlined />} onClick={() => void load()}>
-              刷新
-            </Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-              新建账号
-            </Button>
-          </Space>
-        }
-      >
-        <Table<User>
-          rowKey="id"
-          pagination={false}
-          dataSource={users}
-          columns={[
-            { title: "用户名", dataIndex: "username" },
-            {
-              title: "角色",
-              dataIndex: "role",
-              render: (role: User["role"]) => <Tag>{ROLE_LABELS[role]}</Tag>,
-            },
-            {
-              title: "状态",
-              dataIndex: "is_active",
-              render: (active: boolean) => (
-                <Tag color={active ? "green" : "default"}>{active ? "启用" : "停用"}</Tag>
-              ),
-            },
-            {
-              title: "操作",
-              render: (_, user) => (
-                <Button type="link" onClick={() => openEdit(user)}>
-                  {user.id === currentUserId ? "修改当前账号" : "编辑"}
-                </Button>
-              ),
-            },
-          ]}
-        />
-      </Card>
+  const revokeSessions = async (user: ManagedUser) => {
+    try {
+      const result = await api<{ revokedCount: number }>(`/users/${user.id}/revoke-sessions`, {
+        method: "POST",
+      });
+      await load();
+      onSuccess(`已撤销 ${result.revokedCount} 个其他登录会话`);
+    } catch (error) {
+      onError(error);
+    }
+  };
 
-      <Card title={`最近审计记录（共 ${auditTotal} 条）`}>
-        <Table<AuditLog>
+  return (
+    <section>
+      <div className="section-heading">
+        <div>
+          <Typography.Title level={2}>用户管理</Typography.Title>
+          <Typography.Text type="secondary">维护登录账号、角色归属和在线会话</Typography.Text>
+        </div>
+        <Space>
+          <Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button>
+          {canWrite ? (
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建账号</Button>
+          ) : null}
+        </Space>
+      </div>
+
+      <Row gutter={[10, 10]} className="admin-stat-row">
+        <Col xs={24} sm={8}><Card size="small"><Statistic title="符合条件账号" value={total} prefix={<UserOutlined />} /></Card></Col>
+        <Col xs={24} sm={8}><Card size="small"><Statistic title="本页启用账号" value={activeCount} /></Card></Col>
+        <Col xs={24} sm={8}><Card size="small"><Statistic title="本页有效会话" value={sessionCount} prefix={<KeyOutlined />} /></Card></Col>
+      </Row>
+
+      <Card className="module-card" size="small">
+        <Space wrap className="admin-filter-bar">
+          <Input
+            allowClear
+            prefix={<SearchOutlined />}
+            placeholder="搜索用户名"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            onPressEnter={() => { setPage(1); void load(); }}
+            style={{ width: 220 }}
+          />
+          <Button onClick={() => { setPage(1); void load(); }}>查询</Button>
+          <Select
+            allowClear
+            placeholder="全部角色"
+            value={roleFilter}
+            onChange={(value) => { setPage(1); setRoleFilter(value); }}
+            options={roles.map((role) => ({ value: role.id, label: role.name }))}
+            style={{ width: 170 }}
+          />
+          <Select
+            allowClear
+            placeholder="全部状态"
+            value={activeFilter}
+            onChange={(value) => { setPage(1); setActiveFilter(value); }}
+            options={[{ value: true, label: "启用" }, { value: false, label: "停用" }]}
+            style={{ width: 120 }}
+          />
+        </Space>
+        <Table<ManagedUser>
           rowKey="id"
           size="small"
-          pagination={false}
-          dataSource={auditLogs}
-          scroll={{ x: 900 }}
+          loading={loading}
+          dataSource={users}
+          scroll={{ x: 980 }}
+          pagination={{ current: page, pageSize: 20, total, showSizeChanger: false, onChange: setPage }}
           columns={[
             {
-              title: "时间",
-              dataIndex: "createdAt",
-              width: 190,
-              render: (value: string) => new Date(value).toLocaleString(),
-            },
-            {
               title: "账号",
-              dataIndex: "actorUserId",
-              width: 140,
-              render: (value: string | null) =>
-                value ? (userById.get(value)?.username ?? value.slice(0, 8)) : "匿名",
-            },
-            { title: "动作", dataIndex: "action", width: 130 },
-            {
-              title: "结果",
-              dataIndex: "outcome",
-              width: 100,
-              render: (value: AuditLog["outcome"]) => (
-                <Tag color={value === "SUCCESS" ? "green" : "red"}>{value}</Tag>
+              dataIndex: "username",
+              width: 180,
+              render: (username: string, user) => (
+                <Space size={5}><Typography.Text strong>{username}</Typography.Text>{user.id === currentUserId ? <Tag color="blue">当前</Tag> : null}</Space>
               ),
             },
-            { title: "资源", dataIndex: "resourceType", width: 140 },
-            { title: "IP", dataIndex: "ipAddress", width: 140 },
-            { title: "请求 ID", dataIndex: "requestId", ellipsis: true },
+            {
+              title: "角色",
+              width: 190,
+              render: (_, user) => <><Tag color={user.role === "OWNER" ? "purple" : "blue"}>{user.role_name}</Tag><Typography.Text type="secondary">{user.role}</Typography.Text></>,
+            },
+            { title: "状态", width: 90, render: (_, user) => <Tag color={user.is_active ? "green" : "default"}>{user.is_active ? "启用" : "停用"}</Tag> },
+            { title: "有效会话", dataIndex: "active_session_count", width: 90, align: "center" },
+            { title: "最近登录", dataIndex: "last_login_at", width: 170, render: (value: string | null) => value ? new Date(value).toLocaleString() : "从未登录" },
+            { title: "创建时间", dataIndex: "created_at", width: 170, render: (value: string) => new Date(value).toLocaleString() },
+            {
+              title: "操作",
+              fixed: "right",
+              width: 190,
+              render: (_, user) => canWrite ? (
+                <Space size={0}>
+                  <Button type="link" onClick={() => openEdit(user)}>编辑</Button>
+                  <Popconfirm title="撤销该账号的其他有效会话？" onConfirm={() => void revokeSessions(user)}>
+                    <Button type="link" icon={<StopOutlined />}>下线</Button>
+                  </Popconfirm>
+                </Space>
+              ) : "—",
+            },
           ]}
         />
       </Card>
@@ -196,32 +246,24 @@ export function UserPage({ currentUserId, onError, onSuccess }: Props) {
         confirmLoading={pending}
         onCancel={() => setModalOpen(false)}
         onOk={() => form.submit()}
+        destroyOnHidden
       >
         <Form<UserFormValues> form={form} layout="vertical" onFinish={(values) => void save(values)}>
-          <Form.Item label="用户名" name="username" rules={[{ required: true }]}>
+          <Form.Item label="用户名" name="username" rules={[{ required: true, whitespace: true }]}>
             <Input disabled={Boolean(editing)} autoComplete="off" />
           </Form.Item>
-          <Form.Item
-            label={editing ? "新密码（留空则不修改）" : "密码"}
-            name="password"
-            rules={editing ? [{ min: 10 }] : [{ required: true, min: 10 }]}
-          >
+          <Form.Item label={editing ? "重置密码（留空不修改）" : "初始密码"} name="password" rules={editing ? [{ min: 10 }] : [{ required: true, min: 10 }]}>
             <Input.Password autoComplete="new-password" />
           </Form.Item>
-          <Form.Item label="角色" name="role" rules={[{ required: true }]}>
-            <Select
-              disabled={editing?.id === currentUserId}
-              options={Object.entries(ROLE_LABELS).map(([value, label]) => ({ value, label }))}
-            />
+          <Form.Item label="角色" name="roleId" rules={[{ required: true }]}>
+            <Select disabled={editing?.id === currentUserId} options={roles.map((role) => ({ value: role.id, label: `${role.name}（${role.code}）` }))} />
           </Form.Item>
-          <Form.Item label="启用" name="isActive" valuePropName="checked">
+          <Form.Item label="启用账号" name="isActive" valuePropName="checked">
             <Switch disabled={editing?.id === currentUserId} />
           </Form.Item>
-          {editing?.id === currentUserId ? (
-            <Typography.Text type="secondary">当前账号不能在此停用或变更角色。</Typography.Text>
-          ) : null}
+          {editing?.id === currentUserId ? <Typography.Text type="secondary">当前账号只能在此重置密码，不能停用或变更自身角色。</Typography.Text> : null}
         </Form>
       </Modal>
-    </Space>
+    </section>
   );
 }

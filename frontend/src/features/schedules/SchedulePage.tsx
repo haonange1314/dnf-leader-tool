@@ -87,6 +87,7 @@ import { useScheduleEditorStore } from "./scheduleEditorStore";
 
 interface Props {
   userRole: User["role"];
+  permissions?: string[];
   onError: (error: unknown) => void;
   onSuccess: (message: string) => void;
 }
@@ -188,7 +189,12 @@ function describeDungeonVersion(
     : `副本版本暂不可用（${dungeonVersionId.slice(0, 8)}）`;
 }
 
-export function SchedulePage({ userRole, onError, onSuccess }: Props) {
+export function SchedulePage({ userRole, permissions, onError, onSuccess }: Props) {
+  const hasPermission = (code: string) =>
+    permissions
+      ? permissions.includes(code)
+      : code.endsWith("_READ") || code === "SCHEDULE_EXPORT" || userRole !== "VIEWER";
+  const canWrite = hasPermission("SCHEDULE_WRITE");
   const [schedules, setSchedules] = useState<ScheduleSummary[]>([]);
   const [dungeons, setDungeons] = useState<Dungeon[]>([]);
   const [detail, setDetail] = useState<ScheduleDetail | null>(null);
@@ -358,7 +364,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
   };
 
   const establishEditLock = async (scheduleId: string) => {
-    if (userRole === "VIEWER") {
+    if (!canWrite) {
       setEditLock(await api<EditLock>(`/schedules/${scheduleId}/lock`));
       return;
     }
@@ -1023,7 +1029,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
           <Button
             type="primary"
             icon={<PlusOutlined />}
-            disabled={userRole === "VIEWER"}
+            disabled={!canWrite}
             onClick={() => setCreateOpen(true)}
           >
             新建排表
@@ -1128,8 +1134,12 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
     viewMode === "overview"
       ? detail.waves
       : detail.waves.filter((wave) => wave.waveNo === selectedWaveNo);
-  const canEditSchedule = userRole !== "VIEWER" && Boolean(editLock?.ownedByCurrentUser);
-  const canCreateContent = userRole !== "VIEWER";
+  const canEditSchedule = canWrite && Boolean(editLock?.ownedByCurrentUser);
+  const canCreateContent = canWrite;
+  const canGenerateSchedule = canEditSchedule && hasPermission("SCHEDULE_GENERATE");
+  const canPublishSchedule = canEditSchedule && hasPermission("SCHEDULE_PUBLISH");
+  const canExportSchedule = hasPermission("SCHEDULE_EXPORT");
+  const canManageShare = hasPermission("SHARE_MANAGE");
   const activeRuleSet = ruleSets.find((ruleSet) => ruleSet.id === detail.activeRuleSetId);
   const parsedRuleSet = ruleSets.find((ruleSet) => ruleSet.status === "PARSED");
 
@@ -1163,7 +1173,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
             icon={<SendOutlined />}
             loading={publishPending}
             disabled={
-              !canEditSchedule ||
+              !canPublishSchedule ||
               hasUnsavedChanges ||
               detail.status === "ARCHIVED" ||
               detail.status === "PUBLISHED"
@@ -1172,7 +1182,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
           >
             发布排表
           </Button>
-          {detail.status === "DRAFT" ? (
+          {detail.status === "DRAFT" && canExportSchedule ? (
             <Dropdown
               menu={{
                 items: [
@@ -1239,7 +1249,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
             size="small"
             type="primary"
             icon={<PlayCircleOutlined />}
-            disabled={!canEditSchedule || hasUnsavedChanges || detail.status === "ARCHIVED"}
+            disabled={!canGenerateSchedule || hasUnsavedChanges || detail.status === "ARCHIVED"}
             onClick={() => setGenerationOpen(true)}
           >
             {detail.waves.some((wave) =>
@@ -1257,8 +1267,10 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
           type="info"
           showIcon
           title={
-            userRole === "VIEWER"
-              ? "Viewer 账号以只读方式查看排表"
+            !canWrite
+              ? userRole === "VIEWER"
+                ? "Viewer 账号以只读方式查看排表"
+                : "当前角色以只读方式查看排表"
               : editLock?.held
                 ? `当前由 ${editLock.holderUsername ?? "其他账号"} 编辑`
                 : "当前未持有编辑锁"
@@ -1303,7 +1315,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
                 size="small"
                 danger
                 loading={rulePending}
-                disabled={!canEditSchedule || hasUnsavedChanges}
+                disabled={!canGenerateSchedule || hasUnsavedChanges}
                 onClick={() => void clearActiveRuleSet()}
               >
                 停用
@@ -1342,7 +1354,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
           showCount
           rows={3}
           placeholder="例如：韩亚尽量安排在前 6 波；剑来和点评不能在同一波。"
-          disabled={!canEditSchedule || !ruleParsingEnabled}
+          disabled={!canGenerateSchedule || !ruleParsingEnabled}
           onChange={(event) => setRuleSourceText(event.target.value)}
         />
         <div className="schedule-rule-actions">
@@ -1351,7 +1363,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
             type="primary"
             loading={rulePending}
             disabled={
-              !canEditSchedule ||
+              !canGenerateSchedule ||
               !ruleParsingEnabled ||
               hasUnsavedChanges ||
               !ruleSourceText.trim()
@@ -1403,7 +1415,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
               type="primary"
               loading={rulePending}
               disabled={
-                !canEditSchedule ||
+                !canGenerateSchedule ||
                 hasUnsavedChanges ||
                 Boolean(parsedRuleSet.issues.length) ||
                 !parsedRuleSet.parsedRules.length
@@ -1479,7 +1491,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
           run={latestGeneration}
           previousRun={previousGeneration}
           participants={detail.participants}
-          canTryAlternative={canEditSchedule && !hasUnsavedChanges}
+          canTryAlternative={canGenerateSchedule && !hasUnsavedChanges}
           onTryAlternative={() => {
             setGenerationSeed((seed) => (seed >= 2_147_483_647 ? 1 : seed + 1));
             setGenerationOpen(true);
@@ -1632,7 +1644,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
         confirmLoading={publishPending}
         okButtonProps={{
           disabled:
-            !canEditSchedule ||
+            !canPublishSchedule ||
             !publicationCheck?.publishable ||
             Boolean(publicationCheck.summary.warning && !confirmPublishWarnings),
         }}
@@ -1703,7 +1715,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
                   <Button
                     size="small"
                     icon={<HistoryOutlined />}
-                    disabled={!canEditSchedule}
+                    disabled={!canPublishSchedule}
                     onClick={() => confirmRestoreVersion(version.versionNo)}
                   >
                     恢复为草稿
@@ -1722,6 +1734,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
                   <Button
                     size="small"
                     icon={<DownloadOutlined />}
+                    disabled={!canExportSchedule}
                     href={`/api/v1/schedule-versions/${version.id}/exports/image`}
                   >
                     长图
@@ -1729,6 +1742,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
                   <Button
                     size="small"
                     icon={<DownloadOutlined />}
+                    disabled={!canExportSchedule}
                     href={`/api/v1/schedule-versions/${version.id}/exports/excel`}
                   >
                     Excel
@@ -1736,6 +1750,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
                   <Button
                     size="small"
                     icon={<DownloadOutlined />}
+                    disabled={!canExportSchedule}
                     href={`/api/v1/schedule-versions/${version.id}/exports/text`}
                   >
                     文本
@@ -1743,6 +1758,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
                   <Button
                     size="small"
                     icon={<SendOutlined />}
+                    disabled={!canManageShare}
                     onClick={() => void openShareManager(version)}
                   >
                     管理分享链接
@@ -1826,7 +1842,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
           <Button
             type="primary"
             loading={sharePending}
-            disabled={!canCreateContent}
+            disabled={!canManageShare}
             onClick={() => void createShare()}
           >
             创建只读链接
@@ -1860,7 +1876,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
                     <Button
                       danger
                       size="small"
-                      disabled={!canCreateContent || sharePending}
+                      disabled={!canManageShare || sharePending}
                       onClick={() => void revokeShare(link.id)}
                     >
                       撤销
@@ -1888,7 +1904,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
         onOk={() => void generate()}
         okText="开始生成"
         confirmLoading={generationPending}
-        okButtonProps={{ disabled: !canEditSchedule }}
+        okButtonProps={{ disabled: !canGenerateSchedule }}
       >
         <Typography.Paragraph type="secondary">
           求解器会优先安排更多角色、填满前面波次并优化队伍组成、核心秘宝、跨波平衡和强度顺序。

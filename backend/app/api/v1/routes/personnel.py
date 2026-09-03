@@ -7,7 +7,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
-from app.api.dependencies import CurrentUser, DbSession, EditorUser
+from app.api.dependencies import DbSession, RosterReader, RosterWriter
 from app.core.errors import AppError
 from app.domain.personnel import normalize_key
 from app.models.personnel import Character, Player
@@ -38,7 +38,7 @@ def _commit(db: DbSession, duplicate_message: str) -> None:
 @router.get("/players", response_model=PlayerList)
 def list_players(
     db: DbSession,
-    current_user: CurrentUser,
+    current_user: RosterReader,
     search: str | None = None,
     role_type: str | None = Query(default=None, alias="roleType", pattern="^(DAMAGE|BUFFER)$"),
     is_treasure: bool | None = Query(default=None, alias="isTreasure"),
@@ -80,7 +80,7 @@ def list_players(
 
 
 @router.post("/players", response_model=PlayerView, status_code=201)
-def create_player(payload: PlayerCreate, db: DbSession, current_user: EditorUser) -> Player:
+def create_player(payload: PlayerCreate, db: DbSession, current_user: RosterWriter) -> Player:
     del current_user
     player = Player(
         display_name=payload.display_name.strip(),
@@ -98,7 +98,7 @@ def create_player(payload: PlayerCreate, db: DbSession, current_user: EditorUser
 
 @router.put("/players/reorder", response_model=BatchUpdateResult)
 def reorder_players(
-    payload: PersonnelReorder, db: DbSession, current_user: EditorUser
+    payload: PersonnelReorder, db: DbSession, current_user: RosterWriter
 ) -> BatchUpdateResult:
     del current_user
     players = list(db.scalars(select(Player)))
@@ -112,7 +112,7 @@ def reorder_players(
 
 
 @router.get("/players/{player_id}", response_model=PlayerView)
-def get_player(player_id: uuid.UUID, db: DbSession, current_user: CurrentUser) -> Player:
+def get_player(player_id: uuid.UUID, db: DbSession, current_user: RosterReader) -> Player:
     del current_user
     player = db.scalar(
         select(Player).where(Player.id == player_id).options(selectinload(Player.characters))
@@ -125,7 +125,7 @@ def get_player(player_id: uuid.UUID, db: DbSession, current_user: CurrentUser) -
 
 @router.patch("/players/{player_id}", response_model=PlayerView)
 def update_player(
-    player_id: uuid.UUID, payload: PlayerUpdate, db: DbSession, current_user: EditorUser
+    player_id: uuid.UUID, payload: PlayerUpdate, db: DbSession, current_user: RosterWriter
 ) -> Player:
     del current_user
     player = db.get(Player, player_id)
@@ -141,7 +141,7 @@ def update_player(
 
 @router.post("/players/{player_id}/characters", response_model=CharacterView, status_code=201)
 def create_character(
-    player_id: uuid.UUID, payload: CharacterCreate, db: DbSession, current_user: EditorUser
+    player_id: uuid.UUID, payload: CharacterCreate, db: DbSession, current_user: RosterWriter
 ) -> Character:
     del current_user
     if db.get(Player, player_id) is None:
@@ -160,7 +160,7 @@ def reorder_characters(
     player_id: uuid.UUID,
     payload: PersonnelReorder,
     db: DbSession,
-    current_user: EditorUser,
+    current_user: RosterWriter,
 ) -> BatchUpdateResult:
     del current_user
     if db.get(Player, player_id) is None:
@@ -177,7 +177,7 @@ def reorder_characters(
 
 @router.patch("/characters/{character_id}", response_model=CharacterView)
 def update_character(
-    character_id: uuid.UUID, payload: CharacterUpdate, db: DbSession, current_user: EditorUser
+    character_id: uuid.UUID, payload: CharacterUpdate, db: DbSession, current_user: RosterWriter
 ) -> Character:
     del current_user
     character = db.get(Character, character_id)
@@ -191,7 +191,7 @@ def update_character(
 
 @router.post("/characters/{character_id}/deactivate", response_model=CharacterView)
 def deactivate_character(
-    character_id: uuid.UUID, db: DbSession, current_user: EditorUser
+    character_id: uuid.UUID, db: DbSession, current_user: RosterWriter
 ) -> Character:
     del current_user
     character = db.get(Character, character_id)
@@ -205,7 +205,7 @@ def deactivate_character(
 
 @router.post("/characters/batch-update", response_model=BatchUpdateResult)
 def batch_update_characters(
-    payload: CharacterBatchUpdate, db: DbSession, current_user: EditorUser
+    payload: CharacterBatchUpdate, db: DbSession, current_user: RosterWriter
 ) -> BatchUpdateResult:
     del current_user
     values: dict[str, bool] = {}

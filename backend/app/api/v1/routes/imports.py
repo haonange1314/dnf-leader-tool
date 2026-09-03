@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
-from app.api.dependencies import CurrentUser, DbSession, EditorUser
+from app.api.dependencies import DbSession, RosterImporter, RosterReader
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.core.security import utc_now
@@ -23,14 +23,14 @@ router = APIRouter()
 
 
 @router.get("/template")
-def download_template(current_user: CurrentUser) -> StreamingResponse:
+def download_template(current_user: RosterReader) -> StreamingResponse:
     del current_user
     return _xlsx_response(build_template(), "DNF角色导入模板.xlsx")
 
 
 @router.post("/preview", response_model=ImportBatchView, status_code=201)
 async def preview_import(
-    file: Annotated[UploadFile, File()], *, db: DbSession, current_user: EditorUser
+    file: Annotated[UploadFile, File()], *, db: DbSession, current_user: RosterImporter
 ) -> ImportBatch:
     settings = get_settings()
     filename = file.filename or ""
@@ -96,7 +96,7 @@ async def preview_import(
 
 
 @router.get("/{batch_id}", response_model=ImportBatchView)
-def get_import(batch_id: uuid.UUID, db: DbSession, current_user: CurrentUser) -> ImportBatch:
+def get_import(batch_id: uuid.UUID, db: DbSession, current_user: RosterImporter) -> ImportBatch:
     del current_user
     batch = _load_batch(db, batch_id)
     db.commit()
@@ -104,7 +104,7 @@ def get_import(batch_id: uuid.UUID, db: DbSession, current_user: CurrentUser) ->
 
 
 @router.post("/{batch_id}/commit", response_model=ImportBatchView)
-def commit_import(batch_id: uuid.UUID, db: DbSession, current_user: EditorUser) -> ImportBatch:
+def commit_import(batch_id: uuid.UUID, db: DbSession, current_user: RosterImporter) -> ImportBatch:
     del current_user
     batch = _load_batch(db, batch_id)
     if batch.status != "PREVIEWED":
@@ -210,7 +210,7 @@ def commit_import(batch_id: uuid.UUID, db: DbSession, current_user: EditorUser) 
 
 @router.get("/{batch_id}/errors.xlsx")
 def download_errors(
-    batch_id: uuid.UUID, db: DbSession, current_user: CurrentUser
+    batch_id: uuid.UUID, db: DbSession, current_user: RosterImporter
 ) -> StreamingResponse:
     del current_user
     batch = _load_batch(db, batch_id)

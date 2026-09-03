@@ -175,6 +175,58 @@ editor_login = client_request(
     {"username": "editor-smoke", "password": "editor-password"},
 )
 assert isinstance(editor_login, dict) and editor_login["role"] == "EDITOR"
+permissions = request("/permissions")
+assert isinstance(permissions, dict) and permissions["total"] >= 16
+roles = request("/roles")
+assert isinstance(roles, dict) and {item["code"] for item in roles["items"]} >= {
+    "OWNER",
+    "EDITOR",
+    "VIEWER",
+}
+roster_reader_role = request(
+    "/roles",
+    "POST",
+    {
+        "code": "ROSTER_READER_SMOKE",
+        "name": "人员只读验收",
+        "permissionCodes": ["ROSTER_READ"],
+    },
+)
+assert isinstance(roster_reader_role, dict)
+assert roster_reader_role["permissionCodes"] == ["ROSTER_READ"]
+roster_reader = request(
+    "/users",
+    "POST",
+    {
+        "username": "roster-reader-smoke",
+        "password": "roster-reader-password",
+        "roleId": roster_reader_role["id"],
+    },
+)
+assert isinstance(roster_reader, dict) and roster_reader["role"] == "ROSTER_READER_SMOKE"
+roster_reader_jar = http.cookiejar.CookieJar()
+roster_reader_opener = urllib.request.build_opener(
+    urllib.request.HTTPCookieProcessor(roster_reader_jar)
+)
+roster_reader_login = client_request(
+    roster_reader_opener,
+    roster_reader_jar,
+    "/auth/login",
+    "POST",
+    {"username": "roster-reader-smoke", "password": "roster-reader-password"},
+)
+assert roster_reader_login["permissions"] == ["ROSTER_READ"]
+assert isinstance(client_request(roster_reader_opener, roster_reader_jar, "/players"), dict)
+roster_reader_write = client_request_error(
+    roster_reader_opener,
+    roster_reader_jar,
+    "/players",
+    "POST",
+    {"displayName": "RBAC 不应创建"},
+    403,
+)
+assert roster_reader_write["error"]["code"] == "PERMISSION_DENIED"
+assert roster_reader_write["error"]["details"] == {"requiredPermission": "ROSTER_WRITE"}
 assert isinstance(client_request(viewer_opener, viewer_jar, "/dungeons"), dict)
 try:
     client_request(
@@ -999,9 +1051,15 @@ player = request("/players", "POST", {"displayName": "全栈验收玩家", "char
 assert isinstance(player, dict) and player["displayName"] == "全栈验收玩家"
 players = request("/players?search=%E5%85%A8%E6%A0%88")
 assert isinstance(players, dict) and players["total"] == 1
-audit_logs = request("/audit-logs")
+audit_logs = request("/audit-logs?action=AUTH_LOGIN")
 assert isinstance(audit_logs, dict) and audit_logs["total"] > 0
-assert any(item["action"] == "AUTH_LOGIN" for item in audit_logs["items"])
+assert all(item["action"] == "AUTH_LOGIN" for item in audit_logs["items"])
+failed_audit_logs = request("/audit-logs?outcome=FAILURE&limit=10")
+assert isinstance(failed_audit_logs, dict)
+assert all(item["outcome"] == "FAILURE" for item in failed_audit_logs["items"])
+managed_users = request("/users?search=roster-reader")
+assert isinstance(managed_users, dict) and managed_users["total"] == 1
+assert managed_users["items"][0]["active_session_count"] == 1
 
 updated_admin = request(
     f"/users/{user['id']}",

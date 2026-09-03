@@ -34,7 +34,7 @@ def get_current_user(
     if session is None:
         raise AppError(401, "SESSION_INVALID", "登录状态已失效，请重新登录")
     user = db.get(User, session.user_id)
-    if user is None or not user.is_active:
+    if user is None or not user.is_active or not user.role_record.is_active:
         raise AppError(403, "USER_INACTIVE", "账号已停用")
     request.state.current_user_id = user.id
     request.state.current_user_role = user.role
@@ -56,20 +56,36 @@ def get_current_user(
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
-def require_editor(current_user: CurrentUser) -> User:
-    if current_user.role not in {"OWNER", "EDITOR"}:
-        raise AppError(403, "PERMISSION_DENIED", "当前账号没有编辑权限")
-    return current_user
+def require_permission(code: str):  # type: ignore[no-untyped-def]
+    def dependency(current_user: CurrentUser) -> User:
+        if not current_user.has_permission(code):
+            raise AppError(
+                403,
+                "PERMISSION_DENIED",
+                "当前账号没有执行此操作的权限",
+                details={"requiredPermission": code},
+            )
+        return current_user
+
+    return dependency
 
 
-def require_owner(current_user: CurrentUser) -> User:
-    if current_user.role != "OWNER":
-        raise AppError(403, "PERMISSION_DENIED", "仅 Owner 可以执行此操作")
-    return current_user
-
-
-EditorUser = Annotated[User, Depends(require_editor)]
-OwnerUser = Annotated[User, Depends(require_owner)]
+DungeonReader = Annotated[User, Depends(require_permission("DUNGEON_READ"))]
+DungeonWriter = Annotated[User, Depends(require_permission("DUNGEON_WRITE"))]
+RosterReader = Annotated[User, Depends(require_permission("ROSTER_READ"))]
+RosterWriter = Annotated[User, Depends(require_permission("ROSTER_WRITE"))]
+RosterImporter = Annotated[User, Depends(require_permission("ROSTER_IMPORT"))]
+ScheduleReader = Annotated[User, Depends(require_permission("SCHEDULE_READ"))]
+ScheduleWriter = Annotated[User, Depends(require_permission("SCHEDULE_WRITE"))]
+ScheduleGenerator = Annotated[User, Depends(require_permission("SCHEDULE_GENERATE"))]
+SchedulePublisher = Annotated[User, Depends(require_permission("SCHEDULE_PUBLISH"))]
+ScheduleExporter = Annotated[User, Depends(require_permission("SCHEDULE_EXPORT"))]
+ShareManager = Annotated[User, Depends(require_permission("SHARE_MANAGE"))]
+UserReader = Annotated[User, Depends(require_permission("USER_READ"))]
+UserWriter = Annotated[User, Depends(require_permission("USER_WRITE"))]
+RoleReader = Annotated[User, Depends(require_permission("ROLE_READ"))]
+RoleWriter = Annotated[User, Depends(require_permission("ROLE_WRITE"))]
+AuditReader = Annotated[User, Depends(require_permission("AUDIT_READ"))]
 
 
 def enforce_schedule_edit_lock(
@@ -90,10 +106,36 @@ def require_schedule_editor(
     schedule_id: uuid.UUID,
     request: Request,
     db: DbSession,
-    current_user: EditorUser,
+    current_user: ScheduleWriter,
 ) -> User:
     enforce_schedule_edit_lock(schedule_id, request, db, current_user)
     return current_user
 
 
 ScheduleEditor = Annotated[User, Depends(require_schedule_editor)]
+
+
+def require_schedule_generator_editor(
+    schedule_id: uuid.UUID,
+    request: Request,
+    db: DbSession,
+    current_user: ScheduleGenerator,
+) -> User:
+    enforce_schedule_edit_lock(schedule_id, request, db, current_user)
+    return current_user
+
+
+ScheduleGeneratorEditor = Annotated[User, Depends(require_schedule_generator_editor)]
+
+
+def require_schedule_publisher_editor(
+    schedule_id: uuid.UUID,
+    request: Request,
+    db: DbSession,
+    current_user: SchedulePublisher,
+) -> User:
+    enforce_schedule_edit_lock(schedule_id, request, db, current_user)
+    return current_user
+
+
+SchedulePublisherEditor = Annotated[User, Depends(require_schedule_publisher_editor)]

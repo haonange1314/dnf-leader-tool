@@ -1,12 +1,41 @@
 export interface User {
   id: string;
   username: string;
-  role: "OWNER" | "EDITOR" | "VIEWER";
+  role_id: string;
+  role: string;
+  role_name: string;
+  permissions: string[];
   is_active: boolean;
+}
+export interface ManagedUser extends User {
+  active_session_count: number;
+  last_login_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+export interface Permission {
+  id: string;
+  code: string;
+  name: string;
+  module: string;
+  description: string | null;
+}
+export interface Role {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  isSystem: boolean;
+  isActive: boolean;
+  permissionCodes: string[];
+  userCount: number;
+  createdAt: string;
+  updatedAt: string;
 }
 export interface AuditLog {
   id: string;
   actorUserId: string | null;
+  actorUsername: string | null;
   action: string;
   outcome: "SUCCESS" | "FAILURE";
   requestId: string;

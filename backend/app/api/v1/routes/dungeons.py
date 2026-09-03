@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
-from app.api.dependencies import CurrentUser, DbSession, EditorUser
+from app.api.dependencies import DbSession, DungeonReader, DungeonWriter
 from app.core.errors import AppError
 from app.core.security import utc_now
 from app.models.dungeon import Dungeon, DungeonTeamTemplate, DungeonVersion, FormulaVersion
@@ -88,7 +88,7 @@ def _dungeon_view(dungeon: Dungeon) -> DungeonSummary:
 
 
 @router.get("/dungeons", response_model=DungeonList)
-def list_dungeons(db: DbSession, current_user: CurrentUser) -> DungeonList:
+def list_dungeons(db: DbSession, current_user: DungeonReader) -> DungeonList:
     del current_user
     dungeons = list(
         db.scalars(
@@ -106,7 +106,7 @@ def list_dungeons(db: DbSession, current_user: CurrentUser) -> DungeonList:
 
 @router.post("/dungeons", response_model=DungeonSummary, status_code=201)
 def create_dungeon(
-    payload: DungeonCreate, db: DbSession, current_user: EditorUser
+    payload: DungeonCreate, db: DbSession, current_user: DungeonWriter
 ) -> DungeonSummary:
     del current_user
     dungeon = Dungeon(
@@ -125,7 +125,9 @@ def create_dungeon(
 
 
 @router.get("/dungeons/{dungeon_id}", response_model=DungeonSummary)
-def get_dungeon(dungeon_id: uuid.UUID, db: DbSession, current_user: CurrentUser) -> DungeonSummary:
+def get_dungeon(
+    dungeon_id: uuid.UUID, db: DbSession, current_user: DungeonReader
+) -> DungeonSummary:
     del current_user
     dungeon = _load_dungeon(db, dungeon_id)
     db.commit()
@@ -134,7 +136,7 @@ def get_dungeon(dungeon_id: uuid.UUID, db: DbSession, current_user: CurrentUser)
 
 @router.patch("/dungeons/{dungeon_id}", response_model=DungeonSummary)
 def update_dungeon(
-    dungeon_id: uuid.UUID, payload: DungeonUpdate, db: DbSession, current_user: EditorUser
+    dungeon_id: uuid.UUID, payload: DungeonUpdate, db: DbSession, current_user: DungeonWriter
 ) -> DungeonSummary:
     del current_user
     dungeon = _load_dungeon(db, dungeon_id)
@@ -147,7 +149,7 @@ def update_dungeon(
 
 @router.post("/dungeons/{dungeon_id}/versions", response_model=DungeonVersionView, status_code=201)
 def create_version(
-    dungeon_id: uuid.UUID, payload: DungeonVersionInput, db: DbSession, current_user: EditorUser
+    dungeon_id: uuid.UUID, payload: DungeonVersionInput, db: DbSession, current_user: DungeonWriter
 ) -> DungeonVersionView:
     del current_user
     dungeon = _lock_dungeon_for_version(db, dungeon_id)
@@ -187,7 +189,7 @@ def create_version(
 
 @router.get("/dungeon-versions/{version_id}", response_model=DungeonVersionView)
 def get_version(
-    version_id: uuid.UUID, db: DbSession, current_user: CurrentUser
+    version_id: uuid.UUID, db: DbSession, current_user: DungeonReader
 ) -> DungeonVersionView:
     del current_user
     version = _load_version(db, version_id)
@@ -197,7 +199,7 @@ def get_version(
 
 @router.patch("/dungeon-versions/{version_id}", response_model=DungeonVersionView)
 def update_version(
-    version_id: uuid.UUID, payload: DungeonVersionInput, db: DbSession, current_user: EditorUser
+    version_id: uuid.UUID, payload: DungeonVersionInput, db: DbSession, current_user: DungeonWriter
 ) -> DungeonVersionView:
     del current_user
     version = _load_version(db, version_id)
@@ -229,7 +231,7 @@ def update_version(
 
 @router.post("/dungeon-versions/{version_id}/validate", response_model=ValidationResult)
 def validate_version(
-    version_id: uuid.UUID, db: DbSession, current_user: CurrentUser
+    version_id: uuid.UUID, db: DbSession, current_user: DungeonReader
 ) -> ValidationResult:
     del current_user
     version = _load_version(db, version_id)
@@ -240,7 +242,7 @@ def validate_version(
 
 @router.post("/dungeon-versions/{version_id}/publish", response_model=DungeonVersionView)
 def publish_version(
-    version_id: uuid.UUID, db: DbSession, current_user: EditorUser
+    version_id: uuid.UUID, db: DbSession, current_user: DungeonWriter
 ) -> DungeonVersionView:
     del current_user
     version = _load_version(db, version_id)
@@ -259,7 +261,7 @@ def publish_version(
 
 @router.post("/dungeon-versions/{version_id}/retire", response_model=DungeonVersionView)
 def retire_version(
-    version_id: uuid.UUID, db: DbSession, current_user: EditorUser
+    version_id: uuid.UUID, db: DbSession, current_user: DungeonWriter
 ) -> DungeonVersionView:
     del current_user
     version = _load_version(db, version_id)

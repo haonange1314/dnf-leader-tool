@@ -2,7 +2,7 @@ import uuid
 
 from fastapi import APIRouter, Request
 
-from app.api.dependencies import CurrentUser, DbSession, EditorUser
+from app.api.dependencies import DbSession, ScheduleReader, ScheduleWriter
 from app.application.schedule_locks import (
     acquire_edit_lock,
     edit_lock_view,
@@ -31,7 +31,7 @@ def _token(request: Request) -> str:
 
 
 @router.get("/schedules/{schedule_id}/lock", response_model=EditLockView)
-def get_lock(schedule_id: uuid.UUID, db: DbSession, current_user: CurrentUser) -> EditLockView:
+def get_lock(schedule_id: uuid.UUID, db: DbSession, current_user: ScheduleReader) -> EditLockView:
     _require_schedule(db, schedule_id)
     return edit_lock_view(db, schedule_id, current_user.id, get_settings())
 
@@ -41,7 +41,7 @@ def acquire_lock(
     schedule_id: uuid.UUID,
     request: Request,
     db: DbSession,
-    current_user: EditorUser,
+    current_user: ScheduleWriter,
 ) -> EditLockView:
     _require_schedule(db, schedule_id)
     settings = get_settings()
@@ -61,7 +61,7 @@ def heartbeat_lock(
     schedule_id: uuid.UUID,
     request: Request,
     db: DbSession,
-    current_user: EditorUser,
+    current_user: ScheduleWriter,
 ) -> EditLockView:
     settings = get_settings()
     token = _token(request)
@@ -75,7 +75,7 @@ def release_lock(
     schedule_id: uuid.UUID,
     request: Request,
     db: DbSession,
-    current_user: EditorUser,
+    current_user: ScheduleWriter,
 ) -> None:
     release_edit_lock(db, schedule_id, current_user.id, _token(request))
     db.commit()
@@ -85,7 +85,7 @@ def release_lock(
 def takeover_lock(
     schedule_id: uuid.UUID,
     db: DbSession,
-    current_user: EditorUser,
+    current_user: ScheduleWriter,
 ) -> EditLockView:
     _require_schedule(db, schedule_id)
     settings = get_settings()
