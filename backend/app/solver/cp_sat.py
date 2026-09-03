@@ -20,6 +20,16 @@ from app.solver.models import (
 )
 
 INT64_MAX = (1 << 63) - 1
+_AGGREGATE_HINT_SUPPORTED_RULE_TYPES = frozenset(
+    {
+        SolverScheduleRuleType.PLAYER_ALLOWED_WAVES,
+        SolverScheduleRuleType.PLAYER_FORBIDDEN_WAVES,
+        SolverScheduleRuleType.PLAYERS_NOT_SAME_WAVE,
+        SolverScheduleRuleType.PLAYER_PREFER_WAVE_RANGE,
+        SolverScheduleRuleType.PLAYER_PREFER_CONTIGUOUS,
+        SolverScheduleRuleType.CHARACTER_PREFER_TEAM,
+    }
+)
 
 
 def solve(solver_input: SolverInput) -> SolverResult:
@@ -519,9 +529,13 @@ def solve(solver_input: SolverInput) -> SolverResult:
     has_multi_character_player = any(
         len(indices) > 1 for indices in participant_indices_by_player.values()
     )
+    aggregate_hint_supports_rules = all(
+        rule.type in _AGGREGATE_HINT_SUPPORTED_RULE_TYPES
+        for rule in solver_input.schedule_rules
+    )
     if (
         assignment_upper_bound < len(participants) or has_multi_character_player
-    ) and not solver_input.schedule_rules:
+    ) and aggregate_hint_supports_rules:
         target_hint_attempted = True
         target_hint, target_hint_elapsed, target_hint_count = _find_assignment_target_hint(
             solver_input,
@@ -986,6 +1000,37 @@ def _find_assignment_target_hint(
     group_indices_by_player: dict[str, list[int]] = defaultdict(list)
     for group_index, (player_id, _role_type, _waves, _teams) in enumerate(group_keys):
         group_indices_by_player[player_id].append(group_index)
+    for schedule_rule in solver_input.schedule_rules:
+        if schedule_rule.type == SolverScheduleRuleType.PLAYER_ALLOWED_WAVES:
+            rule_allowed_waves = set(schedule_rule.waves)
+            for player_id in schedule_rule.player_ids:
+                for group_index in group_indices_by_player[player_id]:
+                    for wave_no in waves:
+                        if wave_no not in rule_allowed_waves:
+                            for team_index, _team in enumerate(teams):
+                                model.add(
+                                    group_assignment[group_index, wave_no, team_index] == 0
+                                )
+        elif schedule_rule.type == SolverScheduleRuleType.PLAYER_FORBIDDEN_WAVES:
+            for player_id in schedule_rule.player_ids:
+                for group_index in group_indices_by_player[player_id]:
+                    for wave_no in schedule_rule.waves:
+                        for team_index, _team in enumerate(teams):
+                            model.add(
+                                group_assignment[group_index, wave_no, team_index] == 0
+                            )
+        elif schedule_rule.type == SolverScheduleRuleType.PLAYERS_NOT_SAME_WAVE:
+            player_ids = set(schedule_rule.player_ids)
+            for wave_no in waves:
+                model.add(
+                    sum(
+                        group_assignment[group_index, wave_no, team_index]
+                        for player_id in player_ids
+                        for group_index in group_indices_by_player[player_id]
+                        for team_index, _team in enumerate(teams)
+                    )
+                    <= 1
+                )
     preference_by_player = {
         preference.player_id: preference for preference in solver_input.player_preferences
     }
