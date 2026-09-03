@@ -16,7 +16,11 @@ from app.application.schedule_generation import (
     solver_input_hash,
 )
 from app.application.schedule_locks import require_edit_lock
-from app.application.schedule_rules import compile_rule_set
+from app.application.schedule_rules import (
+    active_rule_set_context_is_current,
+    compile_rule_set,
+    invalidate_active_rule_set,
+)
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.core.security import utc_now
@@ -106,6 +110,20 @@ def generate_schedule(
                 if schedule.active_rule_set_id
                 else None,
             },
+        )
+    if not active_rule_set_context_is_current(schedule):
+        invalidate_active_rule_set(schedule)
+        schedule.revision += 1
+        schedule.updated_by = current_user.id
+        schedule.updated_at = utc_now()
+        schedule.status = "DRAFT"
+        schedule.validation_summary = None
+        db.commit()
+        raise AppError(
+            409,
+            "RULE_SET_CONTEXT_STALE",
+            "玩家波次或排表结构已变化，请重新解析本次排表要求",
+            details={"currentRevision": schedule.revision},
         )
     settings = get_settings()
     random_seed = (

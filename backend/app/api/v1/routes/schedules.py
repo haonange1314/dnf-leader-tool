@@ -943,15 +943,33 @@ def update_schedule_preferences(
     preference_by_player = {
         preference.player_id: preference for preference in item.preferences
     }
+    rule_context_changed = False
     for preference_input in payload.preferences:
         stored_preference = preference_by_player.get(preference_input.player_id)
+        normalized_allowed_waves = (
+            sorted(preference_input.allowed_waves)
+            if preference_input.allowed_waves is not None
+            else None
+        )
         if stored_preference is None:
             stored_preference = SchedulePlayerPreference(player_id=preference_input.player_id)
             item.preferences.append(stored_preference)
-        stored_preference.allowed_waves = preference_input.allowed_waves
+        stored_allowed_waves = (
+            sorted(stored_preference.allowed_waves)
+            if stored_preference.allowed_waves is not None
+            else None
+        )
+        if (
+            stored_allowed_waves != normalized_allowed_waves
+            or stored_preference.max_wave_count != preference_input.max_wave_count
+        ):
+            rule_context_changed = True
+        stored_preference.allowed_waves = normalized_allowed_waves
         stored_preference.max_wave_count = preference_input.max_wave_count
         stored_preference.prefer_early = preference_input.prefer_early
         stored_preference.prefer_contiguous = preference_input.prefer_contiguous
+    if rule_context_changed:
+        invalidate_active_rule_set(item)
     item.status = "DRAFT"
     item.validation_summary = None
     db.commit()

@@ -16,6 +16,7 @@ from app.domain.schedule.rules import (
     RuleInterpretationContext,
     RuleResolutionIssue,
     compile_resolved_rules,
+    rule_context_hash,
 )
 from app.integrations.deepseek_rules import DeepSeekRuleProvider
 from app.models.identity import NaturalLanguageRateLimit
@@ -24,20 +25,9 @@ from app.solver import SolverScheduleRule
 
 
 def build_rule_context(schedule: Schedule) -> RuleInterpretationContext:
-    selected = tuple(
-        RuleContextParticipant(
-            participant_id=str(participant.id),
-            player_id=str(participant.player_id_snapshot),
-            player_name=participant.player_name_snapshot,
-            character_name=participant.character_name_snapshot,
-            profession=participant.profession_snapshot,
-            role_type=participant.role_type_snapshot,
-            is_treasure_damage=participant.is_treasure_snapshot,
-            is_group_hunt=participant.is_group_hunt_snapshot,
-        )
-        for participant in schedule.participants
-        if participant.is_selected
-    )
+    preference_by_player = {
+        preference.player_id: preference for preference in schedule.preferences
+    }
     first_wave = min(schedule.waves, key=lambda wave: wave.wave_no, default=None)
     teams = (
         tuple(
@@ -48,6 +38,62 @@ def build_rule_context(schedule: Schedule) -> RuleInterpretationContext:
         )
         if first_wave is not None
         else ()
+    )
+    ranked_teams = (
+        [team for team in first_wave.teams if team.strength_rank_snapshot is not None]
+        if first_wave is not None
+        else []
+    )
+    lead_team_keys = None
+    if ranked_teams:
+        lead_rank = min(
+            team.strength_rank_snapshot
+            for team in ranked_teams
+            if team.strength_rank_snapshot is not None
+        )
+        lead_team_keys = tuple(
+            team.team_key
+            for team in ranked_teams
+            if team.strength_rank_snapshot == lead_rank
+        )
+
+    selected = tuple(
+        RuleContextParticipant(
+            participant_id=str(participant.id),
+            player_id=str(participant.player_id_snapshot),
+            player_name=participant.player_name_snapshot,
+            character_name=participant.character_name_snapshot,
+            profession=participant.profession_snapshot,
+            role_type=participant.role_type_snapshot,
+            is_treasure_damage=participant.is_treasure_snapshot,
+            is_group_hunt=participant.is_group_hunt_snapshot,
+            allowed_waves=(
+                tuple(
+                    sorted(
+                        preference_by_player[
+                            participant.player_id_snapshot
+                        ].allowed_waves
+                        or []
+                    )
+                )
+                if participant.player_id_snapshot in preference_by_player
+                and preference_by_player[participant.player_id_snapshot].allowed_waves
+                is not None
+                else None
+            ),
+            max_wave_count=(
+                preference_by_player[participant.player_id_snapshot].max_wave_count
+                if participant.player_id_snapshot in preference_by_player
+                else None
+            ),
+            allowed_team_keys=(
+                lead_team_keys
+                if participant.is_fixed_lead_team_buffer_snapshot
+                else None
+            ),
+        )
+        for participant in schedule.participants
+        if participant.is_selected
     )
     return RuleInterpretationContext(
         schedule_id=str(schedule.id),
@@ -142,6 +188,13 @@ def compile_rule_set(rule_set: ScheduleRuleSet | None) -> tuple[SolverScheduleRu
     if rule_set is None or rule_set.status != "CONFIRMED":
         return ()
     return compile_resolved_rules(rule_set.parsed_rules)
+
+
+def active_rule_set_context_is_current(schedule: Schedule) -> bool:
+    rule_set = schedule.active_rule_set
+    return rule_set is None or rule_set.context_hash == rule_context_hash(
+        build_rule_context(schedule)
+    )
 
 
 def invalidate_active_rule_set(schedule: Schedule) -> None:
