@@ -476,8 +476,8 @@ def _fixed_lead_buffer_with_player_limits() -> QualityScenario:
             complete_team_count=36,
             preferred_composition_count=36,
             special_rule_satisfied_count=12,
-            max_damage_spread=70_500,
-            max_buffer_spread=710,
+            max_damage_spread=60_000,
+            max_buffer_spread=350,
             max_strength_order_violation_count=13,
             unassigned_codes={"UNASSIGNED_PLAYER_CONFLICT": 48},
             wave_fill=(12,) * 12,
@@ -521,7 +521,86 @@ def _character_rule_with_player_limits() -> QualityScenario:
                 ),
             ),
         ),
-        expectation=replace(base.expectation, max_damage_spread=76_000),
+        expectation=replace(base.expectation, max_damage_spread=45_000),
+    )
+
+
+def _complex_rule_intersections() -> QualityScenario:
+    base = _fixed_lead_buffer_with_player_limits()
+    extra_player_id = "limited-damage-player-18"
+    extra_participants = tuple(
+        SolverParticipant(
+            participant_id=f"limited-damage-18-{role_index:02d}",
+            player_id=extra_player_id,
+            role_type=RoleType.DAMAGE,
+            score=base_score + 18 * 37,
+        )
+        for role_index, base_score in enumerate(
+            (28_000, 21_000, 15_500, 11_000, 7_500, 4_800, 2_900, 1_600)
+        )
+    )
+    return QualityScenario(
+        name="complex-rule-intersections",
+        solver_input=replace(
+            base.solver_input,
+            participants=base.solver_input.participants + extra_participants,
+            player_preferences=(
+                *base.solver_input.player_preferences,
+                SolverPlayerPreference(extra_player_id, max_wave_count=6),
+            ),
+            schedule_rules=(
+                SolverScheduleRule(
+                    rule_id="R1",
+                    type=SolverScheduleRuleType.CHARACTER_REQUIRED_WAVE,
+                    explanation="指定秘宝 C 必须参加第 1 波",
+                    participant_id="limited-damage-00-00",
+                    waves=(1,),
+                ),
+                SolverScheduleRule(
+                    rule_id="R2",
+                    type=SolverScheduleRuleType.CHARACTER_REQUIRED_TEAM,
+                    explanation="指定秘宝 C 必须进入红队",
+                    participant_id="limited-damage-00-00",
+                    team_key="RED",
+                ),
+                SolverScheduleRule(
+                    rule_id="R3",
+                    type=SolverScheduleRuleType.CHARACTER_REQUIRED_WAVE,
+                    explanation="指定固定主队奶必须参加第 1 波",
+                    participant_id="limited-buffer-00-00",
+                    waves=(1,),
+                ),
+                SolverScheduleRule(
+                    rule_id="R4",
+                    type=SolverScheduleRuleType.CHARACTER_REQUIRED_TEAM,
+                    explanation="指定固定主队奶必须进入红队",
+                    participant_id="limited-buffer-00-00",
+                    team_key="RED",
+                ),
+                SolverScheduleRule(
+                    rule_id="R5",
+                    type=SolverScheduleRuleType.PLAYERS_NOT_SAME_WAVE,
+                    explanation="三名 C 玩家不能出现在同一波",
+                    player_ids=(
+                        "limited-damage-player-00",
+                        "limited-damage-player-01",
+                        extra_player_id,
+                    ),
+                ),
+            ),
+        ),
+        expectation=QualityExpectation(
+            assigned_count=144,
+            participant_count=200,
+            complete_wave_count=12,
+            complete_team_count=36,
+            preferred_composition_count=36,
+            special_rule_satisfied_count=12,
+            max_damage_spread=55_000,
+            max_buffer_spread=350,
+            max_strength_order_violation_count=14,
+            wave_fill=(12,) * 12,
+        ),
     )
 
 
@@ -539,6 +618,7 @@ SCENARIOS = (
     _fixed_lead_buffer_with_player_limits(),
     _natural_rule_with_player_limits(),
     _character_rule_with_player_limits(),
+    _complex_rule_intersections(),
 )
 
 

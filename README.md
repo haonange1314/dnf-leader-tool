@@ -20,7 +20,7 @@
 
 - **副本管理**：Owner/Editor 可维护副本基础信息，为新副本创建首个草稿，并通过结构化编辑器配置默认波数、任意数量队伍、每队人数、合法组成、强度顺序、秘宝 C、跨波平衡和空位策略；支持版本校验、发布、复制、历史查看和退役，已发布版本保持不可变。
 - **人员管理**：按玩家和职业维护参团角色，不录入角色名和备注；同一玩家职业唯一，支持手动录入、九列 Excel 批量导入，以及玩家和角色两级拖拽排序并持久化。确认导入后按 Excel 行顺序排列人员和角色，未出现在表格中的既有数据保持相对顺序并置于其后，同时保留秘宝、固定红队奶与群猎标记。
-- **智能排表**：根据角色次数、玩家可用波次、C 伤害、奶增益量和秘宝 C 自动排队；核心目标采用分阶段词法序求解，生成记录展示各阶段的最优性状态和耗时。
+- **智能排表**：根据角色次数、玩家可用波次、C 伤害、奶增益量和秘宝 C 自动排队；核心目标采用分阶段词法序求解，生成记录展示各阶段的最优性状态和耗时，并可更换可复现的方案种子、对比连续两次生成的关键质量指标。
 - **本次排表要求**：Owner/Editor 可让 DeepSeek 把自然语言解释成白名单硬规则和软目标，预览无歧义后确认；最终排表始终由 OR-Tools 生成，生成记录和发布快照保留实际规则及满足情况。
 - **人工微调**：支持拖拽、交换、锁定、撤销恢复和局部重新生成。
 - **版本历史**：发布不可变排表快照，支持复制旧排表开启全新次数周期。
@@ -136,6 +136,9 @@ Owner 登录后可从“账号与审计”创建 Editor 或 Viewer，并查看�
 自然语言规则默认关闭。需要启用时，在 `.env` 配置
 `NATURAL_LANGUAGE_RULES_ENABLED=true` 和 `DEEPSEEK_API_KEY`，并按需调整
 `DEEPSEEK_MODEL`、超时、2,000 字输入上限及默认每用户每分钟 10 次的解析限流；重新构建并启动 API 后生效。API Key 仅传入后端容器，不得使用 `VITE_` 前缀或写入前端。
+配置完成后可运行 `make test-deepseek-live`，用不含真实玩家数据的合成规则验证公网模型连接、
+响应 Schema 和本地引用解析。该命令会产生一次真实 API 调用且不属于默认 `make check`，
+输出不会包含密钥、提示词或完整模型响应。
 
 常用命令：
 
@@ -146,6 +149,7 @@ make test-stack    # 验证迁移、种子、编辑、发布、导出、鉴权�
 make test-e2e      # 验证人员维护、编辑租约和自然语言规则到 OR-Tools 的浏览器闭环
 make test-performance # 运行显式 1/12/30/50 波性能基线
 make test-quality  # 运行 12 人团本质量场景并输出 JSON 指标
+make test-deepseek-live # 显式调用真实 DeepSeek，验证连接和规则解析（可能产生费用）
 make solver-poc    # 运行默认 12 波团本和自定义单队 4 人 CP-SAT PoC
 make migrate       # 本机对 DATABASE_URL 执行数据库迁移
 make seed          # 幂等写入内置 12 人团本及评分公式
@@ -153,7 +157,9 @@ make init-owner    # 交互式创建首个 Owner（未使用环境变量时提�
 make logs          # 跟踪三个容器日志
 make down          # 停止容器，保留 PostgreSQL 数据卷
 make prod-config   # 校验 .env.production 和生产 Compose 叠加配置
+make release-check # 完整代码验收，并校验本机 .env.production 的生产叠加配置
 make prod-up       # 通过 Caddy HTTPS 启动生产容器
+make prod-smoke PUBLIC_BASE_URL=https://你的域名 # 验证线上就绪、HTTPS 跳转和安全响应头
 make backup        # 生成 PostgreSQL 自定义格式备份
 make restore BACKUP_FILE=/path/to/backup.dump  # 显式恢复生产数据库
 ```
@@ -188,7 +194,7 @@ cd backend && uv run uvicorn app.main:app --reload
 - [x] 完成 HTTPS 入口、生产安全配置和部署文档
 - [x] 完成隔离 PostgreSQL 备份恢复演练和生产恢复脚本
 - [x] 完成 Playwright 浏览器端到端测试和 1/12/30/50 波性能验收
-- [x] 建立 12 人团本质量基线并覆盖短缺、秘宝、锁定、玩家冲突和真实分布匿名画像
+- [x] 建立 14 个 12 人团本质量画像，覆盖短缺、秘宝、锁定、玩家冲突、复杂规则交集和真实分布匿名画像
 - [x] 实现 DeepSeek v4 自然语言规则解析、确认、编译、按用户限流和生成解释闭环
 
 ## 已完成实施顺序

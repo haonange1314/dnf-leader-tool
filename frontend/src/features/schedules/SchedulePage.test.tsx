@@ -1,9 +1,10 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError, api, type ScheduleDetail } from "../../api/client";
+import { ApiError, api, type GenerationRun, type ScheduleDetail } from "../../api/client";
 import {
   applyOptimisticAssignment,
   buildDropOperations,
+  compareGenerationRuns,
   describeIssue,
   describeRuleParseError,
   describeRuleResolutionIssue,
@@ -175,6 +176,38 @@ describe("SchedulePage", () => {
         }),
       ) as Error).message,
     ).toBe("规则解析请求过于频繁，请在 17 秒后重试");
+  });
+
+  it("compares alternative seeds by the established objective priority", () => {
+    const objectiveSummary: NonNullable<GenerationRun["objectiveSummary"]> = {
+      assignedCount: 144,
+      participantCount: 160,
+      completeWaveCount: 12,
+      completeTeamCount: 36,
+      preferredCompositionCount: 36,
+      specialRuleSatisfiedCount: 12,
+      damageSpread: 100,
+      bufferSpread: 10,
+      strengthOrderViolationCount: 1,
+    };
+    const previous = {
+      randomSeed: 42,
+      objectiveSummary,
+    } as GenerationRun;
+    const current = {
+      randomSeed: 43,
+      objectiveSummary: {
+        ...objectiveSummary,
+        assignedCount: 143,
+        strengthOrderViolationCount: 0,
+      },
+    } as GenerationRun;
+
+    expect(compareGenerationRuns(current, previous)).toMatchObject({
+      improved: false,
+      declined: true,
+      title: "关键指标不优于种子 42",
+    });
   });
 
   it("opens the readonly wave layout from the schedule list", async () => {
@@ -574,6 +607,8 @@ describe("SchedulePage", () => {
     render(<SchedulePage userRole="OWNER" onError={vi.fn()} onSuccess={vi.fn()} />);
     fireEvent.click(await screen.findByText("周六团"));
     fireEvent.click(await screen.findByRole("button", { name: /自动排表/ }));
+    expect(screen.getByText(/相同数据、规则、锁定和种子可复现/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "更换方案种子" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "开始生成" }));
 
     expect(await screen.findByText("最近一次自动排表")).toBeInTheDocument();
@@ -584,7 +619,8 @@ describe("SchedulePage", () => {
     expect(screen.getByText("安排人数 · 达到理论界")).toBeInTheDocument();
     expect(screen.getByText("C 跨波平衡 · 已证明最优")).toBeInTheDocument();
     expect(screen.getByText("本波核心")).toBeInTheDocument();
-  });
+    expect(screen.getByRole("button", { name: /换一个方案/ })).toBeEnabled();
+  }, 20_000);
 
   it("shows server publication issues before enabling publish", async () => {
     vi.mocked(api).mockImplementation(async (path: string) => {

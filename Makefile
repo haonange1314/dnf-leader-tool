@@ -1,4 +1,4 @@
-.PHONY: bootstrap dev up down logs migrate seed init-owner solver-poc test test-backend test-frontend test-stack test-e2e test-performance test-quality prod-config prod-up prod-down prod-logs backup restore check
+.PHONY: bootstrap dev up down logs migrate seed init-owner solver-poc test test-backend test-frontend test-stack test-e2e test-performance test-quality test-deepseek-live prod-config prod-up prod-down prod-logs prod-smoke backup restore check release-check
 
 export UV_CACHE_DIR ?= $(CURDIR)/.uv-cache
 
@@ -51,6 +51,9 @@ test-performance:
 test-quality:
 	cd backend && uv run pytest -m quality -s
 
+test-deepseek-live:
+	cd backend && uv run python -m app.cli check-deepseek
+
 prod-config:
 	docker compose --env-file .env.production -f compose.yaml -f compose.production.yaml config --quiet
 
@@ -62,6 +65,10 @@ prod-down:
 
 prod-logs:
 	docker compose --env-file .env.production -f compose.yaml -f compose.production.yaml logs -f gateway api web db
+
+prod-smoke:
+	@test -n "$(PUBLIC_BASE_URL)" || (echo "PUBLIC_BASE_URL is required" >&2; exit 1)
+	PUBLIC_BASE_URL="$(PUBLIC_BASE_URL)" sh scripts/check-production-health.sh
 
 backup:
 	sh scripts/backup-db.sh
@@ -81,3 +88,6 @@ check:
 	$(MAKE) test-stack
 	$(MAKE) test-performance
 	$(MAKE) test-e2e
+
+release-check: prod-config check
+	@echo "release acceptance: local checks and production configuration passed"

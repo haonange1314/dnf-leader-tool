@@ -509,6 +509,13 @@ body {
 .editor-toolbar .ant-card-body {
   padding-block: 8px;
 }
+.editor-toolbar {
+  position: sticky;
+  z-index: 8;
+  top: 8px;
+  backdrop-filter: saturate(180%) blur(18px);
+  background: rgb(255 255 255 / 86%);
+}
 .unassigned-pool {
   display: flex;
   flex-wrap: wrap;
@@ -625,6 +632,17 @@ body {
 .generation-summary-tags {
   margin-bottom: 8px;
 }
+.generation-summary-card > .ant-card-head {
+  min-height: 38px;
+}
+.generation-comparison {
+  margin: 2px 0 8px;
+  padding-block: 6px;
+}
+.generation-comparison .ant-alert-message,
+.generation-comparison .ant-alert-description {
+  font-size: 12px;
+}
 .generation-diagnostics {
   display: grid;
   gap: 8px;
@@ -672,6 +690,9 @@ body {
   }
   .schedule-action-bar {
     justify-content: flex-start;
+  }
+  .editor-toolbar {
+    top: 4px;
   }
   .schedule-overview-grid {
     grid-template-columns: repeat(2, minmax(72px, 1fr));

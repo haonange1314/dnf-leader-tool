@@ -1276,11 +1276,14 @@ def _find_assignment_target_hint(
         for team_index, _team in enumerate(teams)
     }
     identities_by_group: dict[int, list[tuple[int, int, int]]] = defaultdict(list)
+    hint_score_by_role_wave: dict[tuple[RoleType, int], int] = defaultdict(int)
     for (participant_index, wave_no, team_index), variable in identity_assignment.items():
         if not solver.value(variable):
             continue
         group_index = group_index_by_key[group_key_by_participant[participant_index]]
         identities_by_group[group_index].append((participant_index, wave_no, team_index))
+        participant = participants[participant_index]
+        hint_score_by_role_wave[participant.role_type, wave_no] += participant.score
     for group_index, group_key in enumerate(group_keys):
         selected_positions = {
             (wave_no, team_index)
@@ -1316,6 +1319,8 @@ def _find_assignment_target_hint(
             hint[participant_index, wave_no, team_index] = 1
             selected_positions.remove((wave_no, team_index))
             locked_participant_indices.add(participant_index)
+            participant = participants[participant_index]
+            hint_score_by_role_wave[participant.role_type, wave_no] += participant.score
         available_indices = [
             participant_index
             for participant_index in participant_indices_by_group[group_key]
@@ -1328,18 +1333,22 @@ def _find_assignment_target_hint(
             )
         )
         role_team_ranks = team_rank_by_role.get(group_key[1], {})
-        ordered_positions = sorted(
-            selected_positions,
-            key=lambda position: (
-                role_team_ranks.get(teams[position[1]].team_key, len(teams)),
-                position[0],
-                position[1],
-            ),
-        )
-        for participant_index, (wave_no, team_index) in zip(
-            available_indices, ordered_positions, strict=False
-        ):
+        role_type = group_key[1]
+        for participant_index in available_indices:
+            wave_no, team_index = min(
+                selected_positions,
+                key=lambda position: (
+                    role_team_ranks.get(teams[position[1]].team_key, len(teams)),
+                    hint_score_by_role_wave[role_type, position[0]],
+                    position[0],
+                    position[1],
+                ),
+            )
             hint[participant_index, wave_no, team_index] = 1
+            hint_score_by_role_wave[role_type, wave_no] += participants[
+                participant_index
+            ].score
+            selected_positions.remove((wave_no, team_index))
     return hint, solver.wall_time, round(solver.value(assigned_total))
 
 

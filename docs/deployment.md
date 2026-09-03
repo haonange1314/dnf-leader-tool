@@ -51,6 +51,18 @@ curl --fail --head https://你的域名/
 HTTP 自动跳转到 HTTPS。生产 API 只通过 Caddy 访问，不应直接暴露 8000 端口；
 PostgreSQL 也不应暴露 5432 端口。
 
+代码准备发布时先运行完整本地验收与生产配置校验；部署后再对真实域名执行只读检查：
+
+```bash
+make release-check
+make prod-smoke PUBLIC_BASE_URL=https://你的域名
+```
+
+`release-check` 包含静态检查、前后端测试、生产构建、隔离数据库迁移/备份恢复、求解质量与
+性能基线，以及 Playwright 浏览器闭环；`prod-smoke` 检查就绪探针、HTTP 到 HTTPS 跳转、
+HSTS、CSP 和 `X-Content-Type-Options`。如启用自然语言规则，另运行一次
+`make test-deepseek-live` 验证正式服务器能访问所配置模型，该命令会产生一次真实 API 调用。
+
 ## 4. 备份
 
 默认备份目录是仓库下被 Git 忽略的 `backups/`，生产环境应改为数据库卷之外的挂载点：

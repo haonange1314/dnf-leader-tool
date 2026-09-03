@@ -16,6 +16,7 @@ import {
   message,
   theme as antdTheme,
 } from "antd";
+import zhCN from "antd/locale/zh_CN";
 import { lazy, Suspense, useEffect, useState } from "react";
 import { api, type User } from "../api/client";
 import { LoginPage } from "../features/auth/LoginPage";
@@ -85,6 +86,7 @@ export function App() {
   return (
     <ConfigProvider
       componentSize="small"
+      locale={zhCN}
       theme={{
         algorithm: antdTheme.compactAlgorithm,
         token: {
