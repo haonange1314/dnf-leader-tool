@@ -62,6 +62,7 @@ import {
   type ScheduleDetail,
   type ScheduleOperation,
   type SchedulePublicationCheck,
+  type RuleResolutionIssue,
   type ScheduleRuleSet,
   type ScheduleRuleSetList,
   type ScheduleRuleSetMutationResponse,
@@ -137,6 +138,15 @@ const RULE_TYPE_LABELS: Record<string, string> = {
   PLAYER_PREFER_WAVE_RANGE: "玩家偏好波次",
   PLAYER_PREFER_CONTIGUOUS: "玩家连续上号",
   CHARACTER_PREFER_TEAM: "角色偏好队伍",
+};
+
+const RULE_ISSUE_LABELS: Record<string, string> = {
+  RULE_SET_TYPE_UNSUPPORTED: "暂不支持的要求",
+  RULE_SET_CANDIDATE_DUPLICATED: "解析结果包含重复规则",
+  RULE_SET_REFERENCE_NOT_FOUND: "未找到对应人员或角色",
+  RULE_SET_REFERENCE_AMBIGUOUS: "名称对应多个候选",
+  RULE_SET_WAVE_OUT_OF_RANGE: "波次超出当前排表范围",
+  RULE_SET_HARD_CONFLICT: "硬规则互相冲突",
 };
 
 const RULE_EVALUATION_LABELS: Record<
@@ -737,7 +747,7 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
           : "解析完成，请确认结构化规则",
       );
     } catch (error) {
-      onError(error);
+      onError(describeRuleParseError(error));
     } finally {
       setRulePending(false);
     }
@@ -1380,12 +1390,8 @@ export function SchedulePage({ userRole, onError, onSuccess }: Props) {
                 key={`${issue.code}-${index}`}
                 type="warning"
                 showIcon
-                title={issue.code}
-                description={
-                  issue.reference
-                    ? `无法确认引用“${issue.reference}”${issue.matches.length ? `；候选：${issue.matches.join("、")}` : ""}`
-                    : "该要求当前不受支持"
-                }
+                title={RULE_ISSUE_LABELS[issue.code] ?? "规则无法确认"}
+                description={describeRuleResolutionIssue(issue)}
               />
             ))}
             <Button
@@ -2740,4 +2746,45 @@ export function describeIssue(issue: ValidationIssue): string {
         .map(([key, value]) => `${key}: ${String(value)}`)
         .join("；");
   }
+}
+
+export function describeRuleResolutionIssue(issue: RuleResolutionIssue): string {
+  const reference = issue.reference ? `“${issue.reference}”` : "该要求";
+  switch (issue.code) {
+    case "RULE_SET_TYPE_UNSUPPORTED":
+      return `${reference}暂时无法转换为系统支持的排表规则，请改用明确的玩家、角色、波次或队伍要求。`;
+    case "RULE_SET_CANDIDATE_DUPLICATED":
+      return `解析结果中规则 ${issue.candidateId ?? ""} 重复，请重新解析。`;
+    case "RULE_SET_REFERENCE_NOT_FOUND":
+      return `在当前参团角色和副本队伍中未找到${reference}，请检查名称或先同步人员。`;
+    case "RULE_SET_REFERENCE_AMBIGUOUS":
+      return `${reference}对应多个候选${issue.matches.length ? `：${issue.matches.join("、")}` : ""}，请补充玩家或职业信息。`;
+    case "RULE_SET_WAVE_OUT_OF_RANGE":
+      return `${reference}不在当前排表的波次范围内，请修改波次后重新解析。`;
+    case "RULE_SET_HARD_CONFLICT":
+      return `${reference}${issue.matches.length ? `；关联规则：${issue.matches.join("、")}` : ""}。请调整冲突要求后重新解析。`;
+    default:
+      return issue.reference
+        ? `无法确认${reference}${issue.matches.length ? `；候选：${issue.matches.join("、")}` : ""}`
+        : "该要求当前无法确认，请修改描述后重新解析。";
+  }
+}
+
+export function describeRuleParseError(error: unknown): unknown {
+  if (!(error instanceof ApiError)) return error;
+  if (error.code === "RULE_PARSE_RATE_LIMITED") {
+    const retryAfter = Number(error.details.retryAfterSeconds);
+    return new Error(
+      Number.isFinite(retryAfter)
+        ? `规则解析请求过于频繁，请在 ${Math.max(1, Math.ceil(retryAfter))} 秒后重试`
+        : "规则解析请求过于频繁，请稍后重试",
+    );
+  }
+  if (error.code === "RULE_PROVIDER_UNAVAILABLE") {
+    return new Error("自然语言服务暂时不可用，请稍后重试；手动排表和已确认规则不受影响");
+  }
+  if (error.code === "RULE_PROVIDER_RESPONSE_INVALID") {
+    return new Error("模型返回的规则格式无法识别，请调整描述后重新解析");
+  }
+  return error;
 }

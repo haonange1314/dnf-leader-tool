@@ -3,5 +3,8 @@ services:
     ports: !reset []
   api:
     ports: !reset []
+    environment:
+      NATURAL_LANGUAGE_RULES_ENABLED: "false"
+      DEEPSEEK_API_KEY: ""
   web:
     ports: !reset []

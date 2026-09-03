@@ -178,3 +178,66 @@ test("a second browser session is downgraded while the first holds the edit leas
     await secondContext.close();
   }
 });
+
+test("Owner can confirm a natural-language rule and generate through OR-Tools", async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  await login(page);
+  const csrf = (await page.context().cookies()).find((cookie) => cookie.name === "dnf_csrf");
+  expect(csrf?.value).toBeTruthy();
+  const suffix = Date.now().toString(36);
+  const playerName = `E2E 规则玩家 ${suffix}`;
+  const playerResponse = await page.request.post("/api/v1/players", {
+    headers: { "X-CSRF-Token": csrf?.value ?? "" },
+    data: {
+      displayName: playerName,
+      isActive: true,
+      characters: [
+        {
+          profession: "E2E 规则剑魂",
+          roleType: "DAMAGE",
+          damageScore: "500",
+          bufferScore: null,
+          isTreasureDamage: false,
+          isFixedLeadTeamBuffer: false,
+          isGroupHunt: false,
+          defaultRaidParticipant: true,
+          note: null,
+          isActive: true,
+        },
+      ],
+    },
+  });
+  expect(playerResponse.status()).toBe(201);
+
+  const dungeonsResponse = await page.request.get("/api/v1/dungeons");
+  const dungeons = (await dungeonsResponse.json()) as {
+    items: Array<{ versions: Array<{ id: string; status: string }> }>;
+  };
+  const version = dungeons.items[0].versions.find((item) => item.status === "PUBLISHED");
+  expect(version).toBeTruthy();
+  const scheduleName = `E2E 自然语言规则 ${suffix}`;
+  const createResponse = await page.request.post("/api/v1/schedules", {
+    headers: { "X-CSRF-Token": csrf?.value ?? "" },
+    data: { name: scheduleName, dungeonVersionId: version?.id },
+  });
+  expect(createResponse.status()).toBe(201);
+
+  await page.getByRole("menuitem", { name: "排表管理" }).click();
+  await page.getByText(scheduleName, { exact: true }).click();
+  await expect(page.getByText("已获得此排表的单编辑会话锁")).toBeVisible();
+  await page.getByRole("button", { name: "配置" }).click();
+  await page
+    .getByPlaceholder(/韩亚尽量安排/)
+    .fill(`${playerName}只能参加第 1 波`);
+  await page.getByRole("button", { name: "解析要求" }).click();
+  await expect(page.getByText(`${playerName} 仅参加第 1 波`)).toBeVisible();
+  await page.getByRole("button", { name: "确认并用于自动排表" }).click();
+  await expect(page.getByText("已确认 1 条")).toBeVisible();
+
+  await page.getByRole("button", { name: "自动排表" }).click();
+  await page.getByRole("button", { name: "开始生成" }).click();
+  await expect(page.getByText("最近一次自动排表")).toBeVisible();
+  await expect(page.getByText(/玩家仅可用波次 ·已满足/)).toBeVisible();
+});

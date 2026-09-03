@@ -4,7 +4,29 @@ services:
 
   api:
     ports: !reset []
+    environment:
+      ENVIRONMENT: test
+      NATURAL_LANGUAGE_RULES_ENABLED: "true"
+      DEEPSEEK_API_KEY: e2e-fixture-only
+      DEEPSEEK_BASE_URL: http://rule-provider:18080
+      DEEPSEEK_MODEL: deepseek-v4-e2e-fixture
+      DEEPSEEK_TIMEOUT_SECONDS: "2"
+      NATURAL_LANGUAGE_RULE_RATE_LIMIT_REQUESTS: "100"
+    depends_on:
+      rule-provider:
+        condition: service_healthy
 
   web:
     ports: !override
       - "127.0.0.1:15173:80"
+
+  rule-provider:
+    build:
+      context: .
+      dockerfile: infra/api/Dockerfile
+    command: [".venv/bin/python", "tests/e2e_rule_provider.py"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:18080/health')"]
+      interval: 2s
+      timeout: 2s
+      retries: 20

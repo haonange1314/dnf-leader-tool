@@ -1,10 +1,12 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api, type ScheduleDetail } from "../../api/client";
+import { ApiError, api, type ScheduleDetail } from "../../api/client";
 import {
   applyOptimisticAssignment,
   buildDropOperations,
   describeIssue,
+  describeRuleParseError,
+  describeRuleResolutionIssue,
   SchedulePage,
 } from "./SchedulePage";
 
@@ -153,6 +155,26 @@ describe("SchedulePage", () => {
     ).toBe(
       "每波需要 12 个不同玩家，当前只有 11 个，还缺 1 个；同一玩家在同一波最多使用一个角色。",
     );
+  });
+
+  it("explains natural-language ambiguity and rate limits in Chinese", () => {
+    expect(
+      describeRuleResolutionIssue({
+        code: "RULE_SET_REFERENCE_AMBIGUOUS",
+        candidateId: "R1",
+        field: "characterReference",
+        reference: "剑魂",
+        matches: ["玩家甲/剑魂", "玩家乙/剑魂"],
+      }),
+    ).toContain("对应多个候选：玩家甲/剑魂、玩家乙/剑魂");
+
+    expect(
+      (describeRuleParseError(
+        new ApiError("限流", 429, "RULE_PARSE_RATE_LIMITED", {
+          retryAfterSeconds: 17,
+        }),
+      ) as Error).message,
+    ).toBe("规则解析请求过于频繁，请在 17 秒后重试");
   });
 
   it("opens the readonly wave layout from the schedule list", async () => {

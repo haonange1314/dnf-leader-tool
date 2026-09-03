@@ -50,6 +50,13 @@ class RuleCandidateBase(BaseModel):
     candidate_id: str = Field(min_length=1, max_length=40, pattern=r"^[A-Za-z0-9_-]+$")
     explanation: str = Field(min_length=1, max_length=300)
 
+    @field_validator("candidate_id", mode="before")
+    @classmethod
+    def normalize_numeric_candidate_id(cls, value: object) -> object:
+        if isinstance(value, int) and not isinstance(value, bool):
+            return str(value)
+        return value
+
 
 class PlayerAllowedWavesCandidate(RuleCandidateBase):
     type: Literal["PLAYER_ALLOWED_WAVES"]
