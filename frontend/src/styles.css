@@ -716,6 +716,9 @@ body {
 .publish-warning-confirm {
   margin-top: 18px;
 }
+.schedule-delete-confirmation {
+  margin-top: 16px;
+}
 .version-history-list {
   display: grid;
   gap: 10px;

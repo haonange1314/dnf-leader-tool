@@ -666,9 +666,13 @@ Viewer 三个角色并把旧 `users.role` 数据转换为外键。Owner 角色�
 DRAFT 发布 → PUBLISHED
 PUBLISHED 继续编辑/恢复版本 → DRAFT（已发布版本仍保留）
 DRAFT 或 PUBLISHED 归档 → ARCHIVED
+ARCHIVED 恢复 → DRAFT
 ```
 
 `PUBLISHED` 表示当前草稿已与最近发布版本一致；继续编辑只改变当前状态，不修改任何历史版本。
+排表列表默认排除 `ARCHIVED`，通过 `includeArchived=true` 显式返回。永久删除要求状态为
+`DRAFT`、`last_published_version` 为空且不存在 `schedule_versions`，同时校验编辑租约、
+`baseRevision` 和准确的排表名称；相关草稿聚合数据由外键级联清理，审计日志继续保留。
 
 新建排表只能引用 PUBLISHED 副本版本。创建事务根据该版本一次性生成全部 wave、team 和 slot，并把队伍展示及容量字段写入快照。副本版本后来退休不影响已有排表。
 
@@ -989,6 +993,8 @@ PATCH  /schedules/{scheduleId}
 POST   /schedules/{scheduleId}/copy/preview
 POST   /schedules/{scheduleId}/copy
 POST   /schedules/{scheduleId}/archive
+POST   /schedules/{scheduleId}/restore
+DELETE /schedules/{scheduleId}
 GET    /schedules/{scheduleId}/editor
 PUT    /schedules/{scheduleId}/participants
 PUT    /schedules/{scheduleId}/player-preferences
@@ -1714,7 +1720,8 @@ class SolverResult:
 | 查看人员和排表 | 是 | 是 | 是 |
 | 编辑人员 | 是 | 是 | 否 |
 | 编辑和生成排表 | 是 | 是 | 否 |
-| 发布和导出 | 是 | 是 | 仅下载已有导出 |
+| 发布、归档和导出 | 是 | 是 | 仅下载已有导出 |
+| 永久删除未发布草稿 | 是 | 否 | 否 |
 | 管理用户 | 是 | 否 | 否 |
 | 归档/删除分享链接 | 是 | 可撤销自己创建的链接 | 否 |
 
@@ -1723,7 +1730,7 @@ class SolverResult:
 ```text
 DUNGEON_READ / DUNGEON_WRITE
 ROSTER_READ / ROSTER_WRITE / ROSTER_IMPORT
-SCHEDULE_READ / SCHEDULE_WRITE / SCHEDULE_GENERATE / SCHEDULE_PUBLISH
+SCHEDULE_READ / SCHEDULE_WRITE / SCHEDULE_GENERATE / SCHEDULE_PUBLISH / SCHEDULE_DELETE
 SCHEDULE_EXPORT / SHARE_MANAGE
 USER_READ / USER_WRITE
 ROLE_READ / ROLE_WRITE

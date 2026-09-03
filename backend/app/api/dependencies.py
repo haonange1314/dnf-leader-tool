@@ -79,6 +79,7 @@ ScheduleReader = Annotated[User, Depends(require_permission("SCHEDULE_READ"))]
 ScheduleWriter = Annotated[User, Depends(require_permission("SCHEDULE_WRITE"))]
 ScheduleGenerator = Annotated[User, Depends(require_permission("SCHEDULE_GENERATE"))]
 SchedulePublisher = Annotated[User, Depends(require_permission("SCHEDULE_PUBLISH"))]
+ScheduleDeleter = Annotated[User, Depends(require_permission("SCHEDULE_DELETE"))]
 ScheduleExporter = Annotated[User, Depends(require_permission("SCHEDULE_EXPORT"))]
 ShareManager = Annotated[User, Depends(require_permission("SHARE_MANAGE"))]
 UserReader = Annotated[User, Depends(require_permission("USER_READ"))]
@@ -139,3 +140,16 @@ def require_schedule_publisher_editor(
 
 
 SchedulePublisherEditor = Annotated[User, Depends(require_schedule_publisher_editor)]
+
+
+def require_schedule_deleter_editor(
+    schedule_id: uuid.UUID,
+    request: Request,
+    db: DbSession,
+    current_user: ScheduleDeleter,
+) -> User:
+    enforce_schedule_edit_lock(schedule_id, request, db, current_user)
+    return current_user
+
+
+ScheduleDeleterEditor = Annotated[User, Depends(require_schedule_deleter_editor)]

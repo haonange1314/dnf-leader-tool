@@ -2,14 +2,16 @@ import hashlib
 import json
 import uuid
 
-from fastapi import APIRouter, Request
-from sqlalchemy import func, select, update
+from fastapi import APIRouter, Query, Request
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import selectinload
 
 from app.api.dependencies import (
     CurrentUser,
     DbSession,
+    ScheduleDeleterEditor,
     ScheduleEditor,
+    SchedulePublisherEditor,
     ScheduleReader,
     ScheduleWriter,
     enforce_schedule_edit_lock,
@@ -29,6 +31,7 @@ from app.models.schedule import (
     ScheduleParticipant,
     SchedulePlayerPreference,
     ScheduleRuleSet,
+    ScheduleVersion,
     Team,
     TeamSlot,
     Wave,
@@ -41,7 +44,9 @@ from app.schemas.schedule import (
     ScheduleCopyPreview,
     ScheduleCopyPreviewRequest,
     ScheduleCreate,
+    ScheduleDeleteRequest,
     ScheduleDetail,
+    ScheduleLifecycleRequest,
     ScheduleList,
     ScheduleParticipantsUpdate,
     SchedulePreferencesUpdate,
@@ -418,9 +423,16 @@ def _sync_changes(
 
 
 @router.get("", response_model=ScheduleList)
-def list_schedules(db: DbSession, current_user: ScheduleReader) -> ScheduleList:
+def list_schedules(
+    db: DbSession,
+    current_user: ScheduleReader,
+    include_archived: bool = Query(default=False, alias="includeArchived"),
+) -> ScheduleList:
     del current_user
-    items = list(db.scalars(select(Schedule).order_by(Schedule.updated_at.desc())))
+    statement = select(Schedule).order_by(Schedule.updated_at.desc())
+    if not include_archived:
+        statement = statement.where(Schedule.status != "ARCHIVED")
+    items = list(db.scalars(statement))
     db.commit()
     return ScheduleList(
         items=[ScheduleSummary.model_validate(item) for item in items], total=len(items)
@@ -789,6 +801,100 @@ def get_schedule(schedule_id: uuid.UUID, db: DbSession, current_user: ScheduleRe
     return item
 
 
+@router.post("/{schedule_id}/archive", response_model=ScheduleDetail)
+def archive_schedule(
+    schedule_id: uuid.UUID,
+    payload: ScheduleLifecycleRequest,
+    db: DbSession,
+    current_user: SchedulePublisherEditor,
+) -> Schedule:
+    item = _load(db, schedule_id, for_update=True)
+    if item.status == "ARCHIVED":
+        raise AppError(409, "SCHEDULE_ALREADY_ARCHIVED", "排表已经归档")
+    if item.revision != payload.base_revision:
+        raise AppError(
+            409,
+            "SCHEDULE_REVISION_CONFLICT",
+            "排表已被其他操作修改，请刷新后重试",
+            details={"expected": payload.base_revision, "current": item.revision},
+        )
+    item.status = "ARCHIVED"
+    item.revision += 1
+    item.updated_by = current_user.id
+    item.updated_at = func.now()
+    db.commit()
+    return _load(db, item.id)
+
+
+@router.post("/{schedule_id}/restore", response_model=ScheduleDetail)
+def restore_archived_schedule(
+    schedule_id: uuid.UUID,
+    payload: ScheduleLifecycleRequest,
+    db: DbSession,
+    current_user: SchedulePublisherEditor,
+) -> Schedule:
+    item = _load(db, schedule_id, for_update=True)
+    if item.status != "ARCHIVED":
+        raise AppError(409, "SCHEDULE_NOT_ARCHIVED", "只有已归档排表可以恢复")
+    if item.revision != payload.base_revision:
+        raise AppError(
+            409,
+            "SCHEDULE_REVISION_CONFLICT",
+            "排表已被其他操作修改，请刷新后重试",
+            details={"expected": payload.base_revision, "current": item.revision},
+        )
+    item.status = "DRAFT"
+    item.revision += 1
+    item.validation_summary = None
+    item.updated_by = current_user.id
+    item.updated_at = func.now()
+    db.commit()
+    return _load(db, item.id)
+
+
+@router.delete("/{schedule_id}", status_code=204)
+def delete_schedule(
+    schedule_id: uuid.UUID,
+    payload: ScheduleDeleteRequest,
+    db: DbSession,
+    current_user: ScheduleDeleterEditor,
+) -> None:
+    item = _load(db, schedule_id, for_update=True)
+    if item.revision != payload.base_revision:
+        raise AppError(
+            409,
+            "SCHEDULE_REVISION_CONFLICT",
+            "排表已被其他操作修改，请刷新后重试",
+            details={"expected": payload.base_revision, "current": item.revision},
+        )
+    if item.status != "DRAFT" or item.last_published_version is not None:
+        raise AppError(
+            409,
+            "SCHEDULE_DELETE_NOT_ALLOWED",
+            "只有从未发布的草稿排表可以永久删除",
+        )
+    published_version_count = db.scalar(
+        select(func.count()).select_from(ScheduleVersion).where(
+            ScheduleVersion.schedule_id == item.id
+        )
+    ) or 0
+    if published_version_count:
+        raise AppError(
+            409,
+            "SCHEDULE_DELETE_NOT_ALLOWED",
+            "存在发布历史的排表不能永久删除，请改用归档",
+        )
+    if payload.confirmation_name != item.name:
+        raise AppError(
+            422,
+            "SCHEDULE_DELETE_CONFIRMATION_MISMATCH",
+            "输入的排表名称不匹配",
+            path="confirmationName",
+        )
+    db.execute(delete(Schedule).where(Schedule.id == item.id))
+    db.commit()
+
+
 @router.patch("/{schedule_id}", response_model=ScheduleDetail)
 def update_schedule(
     schedule_id: uuid.UUID,
@@ -1110,7 +1216,7 @@ def validate_schedule(
             "排表已被其他操作修改，请刷新后重试",
             details={"expected": payload.base_revision, "current": item.revision},
         )
-    if current_user.has_permission("SCHEDULE_WRITE"):
+    if current_user.has_permission("SCHEDULE_WRITE") and item.status != "ARCHIVED":
         enforce_schedule_edit_lock(schedule_id, request, db, current_user)
     version = db.get(DungeonVersion, item.dungeon_version_id)
     if version is None:
@@ -1311,7 +1417,7 @@ def validate_schedule(
         "info": sum(issue.severity == "INFO" for issue in issues),
     }
     report = ValidationReport(revision=item.revision, issues=issues, summary=summary)
-    if not current_user.has_permission("SCHEDULE_WRITE"):
+    if item.status == "ARCHIVED" or not current_user.has_permission("SCHEDULE_WRITE"):
         return report
     validated_revision = db.scalar(
         update(Schedule)

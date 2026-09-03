@@ -72,6 +72,7 @@ def _resolve_permissions(db: DbSession, codes: list[str]) -> list[Permission]:
         "SCHEDULE_WRITE": {"SCHEDULE_READ"},
         "SCHEDULE_GENERATE": {"SCHEDULE_READ", "SCHEDULE_WRITE"},
         "SCHEDULE_PUBLISH": {"SCHEDULE_READ", "SCHEDULE_WRITE"},
+        "SCHEDULE_DELETE": {"SCHEDULE_READ", "SCHEDULE_WRITE"},
         "SCHEDULE_EXPORT": {"SCHEDULE_READ"},
         "SHARE_MANAGE": {"SCHEDULE_READ"},
         "USER_WRITE": {"USER_READ", "ROLE_READ"},
