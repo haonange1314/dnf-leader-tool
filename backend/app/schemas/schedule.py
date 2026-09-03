@@ -52,6 +52,21 @@ class ScheduleUpdate(BaseModel):
         return self
 
 
+class ScheduleLifecycleRequest(BaseModel):
+    model_config = CFG
+
+    base_revision: int = Field(gt=0)
+
+
+class ScheduleDeleteRequest(ScheduleLifecycleRequest):
+    confirmation_name: str = Field(min_length=1, max_length=160)
+
+    @field_validator("confirmation_name")
+    @classmethod
+    def normalize_confirmation_name(cls, value: str) -> str:
+        return value.strip()
+
+
 class ScheduleCopyPreviewRequest(BaseModel):
     model_config = CFG
 

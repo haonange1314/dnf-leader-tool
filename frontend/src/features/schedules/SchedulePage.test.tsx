@@ -213,7 +213,7 @@ describe("SchedulePage", () => {
   it("opens the readonly wave layout from the schedule list", async () => {
     vi.mocked(api).mockImplementation(async (path: string) => {
       if (path.endsWith("/lock")) return editLockResponse(path);
-      if (path === "/schedules") return { items: [summary], total: 1 };
+      if (path === "/schedules?includeArchived=false") return { items: [summary], total: 1 };
       if (path === "/dungeons") return { items: [], total: 0 };
       if (path === "/schedules/schedule-1") return detail;
       if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };
@@ -236,7 +236,7 @@ describe("SchedulePage", () => {
   it("shows the bound dungeon name and exact version in list and detail views", async () => {
     vi.mocked(api).mockImplementation(async (path: string) => {
       if (path.endsWith("/lock")) return editLockResponse(path);
-      if (path === "/schedules") return { items: [summary], total: 1 };
+      if (path === "/schedules?includeArchived=false") return { items: [summary], total: 1 };
       if (path === "/dungeons") {
         return {
           items: [
@@ -279,7 +279,7 @@ describe("SchedulePage", () => {
 
   it("keeps Viewer accounts in read-only mode", async () => {
     vi.mocked(api).mockImplementation(async (path: string) => {
-      if (path === "/schedules") return { items: [summary], total: 1 };
+      if (path === "/schedules?includeArchived=false") return { items: [summary], total: 1 };
       if (path === "/dungeons") return { items: [], total: 0 };
       if (path === "/schedules/schedule-1") return detail;
       if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };
@@ -300,11 +300,47 @@ describe("SchedulePage", () => {
     expect(screen.getByRole("button", { name: /保存选择/ })).toBeDisabled();
   });
 
+  it("requires the exact schedule name before permanently deleting an unpublished draft", async () => {
+    const onSuccess = vi.fn();
+    let deleted = false;
+    vi.mocked(api).mockImplementation(async (path: string, options?: RequestInit) => {
+      if (path.endsWith("/lock")) return editLockResponse(path);
+      if (path === "/schedules?includeArchived=false") {
+        return { items: deleted ? [] : [summary], total: deleted ? 0 : 1 };
+      }
+      if (path === "/dungeons") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1" && options?.method === "DELETE") {
+        deleted = true;
+        return undefined;
+      }
+      if (path === "/schedules/schedule-1") return detail;
+      if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1/versions") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1/rule-sets") return emptyRuleSetList;
+      throw new Error(`unexpected API path: ${path}`);
+    });
+
+    render(<SchedulePage userRole="OWNER" onError={vi.fn()} onSuccess={onSuccess} />);
+    fireEvent.click(await screen.findByText("周六团"));
+    fireEvent.click(await screen.findByRole("button", { name: /永久删除/ }));
+
+    const confirmButton = screen.getByRole("button", { name: "确认永久删除" });
+    expect(confirmButton).toBeDisabled();
+    fireEvent.change(screen.getByPlaceholderText("周六团"), {
+      target: { value: "周六团" },
+    });
+    expect(confirmButton).toBeEnabled();
+    fireEvent.click(confirmButton);
+
+    await waitFor(() => expect(onSuccess).toHaveBeenCalledWith("未发布草稿已永久删除"));
+    expect(screen.getByText("还没有排表")).toBeInTheDocument();
+  }, 20_000);
+
   it("previews and confirms natural-language scheduling rules", async () => {
     let confirmed = false;
     vi.mocked(api).mockImplementation(async (path: string) => {
       if (path.endsWith("/lock")) return editLockResponse(path);
-      if (path === "/schedules") return { items: [summary], total: 1 };
+      if (path === "/schedules?includeArchived=false") return { items: [summary], total: 1 };
       if (path === "/dungeons") return { items: [], total: 0 };
       if (path === "/schedules/schedule-1") {
         return {
@@ -370,7 +406,7 @@ describe("SchedulePage", () => {
   it("marks participant selection as unsaved and blocks stale actions", async () => {
     vi.mocked(api).mockImplementation(async (path: string) => {
       if (path.endsWith("/lock")) return editLockResponse(path);
-      if (path === "/schedules") return { items: [summary], total: 1 };
+      if (path === "/schedules?includeArchived=false") return { items: [summary], total: 1 };
       if (path === "/dungeons") return { items: [], total: 0 };
       if (path === "/schedules/schedule-1") return detail;
       if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };
@@ -403,7 +439,7 @@ describe("SchedulePage", () => {
     }));
     vi.mocked(api).mockImplementation(async (path: string) => {
       if (path.endsWith("/lock")) return editLockResponse(path);
-      if (path === "/schedules") return { items: [summary], total: 1 };
+      if (path === "/schedules?includeArchived=false") return { items: [summary], total: 1 };
       if (path === "/dungeons") return { items: [], total: 0 };
       if (path === "/schedules/schedule-1") return { ...detail, participants };
       if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };
@@ -424,7 +460,7 @@ describe("SchedulePage", () => {
   it("applies an editor lock command and exposes undo", async () => {
     vi.mocked(api).mockImplementation(async (path: string) => {
       if (path.endsWith("/lock")) return editLockResponse(path);
-      if (path === "/schedules") return { items: [summary], total: 1 };
+      if (path === "/schedules?includeArchived=false") return { items: [summary], total: 1 };
       if (path === "/dungeons") return { items: [], total: 0 };
       if (path === "/schedules/schedule-1") return detail;
       if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };
@@ -456,7 +492,7 @@ describe("SchedulePage", () => {
   it("previews copy configuration before creating the new schedule", async () => {
     vi.mocked(api).mockImplementation(async (path: string) => {
       if (path.endsWith("/lock")) return editLockResponse(path);
-      if (path === "/schedules") return { items: [summary], total: 1 };
+      if (path === "/schedules?includeArchived=false") return { items: [summary], total: 1 };
       if (path === "/dungeons") {
         return {
           items: [
@@ -521,7 +557,7 @@ describe("SchedulePage", () => {
   it("generates a schedule and displays the persisted solver summary", async () => {
     vi.mocked(api).mockImplementation(async (path: string) => {
       if (path.endsWith("/lock")) return editLockResponse(path);
-      if (path === "/schedules") return { items: [summary], total: 1 };
+      if (path === "/schedules?includeArchived=false") return { items: [summary], total: 1 };
       if (path === "/dungeons") return { items: [], total: 0 };
       if (path === "/schedules/schedule-1") return detail;
       if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };
@@ -625,7 +661,7 @@ describe("SchedulePage", () => {
   it("shows server publication issues before enabling publish", async () => {
     vi.mocked(api).mockImplementation(async (path: string) => {
       if (path.endsWith("/lock")) return editLockResponse(path);
-      if (path === "/schedules") return { items: [summary], total: 1 };
+      if (path === "/schedules?includeArchived=false") return { items: [summary], total: 1 };
       if (path === "/dungeons") return { items: [], total: 0 };
       if (path === "/schedules/schedule-1") return detail;
       if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };
@@ -670,7 +706,7 @@ describe("SchedulePage", () => {
     };
     vi.mocked(api).mockImplementation(async (path: string) => {
       if (path.endsWith("/lock")) return editLockResponse(path);
-      if (path === "/schedules") return { items: [summary], total: 1 };
+      if (path === "/schedules?includeArchived=false") return { items: [summary], total: 1 };
       if (path === "/dungeons") return { items: [], total: 0 };
       if (path === "/schedules/schedule-1") return detail;
       if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };

@@ -2,15 +2,18 @@ import {
   CheckCircleOutlined,
   CopyOutlined,
   CrownOutlined,
+  DeleteOutlined,
   DownOutlined,
   DownloadOutlined,
   EyeOutlined,
   HistoryOutlined,
+  InboxOutlined,
   LockOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   RedoOutlined,
   ReloadOutlined,
+  RollbackOutlined,
   SendOutlined,
   SettingOutlined,
   UndoOutlined,
@@ -40,6 +43,7 @@ import {
   Input,
   InputNumber,
   Modal,
+  Popconfirm,
   Row,
   Segmented,
   Select,
@@ -196,6 +200,7 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
       : code.endsWith("_READ") || code === "SCHEDULE_EXPORT" || userRole !== "VIEWER";
   const canWrite = hasPermission("SCHEDULE_WRITE");
   const [schedules, setSchedules] = useState<ScheduleSummary[]>([]);
+  const [showArchived, setShowArchived] = useState(false);
   const [dungeons, setDungeons] = useState<Dungeon[]>([]);
   const [detail, setDetail] = useState<ScheduleDetail | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -234,6 +239,9 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
   const [copyVersionTarget, setCopyVersionTarget] = useState<ScheduleVersionSummary | null>(null);
   const [copyVersionName, setCopyVersionName] = useState("");
   const [versionActionPending, setVersionActionPending] = useState(false);
+  const [lifecyclePending, setLifecyclePending] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [shareVersion, setShareVersion] = useState<ScheduleVersionSummary | null>(null);
   const [shareLinks, setShareLinks] = useState<ShareLinkView[]>([]);
   const [shareExpiryDays, setShareExpiryDays] = useState<number | null>(7);
@@ -310,7 +318,9 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
   const loadList = async () => {
     try {
       const [scheduleResult, dungeonResult] = await Promise.all([
-        api<{ items: ScheduleSummary[] }>("/schedules"),
+        api<{ items: ScheduleSummary[] }>(
+          `/schedules?includeArchived=${String(showArchived)}`,
+        ),
         api<{ items: Dungeon[] }>("/dungeons"),
       ]);
       setSchedules(scheduleResult.items);
@@ -526,7 +536,7 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
 
   useEffect(() => {
     void loadList();
-  }, []);
+  }, [showArchived]);
 
   const createSchedule = async (values: {
     name: string;
@@ -552,6 +562,52 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
       onSuccess("排表已创建");
     } catch (error) {
       onError(error);
+    }
+  };
+
+  const changeArchiveState = async (action: "archive" | "restore") => {
+    if (!detail) return;
+    setLifecyclePending(true);
+    try {
+      const next = await api<ScheduleDetail>(`/schedules/${detail.id}/${action}`, {
+        method: "POST",
+        body: JSON.stringify({ baseRevision: detail.revision }),
+      });
+      applyDetail(next);
+      await loadList();
+      onSuccess(action === "archive" ? "排表已归档" : "排表已恢复为草稿");
+    } catch (error) {
+      onError(error);
+    } finally {
+      setLifecyclePending(false);
+    }
+  };
+
+  const permanentlyDeleteSchedule = async () => {
+    if (!detail) return;
+    setLifecyclePending(true);
+    try {
+      await api<void>(`/schedules/${detail.id}`, {
+        method: "DELETE",
+        body: JSON.stringify({
+          baseRevision: detail.revision,
+          confirmationName: deleteConfirmation,
+        }),
+      });
+      setScheduleEditLockToken(detail.id, null);
+      editLockRef.current = null;
+      setEditLock(null);
+      setDeleteOpen(false);
+      setDeleteConfirmation("");
+      setDetail(null);
+      setVersions([]);
+      resetEditor();
+      await loadList();
+      onSuccess("未发布草稿已永久删除");
+    } catch (error) {
+      onError(error);
+    } finally {
+      setLifecyclePending(false);
     }
   };
 
@@ -1026,14 +1082,18 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
               创建排表、选择参团角色并进行生成前预检查
             </Typography.Text>
           </div>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            disabled={!canWrite}
-            onClick={() => setCreateOpen(true)}
-          >
-            新建排表
-          </Button>
+          <Space>
+            <Typography.Text type="secondary">显示已归档</Typography.Text>
+            <Switch checked={showArchived} onChange={setShowArchived} />
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              disabled={!canWrite}
+              onClick={() => setCreateOpen(true)}
+            >
+              新建排表
+            </Button>
+          </Space>
         </div>
         {schedules.length ? (
           <Row gutter={[16, 16]}>
@@ -1047,7 +1107,15 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
                   <Space orientation="vertical" className="full-width">
                     <Space className="schedule-card-title">
                       <Typography.Title level={4}>{schedule.name}</Typography.Title>
-                      <Tag color={schedule.status === "DRAFT" ? "orange" : "green"}>
+                      <Tag
+                        color={
+                          schedule.status === "DRAFT"
+                            ? "orange"
+                            : schedule.status === "PUBLISHED"
+                              ? "green"
+                              : "default"
+                        }
+                      >
                         {SCHEDULE_STATUS_LABELS[schedule.status]}
                       </Tag>
                     </Space>
@@ -1134,12 +1202,19 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
     viewMode === "overview"
       ? detail.waves
       : detail.waves.filter((wave) => wave.waveNo === selectedWaveNo);
-  const canEditSchedule = canWrite && Boolean(editLock?.ownedByCurrentUser);
+  const ownsEditLock = Boolean(editLock?.ownedByCurrentUser);
+  const canEditSchedule = canWrite && detail.status !== "ARCHIVED" && ownsEditLock;
   const canCreateContent = canWrite;
   const canGenerateSchedule = canEditSchedule && hasPermission("SCHEDULE_GENERATE");
   const canPublishSchedule = canEditSchedule && hasPermission("SCHEDULE_PUBLISH");
   const canExportSchedule = hasPermission("SCHEDULE_EXPORT");
   const canManageShare = hasPermission("SHARE_MANAGE");
+  const canManageLifecycle = hasPermission("SCHEDULE_PUBLISH") && ownsEditLock;
+  const canPermanentlyDelete =
+    detail.status === "DRAFT" &&
+    versions.length === 0 &&
+    hasPermission("SCHEDULE_DELETE") &&
+    ownsEditLock;
   const activeRuleSet = ruleSets.find((ruleSet) => ruleSet.id === detail.activeRuleSetId);
   const parsedRuleSet = ruleSets.find((ruleSet) => ruleSet.status === "PARSED");
 
@@ -1236,11 +1311,53 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
           >
             同步角色
           </Button>
+          {detail.status === "ARCHIVED" ? (
+            <Popconfirm
+              title="将该排表恢复为可编辑草稿？"
+              onConfirm={() => void changeArchiveState("restore")}
+            >
+              <Button
+                size="small"
+                icon={<RollbackOutlined />}
+                loading={lifecyclePending}
+                disabled={!canManageLifecycle}
+              >
+                恢复草稿
+              </Button>
+            </Popconfirm>
+          ) : (
+            <Popconfirm
+              title="归档后排表将变为只读，仍可查看历史和导出。"
+              onConfirm={() => void changeArchiveState("archive")}
+            >
+              <Button
+                size="small"
+                icon={<InboxOutlined />}
+                loading={lifecyclePending}
+                disabled={!canManageLifecycle || hasUnsavedChanges}
+              >
+                归档
+              </Button>
+            </Popconfirm>
+          )}
+          {canPermanentlyDelete ? (
+            <Button
+              danger
+              size="small"
+              icon={<DeleteOutlined />}
+              onClick={() => {
+                setDeleteConfirmation("");
+                setDeleteOpen(true);
+              }}
+            >
+              永久删除
+            </Button>
+          ) : null}
           <Button
             size="small"
             type="primary"
             icon={<CheckCircleOutlined />}
-            disabled={hasUnsavedChanges}
+            disabled={hasUnsavedChanges || detail.status === "ARCHIVED"}
             onClick={() => void validate()}
           >
             运行预检查
@@ -1267,7 +1384,9 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
           type="info"
           showIcon
           title={
-            !canWrite
+            detail.status === "ARCHIVED"
+              ? "已归档排表以只读方式展示"
+              : !canWrite
               ? userRole === "VIEWER"
                 ? "Viewer 账号以只读方式查看排表"
                 : "当前角色以只读方式查看排表"
@@ -1276,7 +1395,9 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
                 : "当前未持有编辑锁"
           }
           description={
-            editLock?.expiresAt && editLock.held
+            detail.status === "ARCHIVED"
+              ? "仍可查看发布历史和导出；具备发布权限时可以恢复为草稿。"
+              : editLock?.expiresAt && editLock.held
               ? `租约预计于 ${new Date(editLock.expiresAt).toLocaleTimeString()} 到期；到期后重新进入可自动接管。`
               : "查看、预检查、历史预览和导出仍可使用。"
           }
@@ -2164,6 +2285,37 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
             );
           })}
         </div>
+      </Modal>
+
+      <Modal
+        title="永久删除排表"
+        open={deleteOpen}
+        confirmLoading={lifecyclePending}
+        okText="确认永久删除"
+        okButtonProps={{
+          danger: true,
+          disabled: deleteConfirmation !== detail.name,
+        }}
+        onCancel={() => setDeleteOpen(false)}
+        onOk={() => void permanentlyDeleteSchedule()}
+      >
+        <Alert
+          type="error"
+          showIcon
+          title="此操作无法恢复"
+          description="仅从未发布的草稿允许永久删除，相关编队、规则和生成记录也会一并删除。"
+        />
+        <Typography.Paragraph className="schedule-delete-confirmation">
+          请输入排表名称 <Typography.Text code>{detail.name}</Typography.Text> 以确认：
+        </Typography.Paragraph>
+        <Input
+          value={deleteConfirmation}
+          placeholder={detail.name}
+          onChange={(event) => setDeleteConfirmation(event.target.value)}
+          onPressEnter={() => {
+            if (deleteConfirmation === detail.name) void permanentlyDeleteSchedule();
+          }}
+        />
       </Modal>
     </section>
   );

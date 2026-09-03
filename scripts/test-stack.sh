@@ -56,7 +56,7 @@ database_state="$(
         "'
 )"
 
-if [ "$database_state" != "20260903_0014|1|1|3|12|1|1|1|4|3|16|31" ]; then
+if [ "$database_state" != "20260903_0015|1|1|3|12|1|1|1|4|3|17|32" ]; then
     echo "unexpected database state: $database_state" >&2
     exit 1
 fi

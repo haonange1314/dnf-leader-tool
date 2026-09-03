@@ -25,6 +25,9 @@ PERMISSIONS = (
         "SCHEDULE_GENERATE", "智能排表", "排表管理", "执行自动排表和自然语言规则操作"
     ),
     PermissionDefinition("SCHEDULE_PUBLISH", "发布排表", "排表管理", "发布、恢复和归档排表"),
+    PermissionDefinition(
+        "SCHEDULE_DELETE", "永久删除排表", "排表管理", "永久删除从未发布的草稿排表"
+    ),
     PermissionDefinition("SCHEDULE_EXPORT", "导出排表", "排表管理", "下载排表图片、Excel 和文本"),
     PermissionDefinition("SHARE_MANAGE", "管理分享", "排表管理", "创建、查看和撤销分享链接"),
     PermissionDefinition("USER_READ", "查看用户", "系统管理", "查看用户账号和会话摘要"),
@@ -38,7 +41,15 @@ ALL_PERMISSION_CODES = frozenset(permission.code for permission in PERMISSIONS)
 EDITOR_PERMISSION_CODES = frozenset(
     code
     for code in ALL_PERMISSION_CODES
-    if code not in {"USER_READ", "USER_WRITE", "ROLE_READ", "ROLE_WRITE", "AUDIT_READ"}
+    if code
+    not in {
+        "SCHEDULE_DELETE",
+        "USER_READ",
+        "USER_WRITE",
+        "ROLE_READ",
+        "ROLE_WRITE",
+        "AUDIT_READ",
+    }
 )
 VIEWER_PERMISSION_CODES = frozenset(
     {"DUNGEON_READ", "ROSTER_READ", "SCHEDULE_READ", "SCHEDULE_EXPORT"}

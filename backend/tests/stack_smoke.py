@@ -176,7 +176,7 @@ editor_login = client_request(
 )
 assert isinstance(editor_login, dict) and editor_login["role"] == "EDITOR"
 permissions = request("/permissions")
-assert isinstance(permissions, dict) and permissions["total"] >= 16
+assert isinstance(permissions, dict) and permissions["total"] >= 17
 roles = request("/roles")
 assert isinstance(roles, dict) and {item["code"] for item in roles["items"]} >= {
     "OWNER",
@@ -432,6 +432,70 @@ assert isinstance(workflow_player_after_import, dict)
 assert [
     item["profession"] for item in workflow_player_after_import["characters"]
 ] == ["测试职业", "测试奶系"]
+
+lifecycle_schedule = request(
+    "/schedules",
+    "POST",
+    {"name": "排表生命周期验收", "dungeonVersionId": source_version["id"]},
+)
+assert isinstance(lifecycle_schedule, dict) and lifecycle_schedule["revision"] == 1
+editor_delete_denied = client_request_error(
+    editor_opener,
+    editor_jar,
+    f"/schedules/{lifecycle_schedule['id']}",
+    "DELETE",
+    {"baseRevision": 1, "confirmationName": lifecycle_schedule["name"]},
+    403,
+)
+assert editor_delete_denied["error"]["details"] == {
+    "requiredPermission": "SCHEDULE_DELETE"
+}
+acquire_schedule_lock(opener, jar, lifecycle_schedule["id"])
+archived_schedule = request(
+    f"/schedules/{lifecycle_schedule['id']}/archive",
+    "POST",
+    {"baseRevision": 1},
+)
+assert isinstance(archived_schedule, dict)
+assert archived_schedule["status"] == "ARCHIVED" and archived_schedule["revision"] == 2
+archived_validation = request(
+    f"/schedules/{lifecycle_schedule['id']}/validate",
+    "POST",
+    {"baseRevision": 2},
+)
+assert isinstance(archived_validation, dict) and archived_validation["revision"] == 2
+archived_after_validation = request(f"/schedules/{lifecycle_schedule['id']}")
+assert isinstance(archived_after_validation, dict)
+assert archived_after_validation["validationSummary"] is None
+active_schedules = request("/schedules")
+assert isinstance(active_schedules, dict)
+assert lifecycle_schedule["id"] not in {item["id"] for item in active_schedules["items"]}
+all_schedules = request("/schedules?includeArchived=true")
+assert isinstance(all_schedules, dict)
+assert lifecycle_schedule["id"] in {item["id"] for item in all_schedules["items"]}
+restored_lifecycle_schedule = request(
+    f"/schedules/{lifecycle_schedule['id']}/restore",
+    "POST",
+    {"baseRevision": 2},
+)
+assert isinstance(restored_lifecycle_schedule, dict)
+assert restored_lifecycle_schedule["status"] == "DRAFT"
+assert restored_lifecycle_schedule["revision"] == 3
+delete_name_mismatch = request_error(
+    f"/schedules/{lifecycle_schedule['id']}",
+    "DELETE",
+    {"baseRevision": 3, "confirmationName": "错误名称"},
+)
+assert delete_name_mismatch["error"]["code"] == "SCHEDULE_DELETE_CONFIRMATION_MISMATCH"
+assert request(
+    f"/schedules/{lifecycle_schedule['id']}",
+    "DELETE",
+    {"baseRevision": 3, "confirmationName": lifecycle_schedule["name"]},
+) is None
+schedule_lock_tokens.pop((id(opener), lifecycle_schedule["id"]), None)
+after_delete = request("/schedules?includeArchived=true")
+assert isinstance(after_delete, dict)
+assert lifecycle_schedule["id"] not in {item["id"] for item in after_delete["items"]}
 
 schedule = request(
     "/schedules",
