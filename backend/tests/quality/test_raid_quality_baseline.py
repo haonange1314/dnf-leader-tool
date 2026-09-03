@@ -10,6 +10,7 @@ from app.solver import (
     LockedAssignment,
     SolverInput,
     SolverParticipant,
+    SolverPlayerPreference,
     SolverResult,
     SolverStatus,
     solve,
@@ -28,6 +29,9 @@ class QualityExpectation:
     damage_spread: int | None = None
     buffer_spread: int | None = None
     strength_order_violation_count: int | None = None
+    max_damage_spread: int | None = None
+    max_buffer_spread: int | None = None
+    max_strength_order_violation_count: int | None = None
     unassigned_codes: dict[str, int] | None = None
 
 
@@ -422,6 +426,62 @@ def _split_availability_complete_profile() -> QualityScenario:
     )
 
 
+def _fixed_lead_buffer_with_player_limits() -> QualityScenario:
+    participants: list[SolverParticipant] = []
+    preferences: list[SolverPlayerPreference] = []
+    damage_scores = (28_000, 21_000, 15_500, 11_000, 7_500, 4_800, 2_900, 1_600)
+    buffer_scores = (680, 590, 525, 470, 420, 365, 320, 275)
+
+    for player_index in range(18):
+        player_id = f"limited-damage-player-{player_index:02d}"
+        preferences.append(SolverPlayerPreference(player_id, max_wave_count=6))
+        for role_index, base_score in enumerate(damage_scores):
+            participants.append(
+                SolverParticipant(
+                    participant_id=f"limited-damage-{player_index:02d}-{role_index:02d}",
+                    player_id=player_id,
+                    role_type=RoleType.DAMAGE,
+                    score=base_score + player_index * 37,
+                    is_treasure_damage=role_index == 0 and player_index < 12,
+                )
+            )
+
+    for player_index in range(6):
+        player_id = f"limited-buffer-player-{player_index:02d}"
+        preferences.append(SolverPlayerPreference(player_id, max_wave_count=6))
+        for role_index, base_score in enumerate(buffer_scores):
+            participants.append(
+                SolverParticipant(
+                    participant_id=f"limited-buffer-{player_index:02d}-{role_index:02d}",
+                    player_id=player_id,
+                    role_type=RoleType.BUFFER,
+                    score=base_score + player_index * 11,
+                    allowed_team_keys=("RED",) if player_index < 2 else None,
+                )
+            )
+
+    return QualityScenario(
+        name="fixed-lead-buffer-with-player-limits",
+        solver_input=replace(
+            _input(tuple(participants), time_limit_seconds=20),
+            player_preferences=tuple(preferences),
+        ),
+        expectation=QualityExpectation(
+            assigned_count=144,
+            participant_count=192,
+            complete_wave_count=12,
+            complete_team_count=36,
+            preferred_composition_count=36,
+            special_rule_satisfied_count=12,
+            max_damage_spread=70_500,
+            max_buffer_spread=710,
+            max_strength_order_violation_count=13,
+            unassigned_codes={"UNASSIGNED_PLAYER_CONFLICT": 48},
+            wave_fill=(12,) * 12,
+        ),
+    )
+
+
 SCENARIOS = (
     _balanced_complete(),
     _buffer_surplus_fallback(),
@@ -433,6 +493,7 @@ SCENARIOS = (
     _anonymized_eleven_player_profile(),
     _anonymized_twelve_player_complete_profile(),
     _split_availability_complete_profile(),
+    _fixed_lead_buffer_with_player_limits(),
 )
 
 
@@ -489,6 +550,7 @@ def test_raid_quality_baseline(scenario: QualityScenario) -> None:
                 **asdict(summary),
                 "wave_fill": wave_fill,
                 "unassigned_codes": dict(Counter(item.code for item in result.unassigned)),
+                "objective_stages": [asdict(stage) for stage in result.objective_stages],
                 "wall_time_seconds": round(result.wall_time_seconds, 3),
             },
             ensure_ascii=False,
@@ -516,6 +578,15 @@ def test_raid_quality_baseline(scenario: QualityScenario) -> None:
         assert (
             summary.strength_order_violation_count
             == expectation.strength_order_violation_count
+        )
+    if expectation.max_damage_spread is not None:
+        assert summary.damage_spread <= expectation.max_damage_spread
+    if expectation.max_buffer_spread is not None:
+        assert summary.buffer_spread <= expectation.max_buffer_spread
+    if expectation.max_strength_order_violation_count is not None:
+        assert (
+            summary.strength_order_violation_count
+            <= expectation.max_strength_order_violation_count
         )
     if expectation.unassigned_codes is not None:
         assert Counter(item.code for item in result.unassigned) == expectation.unassigned_codes
