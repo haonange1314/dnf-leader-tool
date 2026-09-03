@@ -8,10 +8,13 @@ from app.domain.dungeon import builtin_raid_12_definition
 from app.schemas.dungeon import RoleType
 from app.solver import (
     LockedAssignment,
+    SolverAssignment,
     SolverInput,
     SolverParticipant,
     SolverPlayerPreference,
     SolverResult,
+    SolverScheduleRule,
+    SolverScheduleRuleType,
     SolverStatus,
     solve,
 )
@@ -482,6 +485,26 @@ def _fixed_lead_buffer_with_player_limits() -> QualityScenario:
     )
 
 
+def _natural_rule_with_player_limits() -> QualityScenario:
+    base = _fixed_lead_buffer_with_player_limits()
+    return QualityScenario(
+        name="natural-rule-with-player-limits",
+        solver_input=replace(
+            base.solver_input,
+            schedule_rules=(
+                SolverScheduleRule(
+                    rule_id="R1",
+                    type=SolverScheduleRuleType.PLAYER_ALLOWED_WAVES,
+                    explanation="指定 C 玩家只能参加前 6 波",
+                    player_ids=("limited-damage-player-00",),
+                    waves=tuple(range(1, 7)),
+                ),
+            ),
+        ),
+        expectation=base.expectation,
+    )
+
+
 SCENARIOS = (
     _balanced_complete(),
     _buffer_surplus_fallback(),
@@ -494,6 +517,7 @@ SCENARIOS = (
     _anonymized_twelve_player_complete_profile(),
     _split_availability_complete_profile(),
     _fixed_lead_buffer_with_player_limits(),
+    _natural_rule_with_player_limits(),
 )
 
 
@@ -510,6 +534,39 @@ def _assert_solver_invariants(scenario: QualityScenario, result: SolverResult) -
         (participants[item.participant_id].player_id, item.wave_no) for item in assignments
     ]
     assert len(player_waves) == len(set(player_waves))
+    assignments_by_player: dict[str, list[SolverAssignment]] = {}
+    for assignment in assignments:
+        player_id = participants[assignment.participant_id].player_id
+        assignments_by_player.setdefault(player_id, []).append(assignment)
+    for rule in scenario.solver_input.schedule_rules:
+        if rule.type == SolverScheduleRuleType.PLAYER_ALLOWED_WAVES:
+            assert all(
+                assignment.wave_no in rule.waves
+                for player_id in rule.player_ids
+                for assignment in assignments_by_player.get(player_id, [])
+            )
+        elif rule.type == SolverScheduleRuleType.PLAYER_FORBIDDEN_WAVES:
+            assert all(
+                assignment.wave_no not in rule.waves
+                for player_id in rule.player_ids
+                for assignment in assignments_by_player.get(player_id, [])
+            )
+        elif rule.type == SolverScheduleRuleType.PLAYERS_NOT_SAME_WAVE:
+            assert all(
+                sum(
+                    assignment.wave_no == wave_no
+                    for player_id in rule.player_ids
+                    for assignment in assignments_by_player.get(player_id, [])
+                )
+                <= 1
+                for wave_no in range(1, scenario.solver_input.wave_count + 1)
+            )
+        elif rule.type == SolverScheduleRuleType.CHARACTER_REQUIRED_WAVE:
+            required = assignment_by_participant[rule.participant_id or ""]
+            assert required.wave_no == rule.waves[0]
+        elif rule.type == SolverScheduleRuleType.CHARACTER_REQUIRED_TEAM:
+            required = assignment_by_participant[rule.participant_id or ""]
+            assert required.team_key == rule.team_key
 
     team_capacity = {
         team.team_key: team.member_count for team in scenario.solver_input.dungeon.teams

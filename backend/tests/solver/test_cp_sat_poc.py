@@ -146,6 +146,107 @@ def test_confirmed_schedule_hard_rules_are_enforced_by_solver() -> None:
     assert locations["damage-b-1"] != locations["damage-b-2"]
 
 
+def test_aggregate_hint_respects_supported_player_hard_rules() -> None:
+    base = custom_party_4_input()
+    participants = tuple(
+        SolverParticipant(
+            participant_id=f"{role_type.value.lower()}-{player_id}-{role_index}",
+            player_id=player_id,
+            role_type=role_type,
+            score=1_000 + role_index,
+        )
+        for player_id, role_type in (
+            ("A", RoleType.DAMAGE),
+            ("B", RoleType.DAMAGE),
+            ("C", RoleType.DAMAGE),
+            ("D", RoleType.DAMAGE),
+            ("E", RoleType.DAMAGE),
+            ("F", RoleType.BUFFER),
+            ("G", RoleType.BUFFER),
+        )
+        for role_index in range(2)
+    )
+    solver_input = SolverInput(
+        dungeon=base.dungeon,
+        wave_count=2,
+        participants=participants,
+        schedule_rules=(
+            SolverScheduleRule(
+                "R1",
+                SolverScheduleRuleType.PLAYER_FORBIDDEN_WAVES,
+                player_ids=("A",),
+                waves=(2,),
+            ),
+            SolverScheduleRule(
+                "R2",
+                SolverScheduleRuleType.PLAYERS_NOT_SAME_WAVE,
+                player_ids=("B", "C"),
+            ),
+        ),
+        time_limit_seconds=3,
+    )
+
+    hint, _elapsed, count = cp_sat_module._find_assignment_target_hint(
+        solver_input,
+        assignment_target=8,
+        time_limit_seconds=1,
+    )
+
+    assert hint is not None
+    assert count == 8
+    player_by_index = [participant.player_id for participant in participants]
+    assert not any(
+        selected and player_by_index[participant_index] == "A" and wave_no == 2
+        for (participant_index, wave_no, _team_index), selected in hint.items()
+    )
+    for wave_no in (1, 2):
+        assert (
+            sum(
+                selected
+                for (participant_index, candidate_wave, _team_index), selected in hint.items()
+                if candidate_wave == wave_no
+                and player_by_index[participant_index] in {"B", "C"}
+            )
+            <= 1
+        )
+
+
+def test_character_hard_rule_uses_conservative_full_model_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = custom_party_4_input(include_player_conflict=True)
+    solver_input = SolverInput(
+        dungeon=base.dungeon,
+        wave_count=1,
+        participants=base.participants,
+        schedule_rules=(
+            SolverScheduleRule(
+                "R1",
+                SolverScheduleRuleType.CHARACTER_REQUIRED_WAVE,
+                participant_id="damage-a",
+                waves=(1,),
+            ),
+        ),
+        time_limit_seconds=3,
+    )
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("角色级硬规则不能进入丢失角色身份的聚合热启动")
+
+    monkeypatch.setattr(
+        cp_sat_module,
+        "_find_assignment_target_hint",
+        fail_if_called,
+    )
+
+    result = solve(solver_input)
+
+    assert any(
+        assignment.participant_id == "damage-a" and assignment.wave_no == 1
+        for assignment in result.assignments
+    )
+
+
 def test_confirmed_schedule_soft_rule_has_its_own_objective_stage() -> None:
     base = custom_party_4_input()
     rule = SolverScheduleRule(
