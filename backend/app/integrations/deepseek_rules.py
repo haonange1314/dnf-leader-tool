@@ -75,6 +75,22 @@ class DeepSeekRuleProvider:
                                         "roleType": participant.role_type,
                                         "isTreasureDamage": participant.is_treasure_damage,
                                         "isGroupHunt": participant.is_group_hunt,
+                                        "allowedWaves": (
+                                            list(participant.allowed_waves)
+                                            if participant.allowed_waves is not None
+                                            else None
+                                        ),
+                                        "maxWaveCount": participant.max_wave_count,
+                                        "allowedTeamNames": (
+                                            [
+                                                team.display_name
+                                                for team in context.teams
+                                                if team.team_key
+                                                in participant.allowed_team_keys
+                                            ]
+                                            if participant.allowed_team_keys is not None
+                                            else None
+                                        ),
                                     }
                                     for participant in context.participants
                                 ],

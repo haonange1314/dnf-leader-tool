@@ -37,6 +37,7 @@ def _load_schedule(db: DbSession, schedule_id: uuid.UUID, *, for_update: bool = 
         .where(Schedule.id == schedule_id)
         .options(
             selectinload(Schedule.participants),
+            selectinload(Schedule.preferences),
             selectinload(Schedule.waves).selectinload(Wave.teams).selectinload(Team.slots),
             selectinload(Schedule.active_rule_set),
         )

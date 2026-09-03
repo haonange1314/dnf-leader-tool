@@ -1,5 +1,6 @@
 import json
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import httpx
@@ -177,6 +178,136 @@ def test_directly_conflicting_hard_rules_are_blocked_before_confirmation() -> No
     assert len(conflicts) == 1
     assert conflicts[0].candidate_id == "R1"
     assert conflicts[0].matches == ("R2",)
+
+
+def test_character_hard_rules_conflicting_with_schedule_constraints_are_blocked() -> None:
+    base = _context()
+    constrained_context = replace(
+        base,
+        participants=(
+            replace(
+                base.participants[0],
+                allowed_waves=(1, 2),
+                max_wave_count=1,
+                allowed_team_keys=("RED",),
+            ),
+            replace(
+                base.participants[1],
+                participant_id="participant-3",
+                player_id="player-1",
+                player_name="韩亚",
+                character_name="奶爸",
+                profession="奶爸",
+                role_type="BUFFER",
+                allowed_waves=(1, 2),
+                max_wave_count=1,
+            ),
+        ),
+    )
+    output = RuleProviderOutput.model_validate(
+        {
+            "schemaVersion": 1,
+            "rules": [
+                {
+                    "candidateId": "R1",
+                    "type": "CHARACTER_REQUIRED_WAVE",
+                    "enforcement": "HARD",
+                    "playerReference": {"text": "韩亚"},
+                    "characterReference": {"text": "剑魂"},
+                    "waveNo": 3,
+                    "explanation": "韩亚剑魂第三波",
+                },
+                {
+                    "candidateId": "R2",
+                    "type": "CHARACTER_REQUIRED_TEAM",
+                    "enforcement": "HARD",
+                    "playerReference": {"text": "韩亚"},
+                    "characterReference": {"text": "剑魂"},
+                    "teamReference": {"text": "黄队"},
+                    "explanation": "韩亚剑魂进入黄队",
+                },
+                {
+                    "candidateId": "R3",
+                    "type": "CHARACTER_REQUIRED_WAVE",
+                    "enforcement": "HARD",
+                    "playerReference": {"text": "韩亚"},
+                    "characterReference": {"text": "剑魂"},
+                    "waveNo": 1,
+                    "explanation": "韩亚剑魂第一波",
+                },
+                {
+                    "candidateId": "R4",
+                    "type": "CHARACTER_REQUIRED_TEAM",
+                    "enforcement": "HARD",
+                    "playerReference": {"text": "韩亚"},
+                    "characterReference": {"text": "奶爸"},
+                    "teamReference": {"text": "红队"},
+                    "explanation": "韩亚奶爸进入红队",
+                },
+            ],
+            "unsupportedItems": [],
+        }
+    )
+
+    resolved = resolve_rule_output(output, constrained_context)
+    conflict_reasons = {
+        issue.reference
+        for issue in resolved.issues
+        if issue.code == "RULE_SET_HARD_CONFLICT"
+    }
+
+    assert "角色指定波次与玩家波次限制冲突" in conflict_reasons
+    assert "角色指定队伍与角色允许队伍冲突" in conflict_reasons
+    assert "被指定角色数量超过玩家最多出场次数" in conflict_reasons
+
+
+def test_rule_context_hash_includes_schedule_constraints() -> None:
+    context = _context()
+    constrained = replace(
+        context,
+        participants=(
+            replace(context.participants[0], allowed_waves=(1, 2)),
+            *context.participants[1:],
+        ),
+    )
+
+    assert rule_context_hash(context) != rule_context_hash(constrained)
+
+
+def test_required_character_without_any_available_wave_is_blocked() -> None:
+    context = _context()
+    constrained = replace(
+        context,
+        participants=(
+            replace(context.participants[0], allowed_waves=()),
+            *context.participants[1:],
+        ),
+    )
+    output = RuleProviderOutput.model_validate(
+        {
+            "schemaVersion": 1,
+            "rules": [
+                {
+                    "candidateId": "R1",
+                    "type": "CHARACTER_REQUIRED_TEAM",
+                    "enforcement": "HARD",
+                    "playerReference": {"text": "韩亚"},
+                    "characterReference": {"text": "剑魂"},
+                    "teamReference": {"text": "红队"},
+                    "explanation": "韩亚剑魂进入红队",
+                }
+            ],
+            "unsupportedItems": [],
+        }
+    )
+
+    resolved = resolve_rule_output(output, constrained)
+
+    assert any(
+        issue.code == "RULE_SET_HARD_CONFLICT"
+        and issue.reference == "被指定角色没有可参加波次"
+        for issue in resolved.issues
+    )
 
 
 def test_context_and_source_hashes_are_stable_and_context_sensitive() -> None:
@@ -360,6 +491,9 @@ def test_deepseek_provider_requests_json_and_validates_response() -> None:
         "roleType": "DAMAGE",
         "isTreasureDamage": False,
         "isGroupHunt": False,
+        "allowedWaves": None,
+        "maxWaveCount": None,
+        "allowedTeamNames": None,
     }
     assert "participantId" not in json.dumps(user_content)
     assert "playerId" not in json.dumps(user_content)

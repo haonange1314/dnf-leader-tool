@@ -1018,11 +1018,16 @@ GET    /schedules/{scheduleId}/generation-runs
 GET    /generation-runs/{runId}
 ```
 
-解析请求携带 `sourceText` 和 `baseRevision`。服务端构造最小化上下文，调用 DeepSeek v4，随后依次执行 Pydantic Schema 校验、名称解析、白名单检查和规则冲突检查。解析响应仅供预览，不会自动设为生效规则。
+解析请求携带 `sourceText` 和 `baseRevision`。服务端构造包含参团实体、玩家可用波次、最多
+出场次数及角色允许队伍的最小化上下文，调用 DeepSeek v4，随后依次执行 Pydantic Schema
+校验、名称解析、白名单检查和规则冲突检查。解析响应仅供预览，不会自动设为生效规则。
 
 规则集列表响应同时返回服务端当前的 `maxSourceChars` 和 `parsingEnabled` 能力值。前端输入长度和可用状态必须以该响应为准，不能复制服务端默认值作为固定业务限制。
 
-`confirm` 和 `clear` 是排表聚合写操作，必须携带 `baseRevision`、有效编辑租约和当前规则集哈希。解析依据的人员、队伍或波次上下文已变化时返回 `409 RULE_SET_CONTEXT_STALE`，要求重新解析。模型调用在数据库事务外完成，不长时间占用排表锁。
+`confirm` 和 `clear` 是排表聚合写操作，必须携带 `baseRevision`、有效编辑租约和当前规则集
+哈希。解析依据的人员、玩家可用波次、最多出场次数、队伍或波次上下文已变化时返回
+`409 RULE_SET_CONTEXT_STALE`，要求重新解析；已确认规则在这些约束变化时直接转为 `STALE`，
+避免到 OR-Tools 生成阶段才暴露不可行。模型调用在数据库事务外完成，不长时间占用排表锁。
 
 生成请求：
 
@@ -1232,7 +1237,9 @@ class ScoringFormula(Protocol):
 自然语言处理分为两个明确隔离的步骤：
 
 1. **模型解释**：`DeepSeekRuleProvider` 接收原文和最小化的当前排表实体目录，只能返回版本化 JSON Schema 中的规则候选、引用文本和置信/歧义标记。
-2. **确定性编译**：`ScheduleRuleCompiler` 在本地解析实体 ID、检查权限与上下文版本、校验副本兼容性，并把已确认规则转换为 `SolverScheduleRule`。编译器不依赖 HTTP、ORM 或模型客户端。
+2. **确定性编译**：`ScheduleRuleCompiler` 在本地解析实体 ID、检查权限与上下文版本，校验
+   副本兼容性、玩家可用波次、最多出场次数和角色允许队伍，并把已确认规则转换为
+   `SolverScheduleRule`。编译器不依赖 HTTP、ORM 或模型客户端。
 
 首批已实现的白名单规则类型为：
 

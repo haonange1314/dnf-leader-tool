@@ -38,6 +38,9 @@ class RuleContextParticipant:
     role_type: str
     is_treasure_damage: bool = False
     is_group_hunt: bool = False
+    allowed_waves: tuple[int, ...] | None = None
+    max_wave_count: int | None = None
+    allowed_team_keys: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -469,8 +472,12 @@ def _hard_conflict_issues(
     context: RuleInterpretationContext,
 ) -> tuple[RuleResolutionIssue, ...]:
     hard_rules = tuple(rule for rule in rules if rule["enforcement"] == "HARD")
+    participant_by_id = {
+        participant.participant_id: participant for participant in context.participants
+    }
     participant_players = {
-        participant.participant_id: participant.player_id for participant in context.participants
+        participant_id: participant.player_id
+        for participant_id, participant in participant_by_id.items()
     }
     issues: list[RuleResolutionIssue] = []
     seen: set[tuple[str, str]] = set()
@@ -518,11 +525,33 @@ def _hard_conflict_issues(
             for player_id in rule["playerIds"]:
                 target.setdefault(str(player_id), []).append(rule)
 
-    effective_allowed: dict[str, set[int]] = {}
+    base_allowed: dict[str, set[int]] = {}
+    max_wave_count_by_player: dict[str, int] = {}
+    for participant in context.participants:
+        if participant.allowed_waves is not None:
+            allowed = set(participant.allowed_waves)
+            if participant.player_id in base_allowed:
+                base_allowed[participant.player_id] &= allowed
+            else:
+                base_allowed[participant.player_id] = allowed
+        if participant.max_wave_count is not None:
+            existing_maximum = max_wave_count_by_player.get(participant.player_id)
+            max_wave_count_by_player[participant.player_id] = (
+                participant.max_wave_count
+                if existing_maximum is None
+                else min(existing_maximum, participant.max_wave_count)
+            )
+
+    effective_allowed: dict[str, set[int]] = {
+        player_id: set(waves) for player_id, waves in base_allowed.items()
+    }
     forbidden_waves: dict[str, set[int]] = {}
     for player_id, allowed_rules in player_allowed.items():
-        allowed = set(int(wave) for wave in allowed_rules[0]["waves"])
-        for rule in allowed_rules[1:]:
+        allowed = effective_allowed.get(
+            player_id,
+            set(int(wave) for wave in allowed_rules[0]["waves"]),
+        )
+        for rule in allowed_rules:
             allowed &= {int(wave) for wave in rule["waves"]}
         effective_allowed[player_id] = allowed
         if not allowed:
@@ -569,10 +598,60 @@ def _hard_conflict_issues(
                 [str(rule["candidateId"]) for rule in required_rules[:-1]],
             )
 
+    for rule in hard_rules:
+        if rule["type"] != "CHARACTER_REQUIRED_TEAM":
+            continue
+        participant = participant_by_id[str(rule["participantId"])]
+        if (
+            participant.allowed_team_keys is not None
+            and str(rule["teamKey"]) not in participant.allowed_team_keys
+        ):
+            add(rule, "角色指定队伍与角色允许队伍冲突", [])
+
     required_waves_by_player: dict[str, set[int]] = {}
     for (player_id, wave_no), required_rules in required_by_player_wave.items():
         if required_rules:
             required_waves_by_player.setdefault(player_id, set()).add(wave_no)
+
+    required_participants_by_player: dict[
+        str, dict[str, list[dict[str, Any]]]
+    ] = {}
+    for rule in hard_rules:
+        if rule["type"] not in {
+            "CHARACTER_REQUIRED_WAVE",
+            "CHARACTER_REQUIRED_TEAM",
+        }:
+            continue
+        participant_id = str(rule["participantId"])
+        player_id = participant_players[participant_id]
+        required_participants_by_player.setdefault(player_id, {}).setdefault(
+            participant_id, []
+        ).append(rule)
+    for player_id, participant_rules in required_participants_by_player.items():
+        available_waves = effective_allowed.get(
+            player_id, set(range(1, context.wave_count + 1))
+        ) - forbidden_waves.get(player_id, set())
+        if not available_waves:
+            related_rules = [
+                rule
+                for rules_for_participant in participant_rules.values()
+                for rule in rules_for_participant
+            ]
+            add(related_rules[-1], "被指定角色没有可参加波次", [])
+        maximum = max_wave_count_by_player.get(player_id)
+        if maximum is None or len(participant_rules) <= maximum:
+            continue
+        related_rules = [
+            rule
+            for rules_for_participant in participant_rules.values()
+            for rule in rules_for_participant
+        ]
+        add(
+            related_rules[-1],
+            "被指定角色数量超过玩家最多出场次数",
+            [str(rule["candidateId"]) for rule in related_rules[:-1]],
+        )
+
     for rule in hard_rules:
         if rule["type"] != "PLAYERS_NOT_SAME_WAVE":
             continue
