@@ -101,6 +101,18 @@ body {
   align-items: center;
   gap: 12px;
 }
+.sider-toggle-button.ant-btn {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  color: #515154;
+  font-size: 16px;
+}
+.sider-toggle-button.ant-btn:hover,
+.sider-toggle-button.ant-btn:focus-visible {
+  color: #0066cc;
+  background: rgb(0 113 227 / 8%);
+}
 .brand-mark {
   display: grid;
   place-items: center;
