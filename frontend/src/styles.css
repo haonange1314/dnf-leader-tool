@@ -361,6 +361,91 @@ body {
   border-color: #d2d2d7;
   background: rgb(255 255 255 / 82%);
 }
+.personnel-import-error,
+.personnel-import-errors,
+.personnel-import-changes {
+  margin-top: 10px;
+}
+.personnel-import-history-detail {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid #ededf2;
+}
+.personnel-import-history-detail h5.ant-typography {
+  margin: 0 0 8px;
+}
+.character-editor-modal .ant-modal-body {
+  padding-top: 4px;
+}
+.ant-modal:not(.ant-modal-confirm) .ant-modal-footer {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid #ededf2;
+}
+.character-form-main-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.character-profession-field {
+  grid-column: 1 / -1;
+}
+.character-form-main-grid .ant-form-item {
+  margin-bottom: 18px;
+}
+.character-role-type.ant-segmented {
+  width: 100%;
+  padding: 3px;
+  background: #f2f2f7;
+  border-radius: 9px;
+}
+.character-role-type .ant-segmented-item {
+  min-height: 26px;
+  border-radius: 7px;
+  line-height: 26px;
+}
+.character-role-type .ant-segmented-item-selected {
+  box-shadow: 0 1px 3px rgb(0 0 0 / 10%);
+}
+.character-form-section-title.ant-typography {
+  display: block;
+  margin-bottom: 8px;
+  color: #6e6e73;
+  font-size: 12px;
+  font-weight: 600;
+}
+.character-form-switch-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 18px;
+}
+.character-form-switch-grid:last-child {
+  margin-bottom: 0;
+}
+.character-switch-field {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  background: #f5f5f7;
+  border: 1px solid transparent;
+  border-radius: 10px;
+}
+.character-switch-field:hover {
+  border-color: #e1e1e6;
+}
+@media (max-width: 720px) {
+  .character-form-main-grid {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+  .character-form-switch-grid {
+    grid-template-columns: 1fr;
+  }
+}
 .personnel-list {
   display: grid;
   gap: 6px;
@@ -406,12 +491,140 @@ body {
 .character-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 8px;
+  gap: 6px;
 }
 .character-card {
   height: 100%;
+  overflow: hidden;
+  background: #fff;
+  border-color: #e7e7ec;
+  border-radius: 12px;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+.character-card:hover {
+  border-color: #d1d1d6;
+  box-shadow: 0 3px 10px rgb(0 0 0 / 5%);
+}
+.character-card.is-inactive {
   background: #fafafa;
-  border-color: #e5e5ea;
+}
+.character-card.is-inactive .character-card-score strong,
+.character-card.is-inactive .character-card-header .ant-typography {
+  color: #86868b;
+}
+.character-card .ant-card-body {
+  padding: 8px 9px;
+}
+.character-card-header,
+.character-card-details {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.character-card-header {
+  justify-content: space-between;
+}
+.character-card-header > .ant-space:first-child {
+  min-width: 0;
+}
+.character-card-header > .ant-space:last-child {
+  flex: none;
+}
+.character-card-details {
+  min-height: 24px;
+  margin-top: 5px;
+  justify-content: space-between;
+}
+.character-card-score {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+  color: #86868b;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.character-card-score strong {
+  color: #1d1d1f;
+  font-size: 15px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.character-card-status {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #6e6e73;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.character-status-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.character-status-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+}
+.character-status-dot.is-positive {
+  background: #34c759;
+}
+.character-status-dot.is-negative {
+  background: #ff3b30;
+}
+.character-status-divider {
+  width: 1px;
+  height: 12px;
+  background: #d2d2d7;
+}
+.character-card .ant-tag {
+  margin-inline-end: 0;
+}
+.personnel-role-tag.ant-tag {
+  min-width: 24px;
+  height: 20px;
+  padding-inline: 5px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: center;
+  color: #fff;
+  font-weight: 600;
+  border-color: transparent;
+}
+.character-card-name.ant-typography {
+  font-size: 15px;
+  line-height: 20px;
+}
+.personnel-role-tag-damage.ant-tag {
+  background: #cf1322;
+}
+.personnel-role-tag-buffer.ant-tag {
+  background: #237804;
+}
+.character-trait-tag.ant-tag {
+  height: auto;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  font-size: 12px;
+  line-height: 20px;
+}
+.character-trait-treasure.ant-tag {
+  color: #7e57c2;
+}
+.character-trait-fixed-buffer.ant-tag {
+  color: #d14343;
+}
+.character-trait-group-hunt.ant-tag {
+  color: #b26a00;
 }
 .schedule-card-title {
   align-items: baseline;

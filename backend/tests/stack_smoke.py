@@ -10,7 +10,7 @@ from io import BytesIO
 from threading import Barrier
 
 import psycopg
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 BASE_URL = "http://127.0.0.1:8000/api/v1"
 jar = http.cookiejar.CookieJar()
@@ -292,6 +292,41 @@ request(
         "isActive": True,
     },
 )
+deletable_player = request(
+    "/players",
+    "POST",
+    {
+        "displayName": "永久删除验收玩家",
+        "characters": [
+            {
+                "profession": "删除角色一",
+                "roleType": "DAMAGE",
+                "damageScore": 100,
+                "isActive": True,
+            },
+            {
+                "profession": "删除角色二",
+                "roleType": "DAMAGE",
+                "damageScore": 100,
+                "isActive": True,
+            },
+        ],
+    },
+)
+assert isinstance(deletable_player, dict)
+assert request(
+    f"/characters/{deletable_player['characters'][0]['id']}", "DELETE"
+) is None
+deletable_player_after_character_delete = request(
+    f"/players/{deletable_player['id']}"
+)
+assert isinstance(deletable_player_after_character_delete, dict)
+assert len(deletable_player_after_character_delete["characters"]) == 1
+assert request(f"/players/{deletable_player['id']}", "DELETE") is None
+deleted_player = request_error(
+    f"/players/{deletable_player['id']}", "GET", {}, expected_status=404
+)
+assert deleted_player["error"]["code"] == "PLAYER_NOT_FOUND"
 inactive_player = request(
     "/players",
     "POST",
@@ -386,6 +421,51 @@ duplicate_profession = request_error(
     409,
 )
 assert duplicate_profession["error"]["code"] == "PERSONNEL_DUPLICATE"
+missing_from_import_character = request(
+    f"/players/{workflow_player['id']}/characters",
+    "POST",
+    {
+        "profession": "待同步停用职业",
+        "roleType": "DAMAGE",
+        "damageScore": 300,
+        "isTreasureDamage": False,
+        "defaultRaidParticipant": True,
+        "isActive": True,
+    },
+)
+assert isinstance(missing_from_import_character, dict)
+
+invalid_workbook = Workbook()
+invalid_sheet = invalid_workbook.active
+assert invalid_sheet is not None
+invalid_sheet.title = "角色数据"
+invalid_sheet.append(
+    (
+        "序号",
+        "玩家昵称",
+        "职业",
+        "类型",
+        "模拟伤害亿/增益量万",
+        "是否秘宝C",
+        "固定红队奶",
+        "是否群猎",
+        "是否参与团本",
+    )
+)
+invalid_sheet.append((1, "错误预览玩家", "剑魂", "未知类型", 100, "否", "否", "否", "是"))
+invalid_stream = BytesIO()
+invalid_workbook.save(invalid_stream)
+invalid_preview = upload_xlsx(
+    "/imports/characters/preview",
+    "错误预览.xlsx",
+    invalid_stream.getvalue(),
+)
+assert isinstance(invalid_preview, dict)
+assert invalid_preview["summary"]["error"] == 1
+assert invalid_preview["rows"][0]["row_no"] == 2
+assert invalid_preview["rows"][0]["errors"] == [
+    {"code": "INVALID_ROLE", "message": "类型必须为 C 或 奶"}
+]
 
 workbook = Workbook()
 sheet = workbook.active
@@ -415,23 +495,86 @@ import_preview = upload_xlsx(
     workbook_stream.getvalue(),
 )
 assert isinstance(import_preview, dict)
-assert import_preview["summary"] == {"create": 0, "update": 0, "ignore": 3, "error": 0}
+assert {
+    key: import_preview["summary"][key]
+    for key in (
+        "create",
+        "update",
+        "ignore",
+        "deactivate",
+        "deactivate_players",
+        "reactivate_players",
+        "error",
+        "sync",
+    )
+} == {
+    "create": 0,
+    "update": 1,
+    "ignore": 2,
+    "deactivate": 1,
+    "deactivate_players": 0,
+    "reactivate_players": 1,
+    "error": 0,
+    "sync": 1,
+}
+assert isinstance(import_preview["summary"]["deactivation_fingerprint"], int)
+assert any(
+    item["action"] == "DEACTIVATE_CHARACTER"
+    and item["profession"] == "待同步停用职业"
+    for item in import_preview["change_details"]
+)
 import_commit = request(
     f"/imports/characters/{import_preview['id']}/commit",
     "POST",
 )
 assert isinstance(import_commit, dict) and import_commit["status"] == "COMMITTED"
+import_history = request("/imports/characters/history?limit=10&offset=0")
+assert isinstance(import_history, dict) and import_history["total"] >= 2
+assert import_history["items"][0]["id"] == import_preview["id"]
+roster_export_response = opener.open(f"{BASE_URL}/imports/characters/export.xlsx")
+roster_export = load_workbook(BytesIO(roster_export_response.read()), read_only=True)
+roster_rows = list(roster_export["角色数据"].iter_rows(min_row=2, values_only=True))
+assert [row[1:3] for row in roster_rows[:3]] == [
+    ("已停用验收玩家", "测试职业"),
+    ("排表工作流玩家", "测试职业"),
+    ("排表工作流玩家", "测试奶系"),
+]
 players_after_import = request("/players")
 assert isinstance(players_after_import, dict)
 assert [item["id"] for item in players_after_import["items"][:2]] == [
     inactive_player["id"],
     workflow_player["id"],
 ]
+assert players_after_import["items"][0]["isActive"] is True
 workflow_player_after_import = request(f"/players/{workflow_player['id']}")
 assert isinstance(workflow_player_after_import, dict)
 assert [
     item["profession"] for item in workflow_player_after_import["characters"]
-] == ["测试职业", "测试奶系"]
+] == ["测试职业", "测试奶系", "待同步停用职业"]
+assert next(
+    item
+    for item in workflow_player_after_import["characters"]
+    if item["id"] == missing_from_import_character["id"]
+)["isActive"] is False
+inactive_player = request(
+    f"/players/{inactive_player['id']}",
+    "PATCH",
+    {"displayName": inactive_player["displayName"], "isActive": False},
+)
+assert isinstance(inactive_player, dict) and inactive_player["isActive"] is False
+on_demand_character = request(
+    f"/players/{workflow_player['id']}/characters",
+    "POST",
+    {
+        "profession": "按需测试职业",
+        "roleType": "DAMAGE",
+        "damageScore": 350,
+        "isTreasureDamage": False,
+        "defaultRaidParticipant": False,
+        "isActive": True,
+    },
+)
+assert isinstance(on_demand_character, dict)
 
 lifecycle_schedule = request(
     "/schedules",
@@ -439,6 +582,20 @@ lifecycle_schedule = request(
     {"name": "排表生命周期验收", "dungeonVersionId": source_version["id"]},
 )
 assert isinstance(lifecycle_schedule, dict) and lifecycle_schedule["revision"] == 1
+referenced_character_delete = request_error(
+    f"/characters/{workflow_player['characters'][0]['id']}",
+    "DELETE",
+    {},
+    expected_status=409,
+)
+assert referenced_character_delete["error"]["code"] == "PERSONNEL_DELETE_REFERENCED"
+referenced_player_delete = request_error(
+    f"/players/{workflow_player['id']}",
+    "DELETE",
+    {},
+    expected_status=409,
+)
+assert referenced_player_delete["error"]["code"] == "PERSONNEL_DELETE_REFERENCED"
 editor_delete_denied = client_request_error(
     editor_opener,
     editor_jar,
@@ -587,7 +744,13 @@ assert all(
     participant["playerIdSnapshot"] != inactive_player["id"]
     for participant in schedule["participants"]
 )
-assert len(schedule["participants"]) == 2
+assert len(schedule["participants"]) == 3
+on_demand_participant = next(
+    participant
+    for participant in schedule["participants"]
+    if participant["characterId"] == on_demand_character["id"]
+)
+assert on_demand_participant["isSelected"] is False
 report = request(f"/schedules/{schedule['id']}/validate", "POST", {"baseRevision": 1})
 assert isinstance(report, dict) and report["revision"] == 1
 schedule = request(
@@ -604,7 +767,11 @@ schedule = request(
 )
 assert isinstance(schedule, dict) and schedule["revision"] == 3
 assert len(schedule["waves"]) == 3
-participant_ids = [participant["id"] for participant in schedule["participants"]]
+participant_ids = [
+    participant["id"]
+    for participant in schedule["participants"]
+    if participant["isSelected"]
+]
 schedule = request(
     f"/schedules/{schedule['id']}/participants",
     "PUT",
@@ -649,8 +816,21 @@ new_character = request(
     },
 )
 assert isinstance(new_character, dict)
+new_on_demand_character = request(
+    f"/players/{workflow_player['id']}/characters",
+    "POST",
+    {
+        "profession": "按需测试职业二",
+        "roleType": "DAMAGE",
+        "damageScore": 325,
+        "isTreasureDamage": False,
+        "defaultRaidParticipant": False,
+        "isActive": True,
+    },
+)
+assert isinstance(new_on_demand_character, dict)
 sync_preview = request(f"/schedules/{schedule['id']}/sync-characters/preview", "POST")
-assert isinstance(sync_preview, dict) and sync_preview["summary"]["ADD"] == 1
+assert isinstance(sync_preview, dict) and sync_preview["summary"]["ADD"] == 2
 schedule = request(
     f"/schedules/{schedule['id']}/sync-characters/commit",
     "POST",
@@ -660,7 +840,13 @@ schedule = request(
     },
 )
 assert isinstance(schedule, dict) and schedule["revision"] == 7
-assert len(schedule["participants"]) == 3
+assert len(schedule["participants"]) == 5
+synced_on_demand_participant = next(
+    participant
+    for participant in schedule["participants"]
+    if participant["characterId"] == new_on_demand_character["id"]
+)
+assert synced_on_demand_participant["isSelected"] is False
 workflow_report = request(f"/schedules/{schedule['id']}/validate", "POST", {"baseRevision": 7})
 assert isinstance(workflow_report, dict)
 workflow_issue_codes = {issue["code"] for issue in workflow_report["issues"]}
@@ -698,7 +884,7 @@ assert isinstance(copied_schedule, dict)
 acquire_schedule_lock(opener, jar, copied_schedule["id"])
 assert copied_schedule["revision"] == 1 and copied_schedule["status"] == "DRAFT"
 assert copied_schedule["waveCount"] == 2 and len(copied_schedule["waves"]) == 2
-assert len(copied_schedule["participants"]) == 3
+assert len(copied_schedule["participants"]) == 5
 assert copied_schedule["preferences"][0]["allowedWaves"] == [1]
 assert all(
     slot["participantId"] is None and slot["isLocked"] is False

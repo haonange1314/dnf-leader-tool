@@ -28,6 +28,9 @@ class ImportBatch(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     total_rows: Mapped[int] = mapped_column(Integer, nullable=False)
     summary: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    change_details: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default="[]"
+    )
     created_by: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
