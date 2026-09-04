@@ -11,6 +11,7 @@ from app.api.dependencies import DbSession, RosterReader, RosterWriter
 from app.core.errors import AppError
 from app.domain.personnel import normalize_key
 from app.models.personnel import Character, Player
+from app.models.schedule import ScheduleParticipant, SchedulePlayerPreference
 from app.schemas.personnel import (
     BatchUpdateResult,
     CharacterBatchUpdate,
@@ -33,6 +34,14 @@ def _commit(db: DbSession, duplicate_message: str) -> None:
     except IntegrityError as exc:
         db.rollback()
         raise AppError(409, "PERSONNEL_DUPLICATE", duplicate_message) from exc
+
+
+def _commit_delete(db: DbSession, message: str) -> None:
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise AppError(409, "PERSONNEL_DELETE_REFERENCED", message) from exc
 
 
 @router.get("/players", response_model=PlayerList)
@@ -139,6 +148,47 @@ def update_player(
     return player
 
 
+@router.delete("/players/{player_id}", status_code=204)
+def delete_player(
+    player_id: uuid.UUID, db: DbSession, current_user: RosterWriter
+) -> None:
+    del current_user
+    player = db.scalar(
+        select(Player)
+        .where(Player.id == player_id)
+        .options(selectinload(Player.characters))
+        .with_for_update()
+    )
+    if player is None:
+        raise AppError(404, "PLAYER_NOT_FOUND", "玩家不存在")
+    participant_count = db.scalar(
+        select(func.count())
+        .select_from(ScheduleParticipant)
+        .where(
+            ScheduleParticipant.character_id.in_(
+                select(Character.id).where(Character.player_id == player_id)
+            )
+        )
+    ) or 0
+    preference_count = db.scalar(
+        select(func.count())
+        .select_from(SchedulePlayerPreference)
+        .where(SchedulePlayerPreference.player_id == player_id)
+    ) or 0
+    if participant_count or preference_count:
+        raise AppError(
+            409,
+            "PERSONNEL_DELETE_REFERENCED",
+            "该玩家已被排表引用，不能永久删除，请改用停用",
+            details={
+                "scheduleParticipants": participant_count,
+                "schedulePreferences": preference_count,
+            },
+        )
+    db.delete(player)
+    _commit_delete(db, "该玩家已被排表引用，不能永久删除，请改用停用")
+
+
 @router.post("/players/{player_id}/characters", response_model=CharacterView, status_code=201)
 def create_character(
     player_id: uuid.UUID, payload: CharacterCreate, db: DbSession, current_user: RosterWriter
@@ -187,6 +237,30 @@ def update_character(
     _commit(db, "同一玩家不能存在相同职业")
     db.refresh(character)
     return character
+
+
+@router.delete("/characters/{character_id}", status_code=204)
+def delete_character(
+    character_id: uuid.UUID, db: DbSession, current_user: RosterWriter
+) -> None:
+    del current_user
+    character = db.get(Character, character_id, with_for_update=True)
+    if character is None:
+        raise AppError(404, "CHARACTER_NOT_FOUND", "角色不存在")
+    participant_count = db.scalar(
+        select(func.count())
+        .select_from(ScheduleParticipant)
+        .where(ScheduleParticipant.character_id == character_id)
+    ) or 0
+    if participant_count:
+        raise AppError(
+            409,
+            "PERSONNEL_DELETE_REFERENCED",
+            "该角色已被排表引用，不能永久删除，请改用停用",
+            details={"scheduleParticipants": participant_count},
+        )
+    db.delete(character)
+    _commit_delete(db, "该角色已被排表引用，不能永久删除，请改用停用")
 
 
 @router.post("/characters/{character_id}/deactivate", response_model=CharacterView)

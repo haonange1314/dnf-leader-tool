@@ -589,9 +589,9 @@ Viewer 三个角色并把旧 `users.role` 数据转换为外键。Owner 角色�
 | `is_treasure_damage` | boolean | default false |
 | `is_fixed_lead_team_buffer` | boolean | default false，仅奶可设置 |
 | `is_group_hunt` | boolean | default false，仅 C 可设置 |
-| `default_raid_participant` | boolean | default false |
+| `default_raid_participant` | boolean | default true；仅决定新排表是否初始选中 |
 | `note` | text | 可空，历史兼容字段，不在人员页面录入或展示 |
-| `is_active` | boolean | default true |
+| `is_active` | boolean | default true；决定是否进入新排表候选池 |
 | `sort_order` | integer | not null，持久化所属玩家内的角色显示顺序 |
 | `created_at` | timestamptz | not null |
 | `updated_at` | timestamptz | not null |
@@ -606,7 +606,7 @@ Viewer 三个角色并把旧 `users.role` 数据转换为外键。Owner 角色�
 - 只有 `DAMAGE` 可以设置 `is_group_hunt=true`。
 - 两类评分都必须大于等于 0。
 
-人员列表先按 `sort_order` 排序，再使用规范化名称或创建时间和 ID 保证旧数据及并列值的稳定顺序。手动新建的玩家、角色追加到各自作用域末尾；Excel 确认导入按数据行首次出现顺序重排导入范围，未出现在表格中的既有玩家和角色保持原相对顺序并置于导入项之后。迁移旧数据时分别保留原玩家名称顺序和角色创建顺序。
+人员列表先按 `sort_order` 排序，再使用规范化名称或创建时间和 ID 保证旧数据及并列值的稳定顺序。手动新建的玩家、角色追加到各自作用域末尾；Excel 确认导入按全量名单同步并依照数据行首次出现顺序重排导入范围，未出现在表格中的既有玩家和角色软停用、保持原相对顺序并置于导入项之后。迁移旧数据时分别保留原玩家名称顺序和角色创建顺序。
 
 ### 8.6 公式版本
 
@@ -903,13 +903,15 @@ unique `(schedule_id, version_no)`。发布后禁止 UPDATE 和 DELETE，归档�
 
 #### `import_batches`
 
-保存文件名、创建者、状态、总行数、摘要和过期时间。
+保存文件名、创建者、状态、总行数、摘要、具体变更预览和过期时间。具体变更使用 JSONB
+固化新增、更新、恢复、停用玩家和停用角色的名称、职业、Excel 行号及字段列表，保证导入历史
+在人员池继续变化后仍能还原当时的确认依据。
 
 #### `import_rows`
 
 保存行号、规范化 payload、匹配到的玩家/角色、动作 `CREATE/UPDATE/IGNORE/ERROR` 和错误列表。
 
-导入确认后在一个事务中写入人员数据，按暂存行顺序更新玩家和角色的 `sort_order`，并把批次标记为 `COMMITTED`。即使某行内容为 `IGNORE`，也参与顺序计算；未出现在导入文件中的既有记录保持相对顺序并追加在导入项之后。过期未确认批次可以安全清理。
+导入确认后在一个事务中写入人员数据，按暂存行顺序更新玩家和角色的 `sort_order`，软停用文件外的既有玩家和角色，并把批次标记为 `COMMITTED`。即使某行内容为 `IGNORE`，也参与顺序计算；文件外记录保持相对顺序并追加在导入项之后。预览摘要持久化预计停用数量，确认时若人员集合已经变化则要求重新预览；旧规则生成的未确认批次同样拒绝提交。过期未确认批次可以安全清理。
 
 ## 9. API 设计
 
@@ -962,26 +964,30 @@ POST   /players
 PUT    /players/reorder
 GET    /players/{playerId}
 PATCH  /players/{playerId}
+DELETE /players/{playerId}
 POST   /players/{playerId}/characters
 PUT    /players/{playerId}/characters/reorder
 PATCH  /characters/{characterId}
+DELETE /characters/{characterId}
 POST   /characters/{characterId}/deactivate
 POST   /characters/batch-update
 ```
 
-列表接口支持分页、搜索和 `roleType/isTreasure/defaultParticipant/isActive` 筛选。玩家和角色分别使用持久化的 `sort_order` 升序返回；两个排序接口接收当前作用域的完整 ID 顺序并在事务中更新，列表集合已变化时返回 409，避免局部或过期页面覆盖顺序。
+列表接口继续支持分页、搜索和 `roleType/isTreasure/defaultParticipant/isActive` 筛选，供 API 调用和后续扩展；当前人员页面不暴露搜索入口，而是默认全量紧凑展示，并把写操作收纳到显式的手动维护模式。`isActive` 是人员档案生命周期状态：玩家或角色停用都会将角色排除在新排表候选池之外；`defaultParticipant` 只决定候选角色在新建排表时是否初始选中。玩家和角色分别使用持久化的 `sort_order` 升序返回；两个排序接口接收当前作用域的完整 ID 顺序并在事务中更新，列表集合已变化时返回 409，避免局部或过期页面覆盖顺序。永久删除使用 `ROSTER_WRITE` 权限；角色被 `schedule_participants` 引用，或玩家被排表角色/偏好引用时返回 409，要求改用停用，未引用玩家删除时级联删除其角色。
 
 ### 9.4 Excel 导入
 
 ```text
 GET    /imports/characters/template
+GET    /imports/characters/export.xlsx
 POST   /imports/characters/preview
+GET    /imports/characters/history
 GET    /imports/characters/{batchId}
 POST   /imports/characters/{batchId}/commit
 GET    /imports/characters/{batchId}/errors.xlsx
 ```
 
-`preview` 返回批次 ID 和摘要，不直接修改人员池。
+`preview` 返回批次 ID、逐行结果以及新增、更新、恢复、忽略、将停用玩家、将停用角色、顺序调整、错误摘要和具体变更明细，不直接修改人员池。前端在确认前分页展示具体动作、玩家、职业、Excel 行号及字段；错误行直接展示原因，错误工作簿仅作为辅助下载。空数据文件被拒绝；导入语义是全量名单同步，确认后文件外记录软停用且历史排表快照不变。`export.xlsx` 只导出当前启用玩家的启用角色，并保持人员及角色排序，可直接回传；`history` 分页返回历史批次摘要，批次详情返回预览时固化的具体变更。
 
 ### 9.5 排表主体
 
@@ -1600,32 +1606,32 @@ class SolverResult:
 - 冻结首行和筛选。
 - 类型及四个布尔标记的数据验证下拉。
 - 示例行和说明工作表。
-- C 使用亿为单位；奶支持两位小数。
+- C 使用亿为单位且必须为整数；奶支持两位小数。
+- “是否参与团本”保持为兼容导入列，含义是是否在新排表中默认勾选；填否的启用角色仍会进入候选池。
+- 四个布尔导入列的空白默认值由 `IMPORT_DEFAULT_TREASURE_DAMAGE`、`IMPORT_DEFAULT_FIXED_LEAD_TEAM_BUFFER`、`IMPORT_DEFAULT_GROUP_HUNT` 和 `IMPORT_DEFAULT_RAID_PARTICIPANT` 配置。默认分别为否、否、否、是；模板说明和解析器使用同一个不可变配置对象，避免展示与实际导入不一致。
 
 ### 14.2 解析规则
 
 - 首期只接受 `.xlsx`。
 - 字符串统一去除首尾空格。
-- C 数值接受 `120`、`120.5`、`120亿`，统一存为亿单位 Decimal。
+- C 数值接受 `120`、`120亿` 等整数形式，带小数时作为行级错误；内部仍统一存为亿单位 Decimal。
 - 奶数值接受 `4.1`、`4.75` 等 Decimal。
-- 布尔值兼容 `是/否`、`Y/N`、`1/0`，空白按“否”处理。
+- 布尔值兼容 `是/否`、`Y/N`、`1/0`；空白值按四项服务端配置处理，默认依次为“否、否、否、是”。
 - 继续兼容旧七列模板的列名；未提供的新增标记在新建角色时按“否”处理，更新已有角色时保持原值。
 - 不执行 Excel 公式；公式单元格必须有可读取的缓存值，否则报错。
 - 文件大小、行数和单元格文本长度使用配置限制。
 - 预览按规范化后的“玩家称呼 + 职业”匹配；文件内重复职业直接报错，历史重复数据会阻止迁移并要求先清理，禁止静默覆盖。
-- 确认导入严格使用角色数据页中的有效数据行顺序：玩家按首次出现排序，同一玩家的角色按行顺序排序；未导入的既有记录保持相对顺序并置后。
+- 确认导入严格使用角色数据页中的有效数据行顺序：玩家按首次出现排序，同一玩家的角色按行顺序排序；未导入的既有记录软停用、保持相对顺序并置后。
 
 ### 14.3 预览和确认
 
 上传后只写入导入暂存表。前端展示：
 
-- 新增玩家。
-- 新增角色。
-- 更新字段前后值。
-- 无变化行。
-- 错误行和错误码。
+- 新增、更新、恢复玩家、无变化、将停用玩家和将停用角色的汇总。
+- 新增、更新、恢复和停用项的玩家、职业、Excel 行号及变更字段。
+- 错误行、Excel 行号和错误原因；无需下载错误文件即可在页面处理，错误文件仅作辅助。
 
-确认时重新检查人员数据版本，防止预览后人员池已被修改。发现竞争变更时要求重新预览。
+确认时重新检查会被停用的人员集合指纹，防止预览后人员池已被修改。发现竞争变更时要求重新预览。确认成功后，以文件为启用人员真源：文件中存在的玩家和角色恢复启用，文件外的既有记录软停用。
 
 ## 15. 排表版本快照
 
@@ -2047,7 +2053,7 @@ flowchart TD
 
 | 参数 | 建议默认值 | 调整方式 |
 | --- | --- | --- |
-| C 伤害精度 | 2 位小数 | 配置和公式版本 |
+| C 伤害精度 | 整数 | 人员接口与 Excel 导入统一校验 |
 | 奶评分精度 | 2 位小数 | 公式版本 |
 | 2C2奶 奶评分 | 两奶求和 | 公式版本 |
 | 内置 12 人团本默认波数 | 12 | 副本版本 |
@@ -2066,6 +2072,7 @@ flowchart TD
 | 心跳间隔 | 30 秒 | 前后端配置 |
 | 导入文件上限 | 10 MB | 服务端配置 |
 | 导入行数上限 | 10,000 | 服务端配置 |
+| 导入布尔列空白值 | 秘宝 C/固定红奶/群猎为否，参与团本为是 | 服务端配置 |
 
 当前性能基线保留 50 波结构安全上限；30/50 波允许返回可用的 PARTIAL 结果，默认 12 波
 必须完整求解。变更求解器、时限或生产规格后应重新执行 `make test-performance`。
@@ -2083,7 +2090,7 @@ flowchart TD
 | 历史模型 | 不可变 JSONB 快照 | 保证导出和历史展示稳定 |
 | 草稿模型 | 关系表 | 支持高频拖拽、校验和局部更新 |
 | 排表变量 | 角色×波次×配置队伍 | 比角色×位置更少，且不硬编码三支队伍 |
-| 数据删除 | 软停用 | 保留历史引用和导入匹配稳定性 |
+| 人员数据删除 | 已引用记录软停用；未引用记录允许二次确认后永久删除 | 保留历史引用，同时支持清理误建档案 |
 | 授权模型 | 用户单角色 RBAC | 权限码是后端安全边界，内置角色兼容旧账号并支持自定义分工 |
 | 自然语言规则归属 | 当前排表的确认规则集 | 本次要求不会污染可复用副本版本 |
 | LLM 职责 | 解释器，不是求解器 | 白名单 Schema、确定性编译和 OR-Tools 保证可校验与可复现 |

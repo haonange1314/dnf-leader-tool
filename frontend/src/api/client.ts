@@ -165,7 +165,57 @@ export interface ImportBatch {
   filename: string;
   status: string;
   total_rows: number;
-  summary: { create: number; update: number; ignore: number; error: number };
+  summary: {
+    create: number;
+    update: number;
+    ignore: number;
+    deactivate: number;
+    deactivate_players: number;
+    reactivate_players: number;
+    reorder: number;
+    deactivation_fingerprint: number;
+    error: number;
+  };
+  created_at: string;
+  committed_at: string | null;
+  change_details: ImportChange[];
+  rows: ImportRow[];
+}
+export interface ImportChange {
+  action:
+    | "CREATE"
+    | "UPDATE"
+    | "REACTIVATE"
+    | "DEACTIVATE_PLAYER"
+    | "DEACTIVATE_CHARACTER"
+    | "REORDER";
+  player_name: string;
+  profession: string | null;
+  row_no: number | null;
+  fields: string[];
+}
+export interface ImportBatchSummary {
+  id: string;
+  filename: string;
+  status: "PREVIEWED" | "COMMITTED";
+  total_rows: number;
+  summary: ImportBatch["summary"];
+  created_at: string;
+  committed_at: string | null;
+}
+export interface ImportBatchList {
+  items: ImportBatchSummary[];
+  total: number;
+}
+export interface ImportRow {
+  row_no: number;
+  action: "CREATE" | "UPDATE" | "IGNORE" | "ERROR";
+  payload: {
+    player_name?: string;
+    profession?: string;
+  };
+  errors: Array<{ code: string; message: string }>;
+  change_summary: string | null;
 }
 export interface ScheduleSummary {
   id: string;

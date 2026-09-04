@@ -22,6 +22,15 @@ def test_identity_security_defaults_are_safe_for_local_development() -> None:
     assert settings.effective_edit_lock_heartbeat_seconds == 30
 
 
+def test_character_import_blank_defaults_match_business_rules() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.import_default_treasure_damage is False
+    assert settings.import_default_fixed_lead_team_buffer is False
+    assert settings.import_default_group_hunt is False
+    assert settings.import_default_raid_participant is True
+
+
 def test_edit_lock_heartbeat_is_capped_below_half_the_lease() -> None:
     settings = Settings(_env_file=None, edit_lock_lease_seconds=60, edit_lock_heartbeat_seconds=45)
 

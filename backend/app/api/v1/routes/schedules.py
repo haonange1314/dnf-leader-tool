@@ -313,7 +313,6 @@ def _sync_source_state(
                 Character.id.in_(existing_character_ids)
                 | (
                     Character.is_active.is_(True)
-                    & Character.default_raid_participant.is_(True)
                     & Player.is_active.is_(True)
                 )
             )
@@ -361,7 +360,7 @@ def _sync_changes(
         participant = participant_by_character.get(character.id)
         active = character.is_active and character.player.is_active
         if participant is None:
-            if active and character.default_raid_participant:
+            if active:
                 changes.append(
                     ScheduleSyncChange(
                         action="ADD",
@@ -486,7 +485,6 @@ def create_schedule(
             .join(Player, Character.player_id == Player.id)
             .where(
                 Character.is_active.is_(True),
-                Character.default_raid_participant.is_(True),
                 Player.is_active.is_(True),
             )
             .options(selectinload(Character.player))
@@ -507,7 +505,7 @@ def create_schedule(
                 is_treasure_snapshot=character.is_treasure_damage,
                 is_fixed_lead_team_buffer_snapshot=character.is_fixed_lead_team_buffer,
                 is_group_hunt_snapshot=character.is_group_hunt,
-                is_selected=True,
+                is_selected=character.default_raid_participant,
                 is_locked=False,
             )
         )
@@ -1157,7 +1155,7 @@ def commit_schedule_character_sync(
                 is_treasure_snapshot=character.is_treasure_damage,
                 is_fixed_lead_team_buffer_snapshot=character.is_fixed_lead_team_buffer,
                 is_group_hunt_snapshot=character.is_group_hunt,
-                is_selected=True,
+                is_selected=character.default_raid_participant,
                 is_locked=False,
             )
             item.participants.append(participant)

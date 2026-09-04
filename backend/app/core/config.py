@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     bootstrap_owner_password: str | None = None
     import_max_bytes: int = Field(default=10 * 1024 * 1024, ge=1024)
     import_max_rows: int = Field(default=10_000, ge=1, le=100_000)
+    import_default_treasure_damage: bool = False
+    import_default_fixed_lead_team_buffer: bool = False
+    import_default_group_hunt: bool = False
+    import_default_raid_participant: bool = True
     natural_language_rules_enabled: bool = False
     deepseek_api_key: SecretStr | None = None
     deepseek_base_url: str = "https://api.deepseek.com"

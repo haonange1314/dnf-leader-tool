@@ -15,9 +15,11 @@ PERMISSIONS = (
     PermissionDefinition("DUNGEON_READ", "查看副本", "副本管理", "查看副本及版本规则"),
     PermissionDefinition("DUNGEON_WRITE", "维护副本", "副本管理", "创建、编辑和发布副本版本"),
     PermissionDefinition("ROSTER_READ", "查看人员", "人员管理", "查看玩家和角色资料"),
-    PermissionDefinition("ROSTER_WRITE", "维护人员", "人员管理", "新增、编辑、排序和停用人员"),
     PermissionDefinition(
-        "ROSTER_IMPORT", "导入人员", "人员管理", "预览、确认人员导入并下载错误明细"
+        "ROSTER_WRITE", "维护人员", "人员管理", "新增、编辑、排序、停用和删除人员"
+    ),
+    PermissionDefinition(
+        "ROSTER_IMPORT", "导入人员", "人员管理", "预览、确认人员导入并查看错误明细"
     ),
     PermissionDefinition("SCHEDULE_READ", "查看排表", "排表管理", "查看排表、版本及生成记录"),
     PermissionDefinition("SCHEDULE_WRITE", "编辑排表", "排表管理", "创建、复制和人工编辑排表"),

@@ -23,7 +23,7 @@ class CharacterFields(BaseModel):
     is_treasure_damage: bool = False
     is_fixed_lead_team_buffer: bool = False
     is_group_hunt: bool = False
-    default_raid_participant: bool = False
+    default_raid_participant: bool = True
     note: str | None = Field(default=None, max_length=2000)
     is_active: bool = True
 
@@ -32,6 +32,8 @@ class CharacterFields(BaseModel):
         if self.role_type == CharacterRole.DAMAGE:
             if self.damage_score is None or self.buffer_score is not None:
                 raise ValueError("C 必须填写伤害且不能填写奶评分")
+            if self.damage_score != self.damage_score.to_integral_value():
+                raise ValueError("C 伤害必须为整数")
         elif self.buffer_score is None or self.damage_score is not None:
             raise ValueError("奶必须填写增益评分且不能填写伤害")
         if self.is_treasure_damage and self.role_type != CharacterRole.DAMAGE:

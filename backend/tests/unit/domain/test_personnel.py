@@ -44,3 +44,22 @@ def test_buffer_score_keeps_two_decimal_places() -> None:
     )
 
     assert str(character.buffer_score) == "4.75"
+
+
+def test_damage_score_must_be_an_integer() -> None:
+    with pytest.raises(ValidationError, match="C 伤害必须为整数"):
+        CharacterCreate(
+            profession="剑魂",
+            roleType="DAMAGE",
+            damageScore="120.5",
+        )
+
+
+def test_new_character_defaults_to_participating_in_new_schedules() -> None:
+    character = CharacterCreate(
+        profession="剑魂",
+        roleType="DAMAGE",
+        damageScore="120",
+    )
+
+    assert character.default_raid_participant is True

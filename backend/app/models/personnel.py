@@ -83,7 +83,9 @@ class Character(TimestampMixin, Base):
     is_treasure_damage: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_fixed_lead_team_buffer: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_group_hunt: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    default_raid_participant: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    default_raid_participant: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
     note: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     sort_order: Mapped[int] = mapped_column(
