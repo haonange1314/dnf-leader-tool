@@ -4,6 +4,8 @@ import {
   DatabaseOutlined,
   FileSearchOutlined,
   LogoutOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
   SafetyCertificateOutlined,
   TeamOutlined,
   UserOutlined,
@@ -72,6 +74,7 @@ export function App() {
   const [checking, setChecking] = useState(true);
   const [loginLoading, setLoginLoading] = useState(false);
   const [section, setSection] = useState("dungeons");
+  const [siderCollapsed, setSiderCollapsed] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
   useEffect(() => {
     if (shareToken) {
@@ -179,6 +182,16 @@ export function App() {
         <Layout className="app-shell">
           <Header className="app-header">
             <div className="brand">
+              <Button
+                type="text"
+                className="sider-toggle-button"
+                icon={siderCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+                aria-label={siderCollapsed ? "展开侧边栏" : "收起侧边栏"}
+                aria-controls="primary-navigation"
+                aria-expanded={!siderCollapsed}
+                title={siderCollapsed ? "展开侧边栏" : "收起侧边栏"}
+                onClick={() => setSiderCollapsed((collapsed) => !collapsed)}
+              />
               <span className="brand-mark">
                 <CrownOutlined />
               </span>
@@ -204,10 +217,14 @@ export function App() {
             <Sider
               breakpoint="lg"
               collapsedWidth="0"
+              collapsed={siderCollapsed}
+              onCollapse={setSiderCollapsed}
+              trigger={null}
               width={188}
               className="app-sider"
             >
               <Menu
+                id="primary-navigation"
                 mode="inline"
                 selectedKeys={[section]}
                 onSelect={({ key }) => setSection(key)}
