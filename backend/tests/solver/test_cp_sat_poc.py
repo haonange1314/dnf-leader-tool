@@ -65,7 +65,7 @@ def test_late_stage_timeout_keeps_incumbent_and_records_remaining_stages(
         if call_count >= 4:
             timed_out_solver = cp_model.CpSolver()
             timed_out_solver.solve(cp_model.CpModel())
-            return timed_out_solver, SolverStatus.ERROR
+            return timed_out_solver, SolverStatus.TIMEOUT
         return original_solve_stage(*args, **kwargs)
 
     monkeypatch.setattr(cp_sat_module, "_solve_stage", timeout_after_early_fill)
@@ -84,6 +84,11 @@ def test_late_stage_timeout_keeps_incumbent_and_records_remaining_stages(
     assert result.status == SolverStatus.FEASIBLE
     assert stage_by_code["BALANCE_DAMAGE"].value == result.objective_summary.damage_spread
     assert stage_by_code["BALANCE_BUFFER"].value == result.objective_summary.buffer_spread
+
+
+def test_cp_sat_unknown_status_is_reported_as_timeout() -> None:
+    assert cp_sat_module._status(cp_model.UNKNOWN) == SolverStatus.TIMEOUT
+    assert cp_sat_module._status(cp_model.MODEL_INVALID) == SolverStatus.ERROR
 
 
 def test_custom_single_team_four_person_dungeon() -> None:

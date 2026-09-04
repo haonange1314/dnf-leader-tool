@@ -1572,6 +1572,8 @@ def _status(status_code: cp_model.CpSolverStatus) -> SolverStatus:
         return SolverStatus.FEASIBLE
     if status_code == cp_model.INFEASIBLE:
         return SolverStatus.INFEASIBLE
+    if status_code == cp_model.UNKNOWN:
+        return SolverStatus.TIMEOUT
     return SolverStatus.ERROR
 
 

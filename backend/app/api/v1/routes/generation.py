@@ -1,5 +1,6 @@
 import time
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Request
 from sqlalchemy import select
@@ -42,6 +43,42 @@ from app.schemas.schedule import (
 from app.solver import SolverStatus, solve
 
 router = APIRouter()
+
+
+def _generation_failure_error(
+    status: SolverStatus,
+    *,
+    time_limit_seconds: int,
+    random_seed: int,
+    details: dict[str, Any],
+) -> AppError:
+    if status == SolverStatus.TIMEOUT:
+        suggested_time_limit = min(60, max(time_limit_seconds + 10, time_limit_seconds * 2))
+        suggested_random_seed = random_seed + 1 if random_seed < 2_147_483_647 else 1
+        return AppError(
+            422,
+            "SCHEDULE_GENERATION_TIMEOUT",
+            f"求解器在 {time_limit_seconds} 秒时限内未找到可行排表，"
+            "请增加求解时限或更换方案种子后重试",
+            details={
+                **details,
+                "suggestedTimeLimitSeconds": suggested_time_limit,
+                "suggestedRandomSeed": suggested_random_seed,
+            },
+        )
+    if status == SolverStatus.ERROR:
+        return AppError(
+            500,
+            "SCHEDULE_GENERATION_FAILED",
+            "求解器执行异常，未能完成排表，请保留当前数据并查看服务日志",
+            details=details,
+        )
+    return AppError(
+        422,
+        "SCHEDULE_GENERATION_INFEASIBLE",
+        "当前锁定安排、候选角色与硬性规则相互冲突，已确认不存在可行排表",
+        details=details,
+    )
 
 
 def _load_schedule(db: DbSession, schedule_id: uuid.UUID, *, for_update: bool = False) -> Schedule:
@@ -222,15 +259,25 @@ def generate_schedule(
             "求解期间排表已发生变化，请重新生成",
             details={"expected": payload.base_revision, "current": current.revision},
         )
-    if result.status in (SolverStatus.INFEASIBLE, SolverStatus.ERROR):
+    if result.status in (
+        SolverStatus.INFEASIBLE,
+        SolverStatus.TIMEOUT,
+        SolverStatus.ERROR,
+    ):
         stored_run.status = "FAILED"
         stored_run.rule_evaluation = blocked_generation_rule_evaluation(schedule_rules)
         db.commit()
-        raise AppError(
-            422,
-            "SCHEDULE_GENERATION_INFEASIBLE",
-            "当前锁定、候选角色或规则无法生成有效排表",
-            details={"ruleEvaluation": stored_run.rule_evaluation},
+        common_details = {
+            "solverStatus": result.status.value,
+            "timeLimitSeconds": time_limit_seconds,
+            "randomSeed": random_seed,
+            "ruleEvaluation": stored_run.rule_evaluation,
+        }
+        raise _generation_failure_error(
+            result.status,
+            time_limit_seconds=time_limit_seconds,
+            random_seed=random_seed,
+            details=common_details,
         )
     stored_run.rule_evaluation = evaluate_compiled_rules(
         schedule_rules, result.assignments, solver_input.participants

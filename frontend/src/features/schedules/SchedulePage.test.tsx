@@ -322,7 +322,8 @@ describe("SchedulePage", () => {
 
     render(<SchedulePage userRole="OWNER" onError={vi.fn()} onSuccess={onSuccess} />);
     fireEvent.click(await screen.findByText("周六团"));
-    fireEvent.click(await screen.findByRole("button", { name: /永久删除/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /更多/ }));
+    fireEvent.click(await screen.findByText("永久删除"));
 
     const confirmButton = screen.getByRole("button", { name: "确认永久删除" });
     expect(confirmButton).toBeDisabled();
@@ -420,7 +421,10 @@ describe("SchedulePage", () => {
     fireEvent.click(await screen.findByRole("checkbox"));
 
     expect(screen.getByText("当前有尚未保存的排表设置")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /复制排表/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: /更多/ }));
+    expect((await screen.findByText("复制排表")).closest("li")).toHaveClass(
+      "ant-dropdown-menu-item-disabled",
+    );
     expect(screen.getByRole("button", { name: /运行预检查/ })).toBeDisabled();
     const participantTitle = screen
       .getAllByText("参团角色")
@@ -489,6 +493,48 @@ describe("SchedulePage", () => {
     expect(screen.getByRole("button", { name: /撤销/ })).toBeEnabled();
   }, 15_000);
 
+  it("keeps the confirmed scheduling rule visible after a manual edit", async () => {
+    const confirmedRuleSet = {
+      ...parsedRuleSet,
+      status: "CONFIRMED" as const,
+      confirmedBy: "user-1",
+      confirmedAt: "2026-08-18T00:00:01Z",
+    };
+    const detailWithRule = { ...detail, activeRuleSetId: confirmedRuleSet.id };
+    vi.mocked(api).mockImplementation(async (path: string) => {
+      if (path.endsWith("/lock")) return editLockResponse(path);
+      if (path === "/schedules?includeArchived=false") return { items: [summary], total: 1 };
+      if (path === "/dungeons") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1") return detailWithRule;
+      if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1/versions") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1/rule-sets") {
+        return { ...emptyRuleSetList, items: [confirmedRuleSet], activeRuleSetId: confirmedRuleSet.id };
+      }
+      if (path === "/schedules/schedule-1/commands") {
+        return {
+          operationId: "operation-1",
+          revision: 2,
+          schedule: {
+            ...detailWithRule,
+            revision: 2,
+            waves: detailWithRule.waves.map((wave) => ({ ...wave, isLocked: true })),
+          },
+          inverseOperations: [{ type: "LOCK_WAVE", waveId: "wave-1", locked: false }],
+        };
+      }
+      throw new Error(`unexpected API path: ${path}`);
+    });
+
+    render(<SchedulePage userRole="OWNER" onError={vi.fn()} onSuccess={vi.fn()} />);
+    fireEvent.click(await screen.findByText("周六团"));
+    expect(await screen.findByText(parsedRuleSet.sourceText)).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: /锁定波次/ }));
+
+    expect(await screen.findByRole("button", { name: /解锁波次/ })).toBeInTheDocument();
+    expect(screen.getByText(parsedRuleSet.sourceText)).toBeInTheDocument();
+  }, 15_000);
+
   it("previews copy configuration before creating the new schedule", async () => {
     vi.mocked(api).mockImplementation(async (path: string) => {
       if (path.endsWith("/lock")) return editLockResponse(path);
@@ -536,7 +582,8 @@ describe("SchedulePage", () => {
     render(<SchedulePage userRole="OWNER" onError={vi.fn()} onSuccess={vi.fn()} />);
     fireEvent.click(await screen.findByText("周六团"));
     await screen.findByText("第 1 波");
-    fireEvent.click(screen.getByRole("button", { name: /复制排表/ }));
+    fireEvent.click(screen.getByRole("button", { name: /更多/ }));
+    fireEvent.click(await screen.findByText("复制排表"));
     fireEvent.click(screen.getByRole("button", { name: "预览迁移" }));
 
     expect(await screen.findByText("副本结构与当前排表一致")).toBeInTheDocument();
@@ -562,6 +609,9 @@ describe("SchedulePage", () => {
       if (path === "/schedules/schedule-1") return detail;
       if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };
       if (path === "/schedules/schedule-1/versions") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1/validate") {
+        return { revision: 1, issues: [], summary: { error: 0, warning: 0, info: 0 } };
+      }
       if (path === "/schedules/schedule-1/generate") {
         return {
           run: {
@@ -643,6 +693,7 @@ describe("SchedulePage", () => {
     render(<SchedulePage userRole="OWNER" onError={vi.fn()} onSuccess={vi.fn()} />);
     fireEvent.click(await screen.findByText("周六团"));
     fireEvent.click(await screen.findByRole("button", { name: /自动排表/ }));
+    fireEvent.click(await screen.findByText("高级设置"));
     expect(screen.getByText(/相同数据、规则、锁定和种子可复现/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "更换方案种子" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "开始生成" }));
@@ -657,6 +708,44 @@ describe("SchedulePage", () => {
     expect(screen.getByText("本波核心")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /换一个方案/ })).toBeEnabled();
   }, 20_000);
+
+  it("keeps the generation dialog open and applies retry suggestions after timeout", async () => {
+    const onError = vi.fn();
+    vi.mocked(api).mockImplementation(async (path: string) => {
+      if (path.endsWith("/lock")) return editLockResponse(path);
+      if (path === "/schedules?includeArchived=false") return { items: [summary], total: 1 };
+      if (path === "/dungeons") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1") return detail;
+      if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1/versions") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1/validate") {
+        return { revision: 1, issues: [], summary: { error: 0, warning: 0, info: 0 } };
+      }
+      if (path === "/schedules/schedule-1/generate") {
+        throw new ApiError(
+          "求解器在 10 秒时限内未找到可行排表，请增加求解时限或更换方案种子后重试",
+          422,
+          "SCHEDULE_GENERATION_TIMEOUT",
+          { suggestedTimeLimitSeconds: 20, suggestedRandomSeed: 43 },
+        );
+      }
+      if (path === "/schedules/schedule-1/rule-sets") return emptyRuleSetList;
+      throw new Error(`unexpected API path: ${path}`);
+    });
+
+    render(<SchedulePage userRole="OWNER" onError={onError} onSuccess={vi.fn()} />);
+    fireEvent.click(await screen.findByText("周六团"));
+    fireEvent.click(await screen.findByRole("button", { name: /自动排表/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "开始生成" }));
+
+    expect(await screen.findByText("本次求解达到时限")).toBeInTheDocument();
+    expect(screen.getByText(/高级参数已更新为建议值/)).toBeInTheDocument();
+    expect(screen.getByDisplayValue("20")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("43")).toBeInTheDocument();
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({
+      code: "SCHEDULE_GENERATION_TIMEOUT",
+    }));
+  });
 
   it("shows server publication issues before enabling publish", async () => {
     vi.mocked(api).mockImplementation(async (path: string) => {
@@ -780,6 +869,17 @@ describe("schedule drag operations", () => {
     const optimistic = applyOptimisticAssignment(occupiedDetail, operations);
     expect(optimistic.waves[0].teams[0].slots[0].participantId).toBe("participant-2");
     expect(optimistic.waves[0].damageTotal).toBe("300");
+    expect(optimistic.participants[0].unassignedReason).toEqual({
+      code: "MANUALLY_UNASSIGNED",
+    });
+  });
+
+  it("moves an assigned participant back to the unassigned pool optimistically", () => {
+    const optimistic = applyOptimisticAssignment(occupiedDetail, [
+      { type: "UNASSIGN_PARTICIPANT", participantId: "participant-1" },
+    ]);
+
+    expect(optimistic.waves[0].teams[0].slots[0].participantId).toBeNull();
     expect(optimistic.participants[0].unassignedReason).toEqual({
       code: "MANUALLY_UNASSIGNED",
     });
