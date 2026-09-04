@@ -1,36 +1,28 @@
 import {
   CheckCircleOutlined,
   CopyOutlined,
-  CrownOutlined,
-  DeleteOutlined,
   DownOutlined,
   DownloadOutlined,
   EyeOutlined,
   HistoryOutlined,
-  InboxOutlined,
-  LockOutlined,
+  MoreOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   RedoOutlined,
   ReloadOutlined,
-  RollbackOutlined,
   SendOutlined,
   SettingOutlined,
   UndoOutlined,
-  UnlockOutlined,
 } from "@ant-design/icons";
 import {
   DndContext,
   type DragEndEvent,
   PointerSensor,
   KeyboardSensor,
-  useDraggable,
-  useDroppable,
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
 import {
   Alert,
   Button,
@@ -43,7 +35,6 @@ import {
   Input,
   InputNumber,
   Modal,
-  Popconfirm,
   Row,
   Segmented,
   Select,
@@ -76,11 +67,9 @@ import {
   type ScheduleSlot,
   type ScheduleSummary,
   type ScheduleSyncPreview,
-  type ScheduleTeam,
   type ScheduleVersionSummary,
   type ScheduleVersionView,
   type ShareLinkView,
-  type ScheduleWave,
   type ShareLinkCreated,
   type ValidationIssue,
   type ValidationReport,
@@ -88,6 +77,12 @@ import {
   setScheduleEditLockToken,
 } from "../../api/client";
 import { useScheduleEditorStore } from "./scheduleEditorStore";
+import {
+  ScheduleDraggableParticipant,
+  ScheduleEditorWave,
+  ScheduleParticipantLabel,
+  ScheduleUnassignedDropZone,
+} from "./ScheduleEditor";
 
 interface Props {
   userRole: User["role"];
@@ -220,8 +215,9 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
   const [generationPreserveLocks, setGenerationPreserveLocks] = useState(true);
   const [generationTimeLimit, setGenerationTimeLimit] = useState(10);
   const [generationSeed, setGenerationSeed] = useState(42);
-  const [latestGeneration, setLatestGeneration] = useState<GenerationRun | null>(null);
-  const [previousGeneration, setPreviousGeneration] = useState<GenerationRun | null>(null);
+  const [generationFailure, setGenerationFailure] = useState<ApiError | null>(null);
+  const [generationRuns, setGenerationRuns] = useState<GenerationRun[]>([]);
+  const [generationHistoryOpen, setGenerationHistoryOpen] = useState(false);
   const [ruleSets, setRuleSets] = useState<ScheduleRuleSet[]>([]);
   const [ruleSourceText, setRuleSourceText] = useState("");
   const [ruleMaxSourceChars, setRuleMaxSourceChars] = useState(2000);
@@ -248,9 +244,16 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
   const [sharePending, setSharePending] = useState(false);
   const [shareUrl, setShareUrl] = useState("");
   const [waveCount, setWaveCount] = useState(1);
+  const [metadataOpen, setMetadataOpen] = useState(false);
+  const [metadataName, setMetadataName] = useState("");
+  const [metadataNote, setMetadataNote] = useState("");
   const [participantPanelOpen, setParticipantPanelOpen] = useState(false);
   const [unassignedPanelOpen, setUnassignedPanelOpen] = useState(false);
+  const [unassignedRoleFilter, setUnassignedRoleFilter] = useState<"ALL" | "DAMAGE" | "BUFFER">("ALL");
+  const [unassignedSort, setUnassignedSort] = useState<"ORDER" | "SCORE_DESC" | "PLAYER">("ORDER");
+  const [preferencesSelectedOnly, setPreferencesSelectedOnly] = useState(true);
   const [editLock, setEditLock] = useState<EditLock | null>(null);
+  const [editLockPending, setEditLockPending] = useState(false);
   const editLockRef = useRef<{ scheduleId: string; token: string } | null>(null);
   const [createForm] = Form.useForm();
   const sensors = useSensors(
@@ -330,20 +333,21 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
     }
   };
 
-  const applyDetail = (next: ScheduleDetail) => {
+  const applyDetail = (next: ScheduleDetail, resetContext = false) => {
     setDetail(next);
     setWaveCount(next.waveCount);
     setSelectedIds(
       next.participants.filter((participant) => participant.isSelected).map((item) => item.id),
     );
     setValidation(null);
-    setLatestGeneration(null);
-    setPreviousGeneration(null);
-    setRuleSets([]);
-    setRuleSourceText("");
-    setRuleMaxSourceChars(2000);
-    setRuleParsingEnabled(false);
-    setRulePanelOpen(false);
+    if (resetContext) {
+      setGenerationRuns([]);
+      setRuleSets([]);
+      setRuleSourceText("");
+      setRuleMaxSourceChars(2000);
+      setRuleParsingEnabled(false);
+      setRulePanelOpen(false);
+    }
   };
 
   const rememberEditLock = (lock: EditLock) => {
@@ -396,10 +400,36 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
     }
   };
 
+  const acquireEditLock = async () => {
+    if (!detail || !canWrite || detail.status === "ARCHIVED") return;
+    setEditLockPending(true);
+    try {
+      await establishEditLock(detail.id);
+      onSuccess(
+        editLockRef.current?.scheduleId === detail.id
+          ? "已获得排表编辑权"
+          : "编辑状态已刷新",
+      );
+    } catch (error) {
+      onError(error);
+    } finally {
+      setEditLockPending(false);
+    }
+  };
+
+  async function reloadRuleSets(scheduleId: string) {
+    const result = await api<ScheduleRuleSetList>(`/schedules/${scheduleId}/rule-sets`);
+    setRuleSets(result.items);
+    setRuleMaxSourceChars(result.maxSourceChars);
+    setRuleParsingEnabled(result.parsingEnabled);
+    const active = result.items.find((ruleSet) => ruleSet.id === result.activeRuleSetId);
+    setRuleSourceText(active?.sourceText ?? result.items[0]?.sourceText ?? "");
+  }
+
   const leaveSchedule = async () => {
     await releaseCurrentEditLock();
     setDetail(null);
-    setLatestGeneration(null);
+    setGenerationRuns([]);
     setVersions([]);
     setShareUrl("");
     setParticipantPanelOpen(false);
@@ -416,14 +446,14 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
         api<{ items: ScheduleVersionSummary[] }>(`/schedules/${scheduleId}/versions`),
         api<ScheduleRuleSetList>(`/schedules/${scheduleId}/rule-sets`),
       ]);
-      applyDetail(schedule);
+      applyDetail(schedule, true);
       const selectedParticipantCount = schedule.participants.filter(
         (participant) => participant.isSelected,
       ).length;
       setParticipantPanelOpen(schedule.participants.length <= 24);
       setUnassignedPanelOpen(selectedParticipantCount <= 24);
       resetEditor();
-      setLatestGeneration(runs.items[0] ?? null);
+      setGenerationRuns(runs.items);
       setVersions(versionResult.items);
       setRuleSets(ruleSetResult.items);
       setRuleMaxSourceChars(ruleSetResult.maxSourceChars);
@@ -526,6 +556,21 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
   const onDragEnd = async ({ active, over }: DragEndEvent) => {
     if (!detail || !over) return;
     const participantId = String(active.id).replace(/^participant:/, "");
+    if (String(over.id) === "unassigned-pool") {
+      const isAssigned = allScheduleSlots(detail).some(
+        (slot) => slot.participantId === participantId,
+      );
+      if (!isAssigned) return;
+      const operations: ScheduleOperation[] = [
+        { type: "UNASSIGN_PARTICIPANT", participantId },
+      ];
+      await executeEditorOperations(
+        operations,
+        "record",
+        applyOptimisticAssignment(detail, operations),
+      );
+      return;
+    }
     const slotId = String(over.id).replace(/^slot:/, "");
     const target = allScheduleSlots(detail).find((slot) => slot.id === slotId);
     if (!target || target.participantId === participantId) return;
@@ -553,7 +598,7 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
       createForm.resetFields();
       await loadList();
       await releaseCurrentEditLock();
-      applyDetail(created);
+      applyDetail(created, true);
       setParticipantPanelOpen(true);
       setUnassignedPanelOpen(true);
       resetEditor();
@@ -574,6 +619,7 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
         body: JSON.stringify({ baseRevision: detail.revision }),
       });
       applyDetail(next);
+      await reloadRuleSets(next.id);
       await loadList();
       onSuccess(action === "archive" ? "排表已归档" : "排表已恢复为草稿");
     } catch (error) {
@@ -611,7 +657,7 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
     }
   };
 
-  const updateWaves = async () => {
+  const updateWaves = async (confirmWaveReduction = false) => {
     if (!detail) return;
     try {
       const next = await api<ScheduleDetail>(`/schedules/${detail.id}`, {
@@ -619,13 +665,32 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
         body: JSON.stringify({
           baseRevision: detail.revision,
           waveCount,
-          confirmWaveReduction: false,
+          confirmWaveReduction,
         }),
       });
       applyDetail(next);
+      await reloadRuleSets(next.id);
       await loadList();
       onSuccess("排表波数已更新");
     } catch (error) {
+      if (
+        !confirmWaveReduction &&
+        error instanceof ApiError &&
+        error.code === "WAVE_REDUCTION_CONFIRMATION_REQUIRED"
+      ) {
+        const waveNos = Array.isArray(error.details.waveNos)
+          ? error.details.waveNos.join("、")
+          : "末尾";
+        Modal.confirm({
+          title: "确认删除已有内容的波次？",
+          content: `第 ${waveNos} 波包含已分配角色或锁定位置，继续后这些内容会被移除。`,
+          okText: "确认缩减",
+          cancelText: "取消",
+          okButtonProps: { danger: true },
+          onOk: () => updateWaves(true),
+        });
+        return;
+      }
       onError(error);
     }
   };
@@ -641,6 +706,7 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
         }),
       });
       applyDetail(next);
+      await reloadRuleSets(next.id);
       await loadList();
       onSuccess("参团角色已更新");
     } catch (error) {
@@ -680,6 +746,7 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
       );
       setPreferencesOpen(false);
       applyDetail(next);
+      await reloadRuleSets(next.id);
       await loadList();
       onSuccess("玩家偏好已更新");
     } catch (error) {
@@ -726,7 +793,7 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
       setCopyPreview(null);
       await loadList();
       await releaseCurrentEditLock();
-      applyDetail(copied);
+      applyDetail(copied, true);
       await establishEditLock(copied.id);
       onSuccess("排表已复制，角色次数和队伍位置已重置");
     } catch (error) {
@@ -753,8 +820,8 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
 
   const generate = async () => {
     if (!detail) return;
-    const comparedRun = latestGeneration;
     setGenerationPending(true);
+    setGenerationFailure(null);
     try {
       const response = await api<GenerationResponse>(`/schedules/${detail.id}/generate`, {
         method: "POST",
@@ -767,8 +834,10 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
         }),
       });
       applyDetail(response.schedule);
-      setPreviousGeneration(comparedRun);
-      setLatestGeneration(response.run);
+      setGenerationRuns((current) => [
+        response.run,
+        ...current.filter((run) => run.id !== response.run.id),
+      ]);
       setGenerationOpen(false);
       await loadList();
       onSuccess(
@@ -777,9 +846,62 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
           : "自动排表已生成",
       );
     } catch (error) {
+      if (error instanceof ApiError) {
+        setGenerationFailure(error);
+        if (error.code === "SCHEDULE_GENERATION_TIMEOUT") {
+          const suggestedTimeLimit = Number(error.details.suggestedTimeLimitSeconds);
+          const suggestedSeed = Number(error.details.suggestedRandomSeed);
+          if (Number.isInteger(suggestedTimeLimit) && suggestedTimeLimit >= 1) {
+            setGenerationTimeLimit(Math.min(60, suggestedTimeLimit));
+          }
+          if (Number.isInteger(suggestedSeed) && suggestedSeed >= 0) {
+            setGenerationSeed(Math.min(2_147_483_647, suggestedSeed));
+          }
+        }
+      }
       onError(error);
     } finally {
       setGenerationPending(false);
+    }
+  };
+
+  const openGeneration = async () => {
+    if (!detail) return;
+    try {
+      const report = await api<ValidationReport>(`/schedules/${detail.id}/validate`, {
+        method: "POST",
+        body: JSON.stringify({ baseRevision: detail.revision }),
+      });
+      setValidation(report);
+      await loadList();
+      if (report.summary.error > 0) {
+        onError(new Error(`预检查发现 ${report.summary.error} 个错误，请先处理后再生成`));
+        return;
+      }
+      setGenerationFailure(null);
+      setGenerationOpen(true);
+    } catch (error) {
+      onError(error);
+    }
+  };
+
+  const saveMetadata = async () => {
+    if (!detail || !metadataName.trim()) return;
+    try {
+      const next = await api<ScheduleDetail>(`/schedules/${detail.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          baseRevision: detail.revision,
+          name: metadataName.trim(),
+          note: metadataNote.trim() || null,
+        }),
+      });
+      applyDetail(next);
+      setMetadataOpen(false);
+      await loadList();
+      onSuccess("排表信息已更新");
+    } catch (error) {
+      onError(error);
     }
   };
 
@@ -921,6 +1043,7 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
         },
       );
       applyDetail(restored);
+      await reloadRuleSets(restored.id);
       resetEditor();
       setHistoryOpen(false);
       await loadList();
@@ -970,7 +1093,7 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
       setCopyVersionTarget(null);
       setHistoryOpen(false);
       await releaseCurrentEditLock();
-      applyDetail(copied);
+      applyDetail(copied, true);
       resetEditor();
       setVersions([]);
       await loadList();
@@ -1065,6 +1188,7 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
       );
       setSyncPreview(null);
       applyDetail(next);
+      await reloadRuleSets(next.id);
       await loadList();
       onSuccess("人员快照已同步");
     } catch (error) {
@@ -1181,6 +1305,9 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
   const selectedParticipants = detail.participants.filter((participant) =>
     selectedIdSet.has(participant.id),
   );
+  const selectedPlayerIds = new Set(
+    selectedParticipants.map((participant) => participant.playerIdSnapshot),
+  );
   const participantSelectionDirty = detail.participants.some(
     (participant) => participant.isSelected !== selectedIdSet.has(participant.id),
   );
@@ -1217,6 +1344,46 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
     ownsEditLock;
   const activeRuleSet = ruleSets.find((ruleSet) => ruleSet.id === detail.activeRuleSetId);
   const parsedRuleSet = ruleSets.find((ruleSet) => ruleSet.status === "PARSED");
+  const latestGeneration = generationRuns[0] ?? null;
+  const previousGeneration = generationRuns[1] ?? null;
+  const filteredUnassignedParticipants = unassignedParticipants
+    .filter(
+      (participant) =>
+        unassignedRoleFilter === "ALL" ||
+        participant.roleTypeSnapshot === unassignedRoleFilter,
+    )
+    .slice()
+    .sort((left, right) => {
+      if (unassignedSort === "PLAYER") {
+        return left.playerNameSnapshot.localeCompare(right.playerNameSnapshot, "zh-CN");
+      }
+      if (unassignedSort === "SCORE_DESC") {
+        const leftScore = Number(
+          left.roleTypeSnapshot === "DAMAGE"
+            ? left.damageScoreSnapshot
+            : left.bufferScoreSnapshot,
+        );
+        const rightScore = Number(
+          right.roleTypeSnapshot === "DAMAGE"
+            ? right.damageScoreSnapshot
+            : right.bufferScoreSnapshot,
+        );
+        return rightScore - leftScore;
+      }
+      return detail.participants.indexOf(left) - detail.participants.indexOf(right);
+    });
+  const focusValidationIssue = (issue: ValidationIssue) => {
+    const waveNo = Number(issue.message_params.waveNo);
+    if (!Number.isInteger(waveNo) || waveNo < 1 || waveNo > detail.waveCount) return;
+    setViewMode("wave");
+    setSelectedWaveNo(waveNo);
+    window.requestAnimationFrame(() => {
+      document.querySelector(`[data-wave-no="${waveNo}"]`)?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
+  };
 
   return (
     <section>
@@ -1244,7 +1411,27 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
           </Button>
           <Button
             size="small"
+            icon={<CheckCircleOutlined />}
+            disabled={hasUnsavedChanges || detail.status === "ARCHIVED"}
+            onClick={() => void validate()}
+          >
+            运行预检查
+          </Button>
+          <Button
+            size="small"
             type="primary"
+            icon={<PlayCircleOutlined />}
+            disabled={!canGenerateSchedule || hasUnsavedChanges || detail.status === "ARCHIVED"}
+            onClick={() => void openGeneration()}
+          >
+            {detail.waves.some((wave) =>
+              wave.teams.some((team) => team.slots.some((slot) => slot.participantId)),
+            )
+              ? "重新生成"
+              : "自动排表"}
+          </Button>
+          <Button
+            size="small"
             icon={<SendOutlined />}
             loading={publishPending}
             disabled={
@@ -1257,124 +1444,71 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
           >
             发布排表
           </Button>
-          {detail.status === "DRAFT" && canExportSchedule ? (
-            <Dropdown
-              menu={{
-                items: [
-                  {
-                    key: "image",
-                    label: <a href={`/api/v1/schedules/${detail.id}/exports/image`}>草稿长图</a>,
-                  },
-                  {
-                    key: "excel",
-                    label: <a href={`/api/v1/schedules/${detail.id}/exports/excel`}>草稿 Excel</a>,
-                  },
-                  {
-                    key: "text",
-                    label: <a href={`/api/v1/schedules/${detail.id}/exports/text`}>草稿文本</a>,
-                  },
-                ],
-              }}
-            >
-              <Button size="small" icon={<DownloadOutlined />}>
-                导出草稿 <DownOutlined />
-              </Button>
-            </Dropdown>
-          ) : null}
-          <Button
-            size="small"
-            icon={<CopyOutlined />}
-            disabled={!canCreateContent || hasUnsavedChanges}
-            onClick={() => {
-              setCopyName(`${detail.name} - 副本`);
-              setCopyTargetVersionId(detail.dungeonVersionId);
-              setCopyWaveCount(detail.waveCount);
-              setCopyPreview(null);
-              setCopyOpen(true);
+          <Dropdown
+            trigger={["click"]}
+            menu={{
+              onClick: ({ key }) => {
+                if (key === "metadata") {
+                  setMetadataName(detail.name);
+                  setMetadataNote(detail.note ?? "");
+                  setMetadataOpen(true);
+                } else if (key === "preferences") {
+                  openPreferences();
+                } else if (key === "sync") {
+                  void previewSync();
+                } else if (key === "copy") {
+                  setCopyName(`${detail.name} - 副本`);
+                  setCopyTargetVersionId(detail.dungeonVersionId);
+                  setCopyWaveCount(detail.waveCount);
+                  setCopyPreview(null);
+                  setCopyOpen(true);
+                } else if (key === "archive") {
+                  Modal.confirm({
+                    title: "归档当前排表？",
+                    content: "归档后排表将变为只读，仍可查看历史和导出。",
+                    okText: "确认归档",
+                    cancelText: "取消",
+                    onOk: () => changeArchiveState("archive"),
+                  });
+                } else if (key === "restore") {
+                  Modal.confirm({
+                    title: "恢复为可编辑草稿？",
+                    okText: "确认恢复",
+                    cancelText: "取消",
+                    onOk: () => changeArchiveState("restore"),
+                  });
+                } else if (key === "delete") {
+                  setDeleteConfirmation("");
+                  setDeleteOpen(true);
+                }
+              },
+              items: [
+                { key: "metadata", label: "排表名称与备注", disabled: !canEditSchedule },
+                { key: "preferences", label: "玩家波次与偏好", disabled: !canEditSchedule || hasUnsavedChanges },
+                { key: "sync", label: "同步最新角色", disabled: !canEditSchedule || hasUnsavedChanges },
+                { key: "copy", label: "复制排表", disabled: !canCreateContent || hasUnsavedChanges },
+                ...(detail.status === "DRAFT" && canExportSchedule
+                  ? [
+                      { type: "divider" as const },
+                      { key: "image", label: <a href={`/api/v1/schedules/${detail.id}/exports/image`}>导出草稿长图</a> },
+                      { key: "excel", label: <a href={`/api/v1/schedules/${detail.id}/exports/excel`}>导出草稿 Excel</a> },
+                      { key: "text", label: <a href={`/api/v1/schedules/${detail.id}/exports/text`}>导出草稿文本</a> },
+                    ]
+                  : []),
+                { type: "divider" as const },
+                detail.status === "ARCHIVED"
+                  ? { key: "restore", label: "恢复草稿", disabled: !canManageLifecycle }
+                  : { key: "archive", label: "归档排表", disabled: !canManageLifecycle || hasUnsavedChanges },
+                ...(canPermanentlyDelete
+                  ? [{ key: "delete", label: <Typography.Text type="danger">永久删除</Typography.Text>, danger: true }]
+                  : []),
+              ],
             }}
           >
-            复制排表
-          </Button>
-          <Button
-            size="small"
-            icon={<SettingOutlined />}
-            disabled={!canEditSchedule || hasUnsavedChanges}
-            onClick={openPreferences}
-          >
-            玩家偏好
-          </Button>
-          <Button
-            size="small"
-            icon={<ReloadOutlined />}
-            disabled={!canEditSchedule || hasUnsavedChanges}
-            onClick={() => void previewSync()}
-          >
-            同步角色
-          </Button>
-          {detail.status === "ARCHIVED" ? (
-            <Popconfirm
-              title="将该排表恢复为可编辑草稿？"
-              onConfirm={() => void changeArchiveState("restore")}
-            >
-              <Button
-                size="small"
-                icon={<RollbackOutlined />}
-                loading={lifecyclePending}
-                disabled={!canManageLifecycle}
-              >
-                恢复草稿
-              </Button>
-            </Popconfirm>
-          ) : (
-            <Popconfirm
-              title="归档后排表将变为只读，仍可查看历史和导出。"
-              onConfirm={() => void changeArchiveState("archive")}
-            >
-              <Button
-                size="small"
-                icon={<InboxOutlined />}
-                loading={lifecyclePending}
-                disabled={!canManageLifecycle || hasUnsavedChanges}
-              >
-                归档
-              </Button>
-            </Popconfirm>
-          )}
-          {canPermanentlyDelete ? (
-            <Button
-              danger
-              size="small"
-              icon={<DeleteOutlined />}
-              onClick={() => {
-                setDeleteConfirmation("");
-                setDeleteOpen(true);
-              }}
-            >
-              永久删除
+            <Button size="small" icon={<MoreOutlined />} loading={lifecyclePending}>
+              更多 <DownOutlined />
             </Button>
-          ) : null}
-          <Button
-            size="small"
-            type="primary"
-            icon={<CheckCircleOutlined />}
-            disabled={hasUnsavedChanges || detail.status === "ARCHIVED"}
-            onClick={() => void validate()}
-          >
-            运行预检查
-          </Button>
-          <Button
-            size="small"
-            type="primary"
-            icon={<PlayCircleOutlined />}
-            disabled={!canGenerateSchedule || hasUnsavedChanges || detail.status === "ARCHIVED"}
-            onClick={() => setGenerationOpen(true)}
-          >
-            {detail.waves.some((wave) =>
-              wave.teams.some((team) => team.slots.some((slot) => slot.participantId)),
-            )
-              ? "重新生成"
-              : "自动排表"}
-          </Button>
+          </Dropdown>
         </Space>
       </div>
 
@@ -1400,6 +1534,13 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
               : editLock?.expiresAt && editLock.held
               ? `租约预计于 ${new Date(editLock.expiresAt).toLocaleTimeString()} 到期；到期后重新进入可自动接管。`
               : "查看、预检查、历史预览和导出仍可使用。"
+          }
+          action={
+            canWrite && detail.status !== "ARCHIVED" ? (
+              <Button size="small" loading={editLockPending} onClick={() => void acquireEditLock()}>
+                {editLock?.canTakeover ? "接管编辑" : editLock?.held ? "刷新编辑状态" : "获取编辑权"}
+              </Button>
+            ) : undefined
           }
         />
       ) : (
@@ -1598,6 +1739,13 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
                   title={ISSUE_LABELS[issue.code] ?? issue.code}
                   description={describeIssue(issue)}
                   showIcon
+                  action={
+                    Number.isInteger(Number(issue.message_params.waveNo)) ? (
+                      <Button size="small" type="link" onClick={() => focusValidationIssue(issue)}>
+                        定位到波次
+                      </Button>
+                    ) : undefined
+                  }
                 />
               ))}
             </div>
@@ -1612,10 +1760,13 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
           run={latestGeneration}
           previousRun={previousGeneration}
           participants={detail.participants}
+          currentRevision={detail.revision}
+          runCount={generationRuns.length}
           canTryAlternative={canGenerateSchedule && !hasUnsavedChanges}
+          onOpenHistory={() => setGenerationHistoryOpen(true)}
           onTryAlternative={() => {
             setGenerationSeed((seed) => (seed >= 2_147_483_647 ? 1 : seed + 1));
-            setGenerationOpen(true);
+            void openGeneration();
           }}
         />
       ) : null}
@@ -1654,7 +1805,7 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
             <div className="participant-grid">
               {detail.participants.map((participant) => (
                 <Checkbox value={participant.id} key={participant.id} className="participant-option">
-                  <ParticipantLabel participant={participant} />
+                  <ScheduleParticipantLabel participant={participant} />
                 </Checkbox>
               ))}
             </div>
@@ -1667,6 +1818,7 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
       </Card>
 
       <Card className="schedule-panel editor-toolbar">
+        <div className="editor-toolbar-content">
         <Space wrap>
           <Segmented
             value={viewMode}
@@ -1703,6 +1855,29 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
           </Button>
           <Typography.Text type="secondary">拖动角色到空位，拖到其他角色上可直接交换</Typography.Text>
         </Space>
+        <div className="wave-navigator" aria-label="波次导航">
+          {detail.waves.map((wave) => {
+            const assigned = wave.teams.flatMap((team) => team.slots).filter((slot) => slot.participantId).length;
+            const capacity = wave.teams.reduce((sum, team) => sum + team.memberCountSnapshot, 0);
+            return (
+              <Button
+                key={wave.id}
+                size="small"
+                type={viewMode === "wave" && selectedWaveNo === wave.waveNo ? "primary" : "text"}
+                className="wave-nav-button"
+                title={`第 ${wave.waveNo} 波 · ${assigned}/${capacity}`}
+                onClick={() => {
+                  setViewMode("wave");
+                  setSelectedWaveNo(wave.waveNo);
+                }}
+              >
+                <span className={`wave-nav-dot ${assigned === capacity ? "complete" : assigned ? "partial" : "empty"}`} />
+                {wave.waveNo}
+              </Button>
+            );
+          })}
+        </div>
+        </div>
       </Card>
 
       <DndContext sensors={sensors} onDragEnd={(event) => void onDragEnd(event)}>
@@ -1723,15 +1898,46 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
           }
         >
           {unassignedPanelOpen && unassignedParticipants.length ? (
-            <div className="unassigned-pool">
-              {unassignedParticipants.map((participant) => (
-                <DraggableParticipant
+            <>
+              <div className="unassigned-toolbar">
+                <Segmented
+                  size="small"
+                  value={unassignedRoleFilter}
+                  onChange={(value) => setUnassignedRoleFilter(value as "ALL" | "DAMAGE" | "BUFFER")}
+                  options={[
+                    { label: "全部", value: "ALL" },
+                    { label: "C", value: "DAMAGE" },
+                    { label: "奶", value: "BUFFER" },
+                  ]}
+                />
+                <Select
+                  size="small"
+                  value={unassignedSort}
+                  onChange={setUnassignedSort}
+                  options={[
+                    { label: "按人员顺序", value: "ORDER" },
+                    { label: "按数值从高到低", value: "SCORE_DESC" },
+                    { label: "按玩家名称", value: "PLAYER" },
+                  ]}
+                  style={{ width: 154 }}
+                />
+                <Typography.Text type="secondary">
+                  可将队伍中的角色拖回这里
+                </Typography.Text>
+              </div>
+              <ScheduleUnassignedDropZone active={canEditSchedule && !editorPending}>
+              {filteredUnassignedParticipants.map((participant) => (
+                <ScheduleDraggableParticipant
                   key={participant.id}
                   participant={participant}
                   disabled={!canEditSchedule || participant.isLocked || editorPending}
                 />
               ))}
-            </div>
+              {!filteredUnassignedParticipants.length ? (
+                <Typography.Text type="secondary">当前筛选下没有角色</Typography.Text>
+              ) : null}
+              </ScheduleUnassignedDropZone>
+            </>
           ) : (
             <Typography.Text type="secondary">
               {unassignedParticipants.length
@@ -1742,7 +1948,7 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
         </Card>
         <div className="wave-list">
           {visibleWaves.map((wave) => (
-            <EditorWave
+            <ScheduleEditorWave
               key={wave.id}
               wave={wave}
               participantsById={participantsById}
@@ -2021,7 +2227,10 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
       <Modal
         title="自动排表"
         open={generationOpen}
-        onCancel={() => setGenerationOpen(false)}
+        onCancel={() => {
+          setGenerationOpen(false);
+          setGenerationFailure(null);
+        }}
         onOk={() => void generate()}
         okText="开始生成"
         confirmLoading={generationPending}
@@ -2030,6 +2239,32 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
         <Typography.Paragraph type="secondary">
           求解器会优先安排更多角色、填满前面波次并优化队伍组成、核心秘宝、跨波平衡和强度顺序。
         </Typography.Paragraph>
+        {validation ? (
+          <Alert
+            type={validation.summary.warning ? "warning" : "success"}
+            showIcon
+            title={validation.summary.warning ? `预检查通过，仍有 ${validation.summary.warning} 个提醒` : "预检查通过"}
+            description="生成将使用当前参团名单、玩家偏好、锁定和已确认规则。"
+          />
+        ) : null}
+        {generationFailure ? (
+          <Alert
+            type="error"
+            showIcon
+            title={
+              generationFailure.code === "SCHEDULE_GENERATION_TIMEOUT"
+                ? "本次求解达到时限"
+                : generationFailure.code === "SCHEDULE_GENERATION_INFEASIBLE"
+                  ? "当前硬性条件确实无解"
+                  : "求解器执行异常"
+            }
+            description={
+              generationFailure.code === "SCHEDULE_GENERATION_TIMEOUT"
+                ? `${generationFailure.message}。下方高级参数已更新为建议值，可直接再次生成。`
+                : generationFailure.message
+            }
+          />
+        ) : null}
         <Space orientation="vertical" className="full-width" size="middle">
           <Space>
             <Switch
@@ -2038,7 +2273,9 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
             />
             保留当前锁定安排，仅重新生成未锁定部分
           </Space>
-          <Row gutter={12} className="full-width">
+          <details className="generation-advanced">
+            <summary>高级设置</summary>
+          <Row gutter={12} className="full-width generation-advanced-fields">
             <Col span={12}>
               <Typography.Text type="secondary">求解时限（秒）</Typography.Text>
               <InputNumber
@@ -2072,6 +2309,7 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
           <Typography.Text type="secondary">
             相同数据、规则、锁定和种子可复现同一方案；更换种子可探索同等硬约束下的其他可行编队。
           </Typography.Text>
+          </details>
         </Space>
       </Modal>
 
@@ -2196,18 +2434,57 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
         <Typography.Paragraph type="secondary">
           可用波次留空表示全程可用；最大出场次数为空表示不额外限制。
         </Typography.Paragraph>
+        <div className="preference-batch-toolbar">
+          <Checkbox
+            checked={preferencesSelectedOnly}
+            onChange={(event) => setPreferencesSelectedOnly(event.target.checked)}
+          >
+            仅显示已选角色的玩家
+          </Checkbox>
+          <Space wrap size={4}>
+            <Button
+              size="small"
+              onClick={() =>
+                setPreferenceDrafts((current) =>
+                  current.map((item) =>
+                    !preferencesSelectedOnly || selectedPlayerIds.has(item.playerId)
+                      ? { ...item, allowedWaves: null }
+                      : item,
+                  ),
+                )
+              }
+            >
+              批量全程可用
+            </Button>
+            <Button
+              size="small"
+              onClick={() =>
+                setPreferenceDrafts((current) =>
+                  current.map((item) =>
+                    !preferencesSelectedOnly || selectedPlayerIds.has(item.playerId)
+                      ? { ...item, preferEarly: false, preferContiguous: false, maxWaveCount: null }
+                      : item,
+                  ),
+                )
+              }
+            >
+              清空软偏好
+            </Button>
+          </Space>
+        </div>
         <div className="preference-list">
-          {preferenceDrafts.map((preference) => {
+          {preferenceDrafts
+            .filter((preference) => !preferencesSelectedOnly || selectedPlayerIds.has(preference.playerId))
+            .map((preference) => {
             const player = detail.participants.find(
               (participant) => participant.playerIdSnapshot === preference.playerId,
             );
             return (
-              <Card size="small" key={preference.playerId}>
-                <Typography.Text strong>
+              <div className="preference-row" key={preference.playerId}>
+                <Typography.Text strong className="preference-player">
                   {player?.playerNameSnapshot ?? preference.playerId}
                 </Typography.Text>
-                <Row gutter={[12, 12]} className="preference-fields">
-                  <Col xs={24} md={12}>
+                <div className="preference-availability">
                     <Space className="preference-availability-heading">
                       <Typography.Text type="secondary">可用波次</Typography.Text>
                       <Space size={4}>
@@ -2240,8 +2517,8 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
                         updatePreference(preference.playerId, { allowedWaves })
                       }
                     />
-                  </Col>
-                  <Col xs={12} md={6}>
+                </div>
+                <div>
                     <Typography.Text type="secondary">最大出场</Typography.Text>
                     <InputNumber
                       min={1}
@@ -2255,8 +2532,8 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
                         })
                       }
                     />
-                  </Col>
-                  <Col xs={12} md={6}>
+                </div>
+                <div className="preference-switches">
                     <Space orientation="vertical" size={4}>
                       <Space>
                         <Switch
@@ -2279,11 +2556,73 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
                         尽量连续
                       </Space>
                     </Space>
-                  </Col>
-                </Row>
-              </Card>
+                </div>
+              </div>
             );
           })}
+        </div>
+      </Modal>
+
+      <Modal
+        title="排表信息"
+        open={metadataOpen}
+        onCancel={() => setMetadataOpen(false)}
+        onOk={() => void saveMetadata()}
+        okText="保存"
+        okButtonProps={{ disabled: !canEditSchedule || !metadataName.trim() }}
+      >
+        <Form layout="vertical" className="schedule-metadata-form">
+          <Form.Item label="排表名称" required>
+            <Input
+              value={metadataName}
+              maxLength={160}
+              onChange={(event) => setMetadataName(event.target.value)}
+            />
+          </Form.Item>
+          <Form.Item label="备注">
+            <Input.TextArea
+              value={metadataNote}
+              maxLength={1000}
+              showCount
+              rows={3}
+              onChange={(event) => setMetadataNote(event.target.value)}
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="自动排表生成记录"
+        open={generationHistoryOpen}
+        onCancel={() => setGenerationHistoryOpen(false)}
+        footer={<Button onClick={() => setGenerationHistoryOpen(false)}>关闭</Button>}
+        width={760}
+      >
+        <Typography.Paragraph type="secondary">
+          记录由服务端持久化。最上方两次结果会用于质量对比，人工调整不会删除历史结果。
+        </Typography.Paragraph>
+        <div className="generation-history-list">
+          {generationRuns.length ? generationRuns.map((run, index) => (
+            <Card
+              key={run.id}
+              size="small"
+              title={`第 ${generationRuns.length - index} 次 · 种子 ${run.randomSeed}`}
+              extra={run.resultRevision === detail.revision ? <Tag color="green">当前修订</Tag> : <Tag>历史修订 {run.resultRevision ?? "-"}</Tag>}
+            >
+              <Space wrap size={[4, 4]}>
+                <Tag color={run.status === "SUCCEEDED" ? "green" : "orange"}>{GENERATION_STATUS_LABELS[run.status]}</Tag>
+                <Tag>耗时 {run.durationMs ?? 0} ms</Tag>
+                {run.objectiveSummary ? (
+                  <>
+                    <Tag color="blue">已安排 {run.objectiveSummary.assignedCount}/{run.objectiveSummary.participantCount}</Tag>
+                    <Tag>完整波次 {run.objectiveSummary.completeWaveCount}</Tag>
+                    <Tag>完整队伍 {run.objectiveSummary.completeTeamCount}</Tag>
+                    <Tag>强度冲突 {run.objectiveSummary.strengthOrderViolationCount}</Tag>
+                  </>
+                ) : null}
+              </Space>
+            </Card>
+          )) : <Empty description="尚无生成记录" />}
         </div>
       </Modal>
 
@@ -2359,7 +2698,7 @@ function ScheduleSnapshotPreview({ schedule }: { schedule: ScheduleDetail }) {
                       return (
                         <div className="team-slot" key={slot.id}>
                           {participant ? (
-                            <ParticipantLabel
+                            <ScheduleParticipantLabel
                               participant={participant}
                               compact
                               core={wave.specialAssignments.some(
@@ -2391,248 +2730,23 @@ function shareStatusLabel(status: ShareLinkView["status"]): string {
   return status === "ACTIVE" ? "有效" : status === "EXPIRED" ? "已过期" : "已撤销";
 }
 
-function EditorWave({
-  wave,
-  participantsById,
-  disabled,
-  onOperation,
-}: {
-  wave: ScheduleWave;
-  participantsById: Map<string, ScheduleParticipant>;
-  disabled: boolean;
-  onOperation: (operation: ScheduleOperation) => void;
-}) {
-  return (
-    <Card
-      size="small"
-      title={`第 ${wave.waveNo} 波`}
-      extra={
-        <Space>
-          <Typography.Text type="secondary">
-            C {wave.damageTotal} 亿 · 奶 {wave.bufferTotal}
-          </Typography.Text>
-          <Button
-            size="small"
-            icon={wave.isLocked ? <UnlockOutlined /> : <LockOutlined />}
-            disabled={disabled}
-            onClick={() =>
-              onOperation({ type: "LOCK_WAVE", waveId: wave.id, locked: !wave.isLocked })
-            }
-          >
-            {wave.isLocked ? "解锁波次" : "锁定波次"}
-          </Button>
-        </Space>
-      }
-      className="schedule-panel wave-card"
-    >
-      <Row gutter={[12, 12]}>
-        {wave.teams.map((team) => (
-          <Col xs={24} xl={Math.max(6, Math.floor(24 / wave.teams.length))} key={team.id}>
-            <Card
-              size="small"
-              title={`${team.displayNameSnapshot} · ${
-                team.compositionCode === "INCOMPLETE" ? "待补" : team.compositionCode
-              }`}
-              extra={`C ${team.damageTotal} · 奶 ${team.bufferTotal}`}
-              className="team-card"
-              style={{ borderTopColor: team.displayColorSnapshot }}
-            >
-              <div className="team-slots">
-                {team.slots.map((slot) => (
-                  <EditorSlot
-                    key={slot.id}
-                    slot={slot}
-                    team={team}
-                    wave={wave}
-                    participant={
-                      slot.participantId ? participantsById.get(slot.participantId) : undefined
-                    }
-                    disabled={disabled}
-                    onOperation={onOperation}
-                  />
-                ))}
-              </div>
-            </Card>
-          </Col>
-        ))}
-      </Row>
-    </Card>
-  );
-}
-
-function EditorSlot({
-  slot,
-  team,
-  wave,
-  participant,
-  disabled,
-  onOperation,
-}: {
-  slot: ScheduleSlot;
-  team: ScheduleTeam;
-  wave: ScheduleWave;
-  participant?: ScheduleParticipant;
-  disabled: boolean;
-  onOperation: (operation: ScheduleOperation) => void;
-}) {
-  const { setNodeRef, isOver } = useDroppable({
-    id: `slot:${slot.id}`,
-    disabled: disabled || slot.isLocked || wave.isLocked,
-  });
-  const core = participant
-    ? wave.specialAssignments.find((assignment) => assignment.participantId === participant.id)
-    : undefined;
-  const moveDisabled = disabled || slot.isLocked || wave.isLocked || Boolean(participant?.isLocked);
-  return (
-    <div
-      ref={setNodeRef}
-      className={`team-slot editor-slot${isOver ? " editor-slot-over" : ""}${
-        slot.isLocked ? " editor-slot-locked" : ""
-      }`}
-    >
-      <div className="editor-slot-content">
-        {participant ? (
-          <DraggableParticipant participant={participant} core={Boolean(core)} disabled={moveDisabled} />
-        ) : (
-          <Typography.Text type="secondary">位置 {slot.slotNo} · 待排</Typography.Text>
-        )}
-      </div>
-      <Space size={2} className="editor-slot-actions" onPointerDown={(event) => event.stopPropagation()}>
-        {participant?.isTreasureSnapshot ? (
-          <Button
-            type="text"
-            size="small"
-            title={core ? "取消本波核心" : "设为本波核心"}
-            icon={<CrownOutlined />}
-            disabled={disabled || wave.isLocked}
-            onClick={() =>
-              onOperation(
-                core
-                  ? {
-                      type: "CLEAR_WAVE_CORE",
-                      waveId: wave.id,
-                      ruleCode: core.ruleCode,
-                    }
-                  : {
-                      type: "SET_WAVE_CORE",
-                      waveId: wave.id,
-                      participantId: participant.id,
-                    },
-              )
-            }
-          />
-        ) : null}
-        {participant ? (
-          <>
-            <Button
-              type="text"
-              size="small"
-              title={participant.isLocked ? "解锁角色" : "锁定角色"}
-              icon={participant.isLocked ? <UnlockOutlined /> : <LockOutlined />}
-              disabled={disabled}
-              onClick={() =>
-                onOperation({
-                  type: "LOCK_PARTICIPANT",
-                  participantId: participant.id,
-                  locked: !participant.isLocked,
-                })
-              }
-            />
-            <Button
-              type="text"
-              size="small"
-              danger
-              disabled={moveDisabled}
-              onClick={() =>
-                onOperation({ type: "UNASSIGN_PARTICIPANT", participantId: participant.id })
-              }
-            >
-              移出
-            </Button>
-          </>
-        ) : null}
-        <Button
-          type="text"
-          size="small"
-          title={slot.isLocked ? "解锁位置" : "锁定位置"}
-          icon={slot.isLocked ? <UnlockOutlined /> : <LockOutlined />}
-          disabled={disabled || wave.isLocked}
-          onClick={() =>
-            onOperation({ type: "LOCK_SLOT", slotId: slot.id, locked: !slot.isLocked })
-          }
-        />
-      </Space>
-    </div>
-  );
-}
-
-function DraggableParticipant({
-  participant,
-  core = false,
-  disabled,
-}: {
-  participant: ScheduleParticipant;
-  core?: boolean;
-  disabled: boolean;
-}) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
-    id: `participant:${participant.id}`,
-    disabled,
-  });
-  return (
-    <div
-      ref={setNodeRef}
-      className={`draggable-participant${isDragging ? " dragging" : ""}`}
-      style={{ transform: CSS.Translate.toString(transform) }}
-      {...listeners}
-      {...attributes}
-    >
-      <ParticipantLabel participant={participant} compact core={core} />
-    </div>
-  );
-}
-
-function ParticipantLabel({
-  participant,
-  compact = false,
-  core = false,
-}: {
-  participant: ScheduleParticipant;
-  compact?: boolean;
-  core?: boolean;
-}) {
-  return (
-    <Space size={4} wrap={!compact}>
-      <Tag color={participant.roleTypeSnapshot === "DAMAGE" ? "red" : "green"}>
-        {participant.roleTypeSnapshot === "DAMAGE" ? "C" : "奶"}
-      </Tag>
-      <span>{participant.playerNameSnapshot} · {participant.characterNameSnapshot}</span>
-      {participant.isTreasureSnapshot ? <Tag color="purple">秘宝</Tag> : null}
-      {participant.isFixedLeadTeamBufferSnapshot ? (
-        <Tag color="red">固定红奶</Tag>
-      ) : null}
-      {participant.isGroupHuntSnapshot ? <Tag color="orange">群猎</Tag> : null}
-      {core ? <Tag color="purple">本波核心</Tag> : null}
-      {participant.unassignedReason ? (
-        <Tag color="warning">
-          {describeUnassignedReason(participant.unassignedReason)}
-        </Tag>
-      ) : null}
-    </Space>
-  );
-}
-
 function GenerationSummary({
   run,
   previousRun,
   participants,
+  currentRevision,
+  runCount,
   canTryAlternative,
+  onOpenHistory,
   onTryAlternative,
 }: {
   run: GenerationRun;
   previousRun: GenerationRun | null;
   participants: ScheduleParticipant[];
+  currentRevision: number;
+  runCount: number;
   canTryAlternative: boolean;
+  onOpenHistory: () => void;
   onTryAlternative: () => void;
 }) {
   const summary = run.objectiveSummary;
@@ -2647,21 +2761,31 @@ function GenerationSummary({
       className="schedule-panel generation-summary-card"
       size="small"
       extra={
-        <Button
-          type="text"
-          size="small"
-          icon={<ReloadOutlined />}
-          disabled={!canTryAlternative}
-          onClick={onTryAlternative}
-        >
-          换一个方案
-        </Button>
+        <Space size={4}>
+          <Button type="text" size="small" icon={<HistoryOutlined />} onClick={onOpenHistory}>
+            生成记录 {runCount}
+          </Button>
+          <Button
+            type="text"
+            size="small"
+            icon={<ReloadOutlined />}
+            disabled={!canTryAlternative}
+            onClick={onTryAlternative}
+          >
+            换一个方案
+          </Button>
+        </Space>
       }
     >
       <Space wrap className="generation-summary-tags">
         <Tag color={run.status === "SUCCEEDED" ? "green" : "orange"}>
           {GENERATION_STATUS_LABELS[run.status]}
         </Tag>
+        {run.resultRevision === currentRevision ? (
+          <Tag color="green">对应当前修订</Tag>
+        ) : (
+          <Tag color="default">生成后已人工调整</Tag>
+        )}
         <Tag>耗时 {run.durationMs ?? 0} ms</Tag>
         <Tag>种子 {run.randomSeed}</Tag>
         {summary ? (
@@ -2965,19 +3089,6 @@ export function applyOptimisticAssignment(
     );
   }
   return next;
-}
-
-function describeUnassignedReason(reason: Record<string, unknown>): string {
-  if (reason.message === "角色或玩家已停用" || reason.code === "SOURCE_INACTIVE") {
-    return "档案已停用，待处理";
-  }
-  const labels: Record<string, string> = {
-    UNASSIGNED_NO_AVAILABLE_WAVE: "无可用波次",
-    UNASSIGNED_PLAYER_CONFLICT: "玩家波次冲突",
-    UNASSIGNED_ROLE_COMPOSITION: "角色类型无法组成合法队伍",
-    UNASSIGNED_CAPACITY: "排表容量不足",
-  };
-  return labels[String(reason.code)] ?? "待处理";
 }
 
 function describeGenerationDiagnostic(

@@ -116,3 +116,32 @@ def test_generation_invalidates_a_stale_active_rule_context(monkeypatch) -> None
     assert schedule.active_rule_set.status == "STALE"
     assert schedule.active_rule_set_id is None
     assert schedule.validation_summary is None
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_status_code", "expected_code"),
+    [
+        (SolverStatus.INFEASIBLE, 422, "SCHEDULE_GENERATION_INFEASIBLE"),
+        (SolverStatus.TIMEOUT, 422, "SCHEDULE_GENERATION_TIMEOUT"),
+        (SolverStatus.ERROR, 500, "SCHEDULE_GENERATION_FAILED"),
+    ],
+)
+def test_generation_failure_distinguishes_solver_outcomes(
+    status: SolverStatus,
+    expected_status_code: int,
+    expected_code: str,
+) -> None:
+    error = generation_routes._generation_failure_error(
+        status,
+        time_limit_seconds=10,
+        random_seed=42,
+        details={"solverStatus": status.value},
+    )
+
+    assert error.status_code == expected_status_code
+    assert error.code == expected_code
+    assert error.details["solverStatus"] == status.value
+    if status == SolverStatus.TIMEOUT:
+        assert "10 秒时限内" in error.message
+        assert error.details["suggestedTimeLimitSeconds"] == 20
+        assert error.details["suggestedRandomSeed"] == 43

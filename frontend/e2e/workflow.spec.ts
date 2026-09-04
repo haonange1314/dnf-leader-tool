@@ -36,13 +36,16 @@ test("Owner can create, edit, and deactivate personnel through the browser", asy
   await playerModal.locator(".ant-btn-primary").click();
   await expect(page.getByText(playerName)).toBeVisible();
 
-  let playerPanel = page.locator(".ant-collapse-item").filter({ hasText: playerName });
-  await playerPanel.getByRole("button", { name: "添加角色", exact: true }).click();
+  let playerPanel = page.locator(".sortable-player").filter({ hasText: playerName });
+  await playerPanel
+    .locator(".ant-collapse-extra")
+    .getByText("添加角色", { exact: true })
+    .click();
   const characterModal = page
     .locator(".ant-modal")
     .filter({ hasText: `为 ${playerName} 添加角色` });
   await characterModal.getByLabel("职业").fill("测试职业");
-  await characterModal.getByLabel("伤害 / 增益评分").fill("500");
+  await characterModal.getByLabel("伤害（亿）").fill("500");
   await characterModal.locator(".ant-btn-primary").click();
   await playerPanel.locator(".ant-collapse-header").click();
 
@@ -50,24 +53,28 @@ test("Owner can create, edit, and deactivate personnel through the browser", asy
     hasText: "测试职业",
   });
   await expect(characterCard).toBeVisible();
-  await characterCard.getByRole("button", { name: "修改" }).click();
+  await characterCard.getByRole("button", { name: "管理角色 测试职业" }).click();
+  await page.getByText("修改角色", { exact: true }).click();
   const editCharacterModal = page
     .locator(".ant-modal")
     .filter({ hasText: `修改 ${playerName} 的角色` });
   await editCharacterModal.getByLabel("职业").fill("测试职业改");
-  await editCharacterModal.getByLabel("伤害 / 增益评分").fill("600");
+  await editCharacterModal.getByLabel("伤害（亿）").fill("600");
   await editCharacterModal.locator(".ant-btn-primary").click();
   characterCard = playerPanel.locator(".character-card").filter({
     hasText: "测试职业改",
   });
-  await expect(characterCard.getByText("伤害 · 600.00")).toBeVisible();
+  await expect(characterCard).toContainText("伤害600亿");
 
-  await playerPanel.getByRole("button", { name: "添加角色", exact: true }).click();
+  await playerPanel
+    .locator(".ant-collapse-extra")
+    .getByText("添加角色", { exact: true })
+    .click();
   const secondCharacterModal = page
     .locator(".ant-modal")
     .filter({ hasText: `为 ${playerName} 添加角色` });
   await secondCharacterModal.getByLabel("职业").fill("排序职业");
-  await secondCharacterModal.getByLabel("伤害 / 增益评分").fill("400");
+  await secondCharacterModal.getByLabel("伤害（亿）").fill("400");
   await secondCharacterModal.locator(".ant-btn-primary").click();
   const secondCharacterHandle = playerPanel.getByRole("button", {
     name: "拖动角色 排序职业",
@@ -77,7 +84,7 @@ test("Owner can create, edit, and deactivate personnel through the browser", asy
 
   await page.reload();
   await page.getByRole("menuitem", { name: "人员管理" }).click();
-  playerPanel = page.locator(".ant-collapse-item").filter({ hasText: playerName });
+  playerPanel = page.locator(".sortable-player").filter({ hasText: playerName });
   await playerPanel.locator(".ant-collapse-header").click();
   await expect(playerPanel.locator(".character-card").first()).toContainText(
     "排序职业",
@@ -102,18 +109,24 @@ test("Owner can create, edit, and deactivate personnel through the browser", asy
   await expect(page.locator(".sortable-player").first()).toContainText(
     secondPlayerName,
   );
-  playerPanel = page.locator(".ant-collapse-item").filter({ hasText: playerName });
+  playerPanel = page.locator(".sortable-player").filter({ hasText: playerName });
   await playerPanel.locator(".ant-collapse-header").click();
   characterCard = playerPanel.locator(".character-card").filter({
     hasText: "测试职业改",
   });
 
-  await characterCard.getByRole("button", { name: "停用" }).click();
-  const characterConfirm = page
-    .locator(".ant-modal-confirm")
-    .filter({ hasText: "停用角色“测试职业改”？" });
-  await characterConfirm.getByRole("button", { name: "确认停用" }).click();
-  await expect(characterCard.getByText("已停用")).toBeVisible();
+  await characterCard.getByRole("button", { name: "管理角色 测试职业改" }).click();
+  await page.getByText("修改角色", { exact: true }).click();
+  const deactivateCharacterModal = page
+    .locator(".ant-modal")
+    .filter({ hasText: `修改 ${playerName} 的角色` });
+  await deactivateCharacterModal
+    .locator(".character-switch-field")
+    .filter({ hasText: "角色启用" })
+    .getByRole("switch")
+    .click();
+  await deactivateCharacterModal.locator(".ant-btn-primary").click();
+  await expect(characterCard).toContainText("停用");
 
   await playerPanel
     .locator(".ant-collapse-header")
@@ -123,18 +136,17 @@ test("Owner can create, edit, and deactivate personnel through the browser", asy
   await editPlayerModal.getByLabel("玩家称呼").fill(updatedPlayerName);
   await editPlayerModal.locator(".ant-btn-primary").click();
   playerPanel = page
-    .locator(".ant-collapse-item")
+    .locator(".sortable-player")
     .filter({ hasText: updatedPlayerName });
   await expect(playerPanel).toBeVisible();
 
   await playerPanel
     .locator(".ant-collapse-header")
-    .getByRole("button", { name: "停用" })
+    .getByRole("button", { name: "修改" })
     .click();
-  const playerConfirm = page
-    .locator(".ant-modal-confirm")
-    .filter({ hasText: `停用玩家“${updatedPlayerName}”？` });
-  await playerConfirm.getByRole("button", { name: "确认停用" }).click();
+  const deactivatePlayerModal = page.locator(".ant-modal").filter({ hasText: "修改玩家" });
+  await deactivatePlayerModal.getByRole("switch").click();
+  await deactivatePlayerModal.locator(".ant-btn-primary").click();
   await expect(
     playerPanel.locator(".ant-collapse-header").getByText("已停用"),
   ).toBeVisible();

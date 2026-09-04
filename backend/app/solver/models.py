@@ -9,6 +9,7 @@ class SolverStatus(StrEnum):
     FEASIBLE = "FEASIBLE"
     PARTIAL = "PARTIAL"
     INFEASIBLE = "INFEASIBLE"
+    TIMEOUT = "TIMEOUT"
     ERROR = "ERROR"
 
 

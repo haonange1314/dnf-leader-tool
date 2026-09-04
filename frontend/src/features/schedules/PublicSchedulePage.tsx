@@ -1,6 +1,7 @@
-import { Card, Col, Empty, Row, Skeleton, Space, Tag, Typography } from "antd";
+import { Card, Col, Empty, Row, Skeleton, Tag, Typography } from "antd";
 import { useEffect, useState } from "react";
 import { api, type PublicScheduleVersion } from "../../api/client";
+import { ScheduleParticipantLabel } from "./ScheduleEditor";
 
 export function PublicSchedulePage({ token }: { token: string }) {
   const [version, setVersion] = useState<PublicScheduleVersion | null>(null);
@@ -30,7 +31,7 @@ export function PublicSchedulePage({ token }: { token: string }) {
         <div>
           <Typography.Title>{schedule.name}</Typography.Title>
           <Typography.Text type="secondary">
-            发布版本 v{version.versionNo} · {new Date(version.publishedAt).toLocaleString()}
+            发布版本第 {version.versionNo} 版 · {new Date(version.publishedAt).toLocaleString()}
           </Typography.Text>
         </div>
         <Tag color="green">只读发布版</Tag>
@@ -65,22 +66,7 @@ export function PublicSchedulePage({ token }: { token: string }) {
                       return (
                         <div className="team-slot" key={slot.id}>
                           {participant ? (
-                            <Space size={4} wrap>
-                              <Tag color={participant.roleTypeSnapshot === "DAMAGE" ? "red" : "blue"}>
-                                {participant.roleTypeSnapshot === "DAMAGE" ? "C" : "奶"}
-                              </Tag>
-                              <span>
-                                {participant.playerNameSnapshot} · {participant.characterNameSnapshot}
-                              </span>
-                              {participant.isTreasureSnapshot ? <Tag color="gold">秘宝</Tag> : null}
-                              {participant.isFixedLeadTeamBufferSnapshot ? (
-                                <Tag color="red">固定红奶</Tag>
-                              ) : null}
-                              {participant.isGroupHuntSnapshot ? (
-                                <Tag color="green">群猎</Tag>
-                              ) : null}
-                              {core ? <Tag color="gold">本波核心</Tag> : null}
-                            </Space>
+                            <ScheduleParticipantLabel participant={participant} core={core} />
                           ) : (
                             <Typography.Text type="secondary">位置 {slot.slotNo} · 待补</Typography.Text>
                           )}
