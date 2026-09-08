@@ -51,8 +51,10 @@ describe("PersonnelPage", () => {
             ignore: 0,
             deactivate: 0,
             deactivate_players: 0,
+            delete: 0,
+            delete_players: 0,
             reactivate_players: 0,
-            deactivation_fingerprint: 0,
+            sync_fingerprint: 0,
             error: 1,
           },
           rows: [
@@ -189,10 +191,12 @@ describe("PersonnelPage", () => {
             create: 1,
             update: 0,
             ignore: 0,
-            deactivate: 1,
+            deactivate: 0,
             deactivate_players: 0,
+            delete: 1,
+            delete_players: 0,
             reactivate_players: 0,
-            deactivation_fingerprint: 1,
+            sync_fingerprint: 1,
             error: 0,
           },
           change_details: [
@@ -204,11 +208,11 @@ describe("PersonnelPage", () => {
               fields: ["新增玩家", "新增角色"],
             },
             {
-              action: "DEACTIVATE_CHARACTER",
+              action: "DELETE_CHARACTER",
               player_name: "旧玩家",
               profession: "奶妈",
               row_no: null,
-              fields: ["停用角色"],
+              fields: ["永久删除角色"],
             },
           ],
           rows: [],
@@ -228,7 +232,7 @@ describe("PersonnelPage", () => {
     expect(await screen.findByText("新玩家")).toBeInTheDocument();
     expect(screen.getByText("旧玩家")).toBeInTheDocument();
     expect(screen.getByText("新增玩家、新增角色")).toBeInTheDocument();
-    expect(screen.getAllByText("停用角色").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("删除角色").length).toBeGreaterThan(0);
   });
 
   it("loads import history and its persisted change details", async () => {
@@ -248,8 +252,10 @@ describe("PersonnelPage", () => {
                 ignore: 0,
                 deactivate: 0,
                 deactivate_players: 0,
+                delete: 0,
+                delete_players: 0,
                 reactivate_players: 0,
-                deactivation_fingerprint: 0,
+                sync_fingerprint: 0,
                 error: 0,
               },
               created_at: "2026-09-04T00:00:00Z",
@@ -273,8 +279,10 @@ describe("PersonnelPage", () => {
             ignore: 0,
             deactivate: 0,
             deactivate_players: 0,
+            delete: 0,
+            delete_players: 0,
             reactivate_players: 0,
-            deactivation_fingerprint: 0,
+            sync_fingerprint: 0,
             error: 0,
           },
           change_details: [

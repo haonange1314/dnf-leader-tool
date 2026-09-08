@@ -1,5 +1,6 @@
 import uuid
 from collections.abc import Iterable
+from dataclasses import dataclass
 from decimal import Decimal
 from hashlib import sha256
 from io import BytesIO
@@ -27,9 +28,18 @@ from app.imports import (
 )
 from app.models.imports import ImportBatch, ImportRow
 from app.models.personnel import Character, Player
+from app.models.schedule import ScheduleParticipant, SchedulePlayerPreference
 from app.schemas.imports import ImportBatchListView, ImportBatchSummaryView, ImportBatchView
 
 router = APIRouter()
+
+
+@dataclass(frozen=True)
+class RosterSyncPlan:
+    delete_players: list[Player]
+    delete_characters: list[Character]
+    deactivate_players: list[Player]
+    deactivate_characters: list[Character]
 
 
 def _character_import_defaults() -> CharacterImportDefaults:
@@ -148,11 +158,13 @@ async def preview_import(
         "ignore": 0,
         "deactivate": 0,
         "deactivate_players": 0,
+        "delete": 0,
+        "delete_players": 0,
         "reactivate_players": 0,
         "reorder": 0,
         "error": 0,
-        "sync": 1,
-        "deactivation_fingerprint": 0,
+        "sync": 2,
+        "sync_fingerprint": 0,
     }
     batch = ImportBatch(
         filename=filename[:255],
@@ -231,13 +243,33 @@ async def preview_import(
         imported_professions = _imported_professions(
             row.payload for row in batch.rows
         )
-        missing_players, missing_characters = _active_records_missing_from_import(
-            players, imported_professions
+        sync_plan = _build_roster_sync_plan(
+            db, players, imported_professions
         )
-        summary["deactivate"] = len(missing_characters)
-        summary["deactivate_players"] = len(missing_players)
-        summary["deactivation_fingerprint"] = _deactivation_fingerprint(
-            missing_players, missing_characters
+        summary["delete"] = len(sync_plan.delete_characters)
+        summary["delete_players"] = len(sync_plan.delete_players)
+        summary["deactivate"] = len(sync_plan.deactivate_characters)
+        summary["deactivate_players"] = len(sync_plan.deactivate_players)
+        summary["sync_fingerprint"] = _sync_fingerprint(sync_plan)
+        change_details.extend(
+            {
+                "action": "DELETE_PLAYER",
+                "player_name": player.display_name,
+                "profession": None,
+                "row_no": None,
+                "fields": ["永久删除玩家"],
+            }
+            for player in sync_plan.delete_players
+        )
+        change_details.extend(
+            {
+                "action": "DELETE_CHARACTER",
+                "player_name": character.player.display_name,
+                "profession": character.profession,
+                "row_no": None,
+                "fields": ["永久删除角色"],
+            }
+            for character in sync_plan.delete_characters
         )
         change_details.extend(
             {
@@ -245,9 +277,9 @@ async def preview_import(
                 "player_name": player.display_name,
                 "profession": None,
                 "row_no": None,
-                "fields": ["停用玩家"],
+                "fields": ["已有排表引用，改为停用玩家"],
             }
-            for player in missing_players
+            for player in sync_plan.deactivate_players
         )
         change_details.extend(
             {
@@ -255,11 +287,18 @@ async def preview_import(
                 "player_name": character.player.display_name,
                 "profession": character.profession,
                 "row_no": None,
-                "fields": ["停用角色"],
+                "fields": ["已有排表引用，改为停用角色"],
             }
-            for character in missing_characters
+            for character in sync_plan.deactivate_characters
         )
-        ordering_changes = _ordering_change_details(players, batch.rows)
+        ordering_changes = _ordering_change_details(
+            players,
+            batch.rows,
+            deleted_player_ids={player.id for player in sync_plan.delete_players},
+            deleted_character_ids={
+                character.id for character in sync_plan.delete_characters
+            },
+        )
         summary["reorder"] = len(ordering_changes)
         change_details.extend(ordering_changes)
     batch.summary = summary
@@ -285,20 +324,20 @@ def commit_import(batch_id: uuid.UUID, db: DbSession, current_user: RosterImport
         raise AppError(409, "IMPORT_ALREADY_COMMITTED", "该导入批次已经确认")
     if any(row.action == "ERROR" for row in batch.rows):
         raise AppError(409, "IMPORT_HAS_ERRORS", "请先修正错误行后重新预览")
-    if batch.summary.get("sync") != 1:
+    if batch.summary.get("sync") != 2:
         raise AppError(409, "IMPORT_PREVIEW_EXPIRED", "导入规则已更新，请重新预览")
     imported_professions = _imported_professions(row.payload for row in batch.rows)
     existing_players = list(
         db.scalars(select(Player).options(selectinload(Player.characters)))
     )
-    missing_players, missing_characters = _active_records_missing_from_import(
-        existing_players, imported_professions
-    )
+    sync_plan = _build_roster_sync_plan(db, existing_players, imported_professions)
     if (
-        len(missing_characters) != batch.summary.get("deactivate", 0)
-        or len(missing_players) != batch.summary.get("deactivate_players", 0)
-        or _deactivation_fingerprint(missing_players, missing_characters)
-        != batch.summary.get("deactivation_fingerprint")
+        len(sync_plan.delete_characters) != batch.summary.get("delete", 0)
+        or len(sync_plan.delete_players) != batch.summary.get("delete_players", 0)
+        or len(sync_plan.deactivate_characters) != batch.summary.get("deactivate", 0)
+        or len(sync_plan.deactivate_players)
+        != batch.summary.get("deactivate_players", 0)
+        or _sync_fingerprint(sync_plan) != batch.summary.get("sync_fingerprint")
     ):
         raise AppError(409, "IMPORT_DATA_CHANGED", "人员数据已变化，请重新预览")
     player_cache: dict[str, Player] = {}
@@ -356,10 +395,14 @@ def commit_import(batch_id: uuid.UUID, db: DbSession, current_user: RosterImport
         if row.action != "IGNORE":
             _apply_payload(character, payload)
 
-    for character in missing_characters:
+    for character in sync_plan.deactivate_characters:
         character.is_active = False
-    for player in missing_players:
+    for player in sync_plan.deactivate_players:
         player.is_active = False
+    for character in sync_plan.delete_characters:
+        db.delete(character)
+    for player in sync_plan.delete_players:
+        db.delete(player)
 
     db.flush()
     all_players = list(
@@ -471,40 +514,102 @@ def _imported_professions(
     return imported
 
 
-def _active_records_missing_from_import(
-    players: list[Player], imported_professions: dict[str, set[str]]
-) -> tuple[list[Player], list[Character]]:
-    missing_players: list[Player] = []
-    missing_characters: list[Character] = []
+def _build_roster_sync_plan(
+    db: DbSession,
+    players: list[Player],
+    imported_professions: dict[str, set[str]],
+) -> RosterSyncPlan:
+    character_ids = [character.id for player in players for character in player.characters]
+    player_ids = [player.id for player in players]
+    referenced_character_ids = set(
+        db.scalars(
+            select(ScheduleParticipant.character_id).where(
+                ScheduleParticipant.character_id.in_(character_ids)
+            )
+        )
+    ) if character_ids else set()
+    referenced_player_ids = set(
+        db.scalars(
+            select(SchedulePlayerPreference.player_id).where(
+                SchedulePlayerPreference.player_id.in_(player_ids)
+            )
+        )
+    ) if player_ids else set()
+    return _roster_sync_plan(
+        players,
+        imported_professions,
+        referenced_player_ids=referenced_player_ids,
+        referenced_character_ids=referenced_character_ids,
+    )
+
+
+def _roster_sync_plan(
+    players: list[Player],
+    imported_professions: dict[str, set[str]],
+    *,
+    referenced_player_ids: set[uuid.UUID],
+    referenced_character_ids: set[uuid.UUID],
+) -> RosterSyncPlan:
+    delete_players: list[Player] = []
+    delete_characters: list[Character] = []
+    deactivate_players: list[Player] = []
+    deactivate_characters: list[Character] = []
     for player in players:
         professions = imported_professions.get(player.display_name_key)
-        if professions is None:
-            if player.is_active:
-                missing_players.append(player)
-            missing_characters.extend(
-                character for character in player.characters if character.is_active
-            )
-            continue
-        missing_characters.extend(
-            character
-            for character in player.characters
-            if character.is_active and normalize_key(character.profession) not in professions
+        missing_characters = (
+            player.characters
+            if professions is None
+            else [
+                character
+                for character in player.characters
+                if normalize_key(character.profession) not in professions
+            ]
         )
-    return missing_players, missing_characters
+        if professions is None:
+            has_reference = (
+                player.id in referenced_player_ids
+                or any(
+                    character.id in referenced_character_ids
+                    for character in player.characters
+                )
+            )
+            if not has_reference:
+                delete_players.append(player)
+            elif player.is_active:
+                deactivate_players.append(player)
+        for character in missing_characters:
+            if character.id in referenced_character_ids:
+                if character.is_active:
+                    deactivate_characters.append(character)
+            else:
+                delete_characters.append(character)
+    return RosterSyncPlan(
+        delete_players=delete_players,
+        delete_characters=delete_characters,
+        deactivate_players=deactivate_players,
+        deactivate_characters=deactivate_characters,
+    )
 
 
-def _deactivation_fingerprint(
-    players: list[Player], characters: list[Character]
-) -> int:
-    parts = [*(f"P:{player.id}" for player in players)]
-    parts.extend(f"C:{character.id}" for character in characters)
+def _sync_fingerprint(plan: RosterSyncPlan) -> int:
+    parts = [*(f"DP:{player.id}" for player in plan.delete_players)]
+    parts.extend(f"DC:{character.id}" for character in plan.delete_characters)
+    parts.extend(f"XP:{player.id}" for player in plan.deactivate_players)
+    parts.extend(f"XC:{character.id}" for character in plan.deactivate_characters)
     material = "\n".join(sorted(parts)).encode()
     return int(sha256(material).hexdigest()[:13], 16)
 
 
 def _ordering_change_details(
-    players: list[Player], rows: list[ImportRow]
+    players: list[Player],
+    rows: list[ImportRow],
+    *,
+    deleted_player_ids: set[uuid.UUID] | None = None,
+    deleted_character_ids: set[uuid.UUID] | None = None,
 ) -> list[dict[str, object]]:
+    deleted_player_ids = deleted_player_ids or set()
+    deleted_character_ids = deleted_character_ids or set()
+    players = [player for player in players if player.id not in deleted_player_ids]
     details: list[dict[str, object]] = []
     player_by_key = {player.display_name_key: player for player in players}
     imported_player_keys: list[str] = []
@@ -546,7 +651,11 @@ def _ordering_change_details(
             continue
         player = player_by_key[player_key]
         current_characters = sorted(
-            player.characters,
+            (
+                character
+                for character in player.characters
+                if character.id not in deleted_character_ids
+            ),
             key=lambda item: (item.sort_order, item.created_at, item.id),
         )
         character_by_key = {

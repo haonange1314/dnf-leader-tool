@@ -434,6 +434,22 @@ missing_from_import_character = request(
     },
 )
 assert isinstance(missing_from_import_character, dict)
+missing_from_import_player = request(
+    "/players",
+    "POST",
+    {
+        "displayName": "待同步删除玩家",
+        "characters": [
+            {
+                "profession": "待同步删除职业",
+                "roleType": "DAMAGE",
+                "damageScore": 250,
+                "isActive": True,
+            }
+        ],
+    },
+)
+assert isinstance(missing_from_import_player, dict)
 
 invalid_workbook = Workbook()
 invalid_sheet = invalid_workbook.active
@@ -503,6 +519,8 @@ assert {
         "ignore",
         "deactivate",
         "deactivate_players",
+        "delete",
+        "delete_players",
         "reactivate_players",
         "error",
         "sync",
@@ -511,15 +529,17 @@ assert {
     "create": 0,
     "update": 1,
     "ignore": 2,
-    "deactivate": 1,
+    "deactivate": 0,
     "deactivate_players": 0,
+    "delete": 2,
+    "delete_players": 1,
     "reactivate_players": 1,
     "error": 0,
-    "sync": 1,
+    "sync": 2,
 }
-assert isinstance(import_preview["summary"]["deactivation_fingerprint"], int)
+assert isinstance(import_preview["summary"]["sync_fingerprint"], int)
 assert any(
-    item["action"] == "DEACTIVATE_CHARACTER"
+    item["action"] == "DELETE_CHARACTER"
     and item["profession"] == "待同步停用职业"
     for item in import_preview["change_details"]
 )
@@ -550,12 +570,21 @@ workflow_player_after_import = request(f"/players/{workflow_player['id']}")
 assert isinstance(workflow_player_after_import, dict)
 assert [
     item["profession"] for item in workflow_player_after_import["characters"]
-] == ["测试职业", "测试奶系", "待同步停用职业"]
-assert next(
-    item
-    for item in workflow_player_after_import["characters"]
-    if item["id"] == missing_from_import_character["id"]
-)["isActive"] is False
+] == ["测试职业", "测试奶系"]
+deleted_missing_character = request_error(
+    f"/characters/{missing_from_import_character['id']}",
+    "DELETE",
+    {},
+    expected_status=404,
+)
+assert deleted_missing_character["error"]["code"] == "CHARACTER_NOT_FOUND"
+deleted_missing_player = request_error(
+    f"/players/{missing_from_import_player['id']}",
+    "GET",
+    {},
+    expected_status=404,
+)
+assert deleted_missing_player["error"]["code"] == "PLAYER_NOT_FOUND"
 inactive_player = request(
     f"/players/{inactive_player['id']}",
     "PATCH",
