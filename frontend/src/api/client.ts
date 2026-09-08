@@ -171,9 +171,12 @@ export interface ImportBatch {
     ignore: number;
     deactivate: number;
     deactivate_players: number;
+    delete?: number;
+    delete_players?: number;
     reactivate_players: number;
     reorder: number;
-    deactivation_fingerprint: number;
+    sync_fingerprint?: number;
+    deactivation_fingerprint?: number;
     error: number;
   };
   created_at: string;
@@ -186,6 +189,8 @@ export interface ImportChange {
     | "CREATE"
     | "UPDATE"
     | "REACTIVATE"
+    | "DELETE_PLAYER"
+    | "DELETE_CHARACTER"
     | "DEACTIVATE_PLAYER"
     | "DEACTIVATE_CHARACTER"
     | "REORDER";

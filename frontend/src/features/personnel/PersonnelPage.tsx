@@ -274,15 +274,20 @@ export function PersonnelPage({ userRole, permissions, onError, onSuccess }: Pro
       title: "确认按 Excel 全量同步人员？",
       content: (
         <Typography.Text>
-          文件外的 {batch.summary.deactivate_players} 名玩家、
-          {batch.summary.deactivate} 个角色将被停用，不再进入新排表；历史排表不受影响。
+          文件外且未被排表引用的 {batch.summary.delete_players ?? 0} 名玩家、
+          {batch.summary.delete ?? 0} 个角色将永久删除；已有排表引用的
+          {batch.summary.deactivate_players} 名玩家、{batch.summary.deactivate}
+          个角色将改为停用，历史排表不受影响。
         </Typography.Text>
       ),
       okText: "确认同步",
       cancelText: "取消",
       okButtonProps: {
         danger:
-          batch.summary.deactivate_players > 0 || batch.summary.deactivate > 0,
+          (batch.summary.delete_players ?? 0) > 0 ||
+          (batch.summary.delete ?? 0) > 0 ||
+          batch.summary.deactivate_players > 0 ||
+          batch.summary.deactivate > 0,
       },
       onOk: commit,
     });
@@ -425,6 +430,8 @@ export function PersonnelPage({ userRole, permissions, onError, onSuccess }: Pro
               <Tag color={batch.summary.error ? "red" : "blue"}>
                 新增 {batch.summary.create} · 更新 {batch.summary.update} · 恢复玩家{" "}
                 {batch.summary.reactivate_players} · 忽略 {batch.summary.ignore} ·
+                将删除玩家 {batch.summary.delete_players ?? 0} · 将删除角色{" "}
+                {batch.summary.delete ?? 0} ·
                 将停用玩家 {batch.summary.deactivate_players} · 将停用角色{" "}
                 {batch.summary.deactivate} · 调整顺序 {batch.summary.reorder ?? 0} · 错误{" "}
                 {batch.summary.error}
@@ -583,7 +590,7 @@ export function PersonnelPage({ userRole, permissions, onError, onSuccess }: Pro
             {
               title: "变更摘要",
               render: (_, item) =>
-                `新增 ${item.summary.create} · 更新 ${item.summary.update} · 停用 ${item.summary.deactivate_players + item.summary.deactivate}`,
+                `新增 ${item.summary.create} · 更新 ${item.summary.update} · 删除 ${(item.summary.delete_players ?? 0) + (item.summary.delete ?? 0)} · 停用 ${item.summary.deactivate_players + item.summary.deactivate}`,
             },
             {
               title: "时间",
@@ -753,6 +760,8 @@ function importActionLabel(action: ImportChange["action"]): ReactNode {
     CREATE: { color: "green", text: "新增" },
     UPDATE: { color: "blue", text: "更新" },
     REACTIVATE: { color: "cyan", text: "恢复" },
+    DELETE_PLAYER: { color: "red", text: "删除玩家" },
+    DELETE_CHARACTER: { color: "volcano", text: "删除角色" },
     DEACTIVATE_PLAYER: { color: "red", text: "停用玩家" },
     DEACTIVATE_CHARACTER: { color: "orange", text: "停用角色" },
     REORDER: { color: "default", text: "调整顺序" },

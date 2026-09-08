@@ -2,10 +2,10 @@ import uuid
 from decimal import Decimal
 
 from app.api.v1.routes.imports import (
-    _active_records_missing_from_import,
     _changes,
     _imported_professions,
     _ordering_change_details,
+    _roster_sync_plan,
 )
 from app.models.imports import ImportRow
 from app.models.personnel import Character, Player
@@ -45,7 +45,7 @@ def _player(name: str, *, active: bool = True) -> Player:
     )
 
 
-def test_full_sync_finds_players_and_characters_missing_from_workbook() -> None:
+def test_full_sync_deletes_unreferenced_players_and_characters() -> None:
     imported_player = _player("玩家A")
     kept = _character(imported_player.id, "剑魂")
     removed_character = _character(imported_player.id, "红眼")
@@ -59,24 +59,40 @@ def test_full_sync_finds_players_and_characters_missing_from_workbook() -> None:
     imported = _imported_professions(
         [{"player_key": "玩家a", "profession_key": "剑魂"}]
     )
-    missing_players, missing_characters = _active_records_missing_from_import(
-        [imported_player, removed_player], imported
+    plan = _roster_sync_plan(
+        [imported_player, removed_player],
+        imported,
+        referenced_player_ids=set(),
+        referenced_character_ids=set(),
     )
 
-    assert missing_players == [removed_player]
-    assert missing_characters == [removed_character, removed_player_character]
+    assert plan.delete_players == [removed_player]
+    assert plan.delete_characters == [
+        removed_character,
+        already_inactive,
+        removed_player_character,
+    ]
+    assert plan.deactivate_players == []
+    assert plan.deactivate_characters == []
 
 
-def test_full_sync_does_not_repeat_deactivation_for_inactive_records() -> None:
-    player = _player("玩家A", active=False)
-    player.characters = [_character(player.id, "剑魂", active=False)]
+def test_full_sync_deactivates_referenced_records_and_deletes_safe_siblings() -> None:
+    player = _player("玩家A")
+    referenced = _character(player.id, "剑魂")
+    unreferenced = _character(player.id, "红眼")
+    player.characters = [referenced, unreferenced]
 
-    missing_players, missing_characters = _active_records_missing_from_import(
-        [player], {}
+    plan = _roster_sync_plan(
+        [player],
+        {},
+        referenced_player_ids=set(),
+        referenced_character_ids={referenced.id},
     )
 
-    assert missing_players == []
-    assert missing_characters == []
+    assert plan.delete_players == []
+    assert plan.delete_characters == [unreferenced]
+    assert plan.deactivate_players == [player]
+    assert plan.deactivate_characters == [referenced]
 
 
 def test_preview_compares_decimal_scores_by_value() -> None:
