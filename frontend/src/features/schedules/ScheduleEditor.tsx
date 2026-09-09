@@ -51,9 +51,7 @@ export function ScheduleEditorWave({
           <Col xs={24} xl={Math.max(6, Math.floor(24 / wave.teams.length))} key={team.id}>
             <Card
               size="small"
-              title={`${team.displayNameSnapshot} · ${
-                team.compositionCode === "INCOMPLETE" ? "待补" : team.compositionCode
-              }`}
+              title={`${team.displayNameSnapshot} · ${formatCompositionCode(team.compositionCode)}`}
               extra={`C ${team.damageTotal} · 奶 ${team.bufferTotal}`}
               className="team-card"
               style={{ borderTopColor: team.displayColorSnapshot }}
@@ -232,8 +230,8 @@ export function ScheduleParticipantLabel({
       <span>{participant.playerNameSnapshot} · {participant.characterNameSnapshot}</span>
       <Typography.Text type="secondary" className="participant-score">
         {participant.roleTypeSnapshot === "DAMAGE"
-          ? `伤害 ${Number(participant.damageScoreSnapshot ?? 0).toLocaleString("zh-CN")} 亿`
-          : `奶量 ${Number(participant.actualBufferScoreSnapshot ?? 0).toFixed(2)} 万`}
+          ? `模拟伤害 ${Number(participant.damageScoreSnapshot ?? 0).toLocaleString("zh-CN")} 亿`
+          : `实际奶量 ${Number(participant.actualBufferScoreSnapshot ?? 0).toFixed(2)} 万`}
       </Typography.Text>
       {core ? <Tag color="purple">本波核心</Tag> : null}
       {participant.unassignedReason ? (
@@ -241,6 +239,16 @@ export function ScheduleParticipantLabel({
       ) : null}
     </Space>
   );
+}
+
+export function formatCompositionCode(code: string): string {
+  const labels: Record<string, string> = {
+    "3D1B": "3C1奶",
+    "2D2B": "2C2奶",
+    INCOMPLETE: "待补",
+    INVALID: "组成无效",
+  };
+  return labels[code] ?? code;
 }
 
 function describeUnassignedReason(reason: Record<string, unknown>): string {

@@ -3,7 +3,13 @@ from io import BytesIO
 from openpyxl import load_workbook
 from PIL import Image
 
-from app.application.schedule_exports import snapshot_png, snapshot_text, snapshot_workbook
+from app.application.schedule_exports import (
+    _composition_display_name,
+    _participant_image_score,
+    snapshot_png,
+    snapshot_text,
+    snapshot_workbook,
+)
 
 
 def _snapshot() -> dict[str, object]:
@@ -29,6 +35,7 @@ def _snapshot() -> dict[str, object]:
                 "roleTypeSnapshot": "BUFFER",
                 "damageScoreSnapshot": None,
                 "bufferScoreSnapshot": "50.0",
+                "actualBufferScoreSnapshot": "75.25",
                 "isSelected": True,
                 "unassignedReason": {"code": "UNASSIGNED_CAPACITY"},
             },
@@ -44,7 +51,7 @@ def _snapshot() -> dict[str, object]:
                 "teams": [
                     {
                         "displayNameSnapshot": "红队",
-                        "compositionCode": "INCOMPLETE",
+                        "compositionCode": "2D2B",
                         "damageTotal": "500.00",
                         "bufferTotal": "0.0",
                         "slots": [
@@ -88,4 +95,16 @@ def test_excel_export_contains_all_review_sheets() -> None:
     assert workbook.sheetnames == ["排表总览", "未分配", "强度统计", "问题清单"]
     assert workbook["排表总览"]["A3"].value == 1
     assert workbook["未分配"]["A3"].value == "玩家二"
+    assert workbook["未分配"]["E3"].value == "75.25"
+    assert workbook["强度统计"]["C3"].value == "2C2奶"
     assert workbook["问题清单"]["B3"].value == "TEAM_INCOMPLETE"
+
+
+def test_schedule_export_uses_business_labels_and_role_specific_scores() -> None:
+    snapshot = _snapshot()
+    damage, buffer = snapshot["participants"]
+
+    assert _composition_display_name("3D1B") == "3C1奶"
+    assert _composition_display_name("2D2B") == "2C2奶"
+    assert _participant_image_score(damage) == "模拟伤害 500 亿"
+    assert _participant_image_score(buffer) == "实际奶量 75.25 万"

@@ -10,6 +10,7 @@ import {
   describeRuleResolutionIssue,
   SchedulePage,
 } from "./SchedulePage";
+import { formatCompositionCode, ScheduleParticipantLabel } from "./ScheduleEditor";
 
 vi.mock("../../api/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../api/client")>()),
@@ -97,6 +98,32 @@ const editLock = {
   heartbeatIntervalSeconds: 30,
   token: "edit-lock-token",
 };
+
+describe("schedule display formatting", () => {
+  it("uses Chinese composition labels and role-specific score names", () => {
+    const damage = detail.participants[0];
+    const buffer = {
+      ...damage,
+      id: "participant-buffer",
+      roleTypeSnapshot: "BUFFER" as const,
+      damageScoreSnapshot: null,
+      bufferScoreSnapshot: "50",
+      actualBufferScoreSnapshot: "75.25",
+    };
+
+    render(
+      <>
+        <ScheduleParticipantLabel participant={damage} />
+        <ScheduleParticipantLabel participant={buffer} />
+      </>,
+    );
+
+    expect(formatCompositionCode("3D1B")).toBe("3C1奶");
+    expect(formatCompositionCode("2D2B")).toBe("2C2奶");
+    expect(screen.getByText("模拟伤害 500 亿")).toBeInTheDocument();
+    expect(screen.getByText("实际奶量 75.25 万")).toBeInTheDocument();
+  });
+});
 const parsedRuleSet = {
   id: "rule-set-1",
   scheduleId: "schedule-1",
