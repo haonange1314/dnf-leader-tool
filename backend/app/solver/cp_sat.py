@@ -424,6 +424,59 @@ def solve(solver_input: SolverInput) -> SolverResult:
         x[participant_index, wave_no, team_index]
         for participant_index, wave_no, team_index in buffer_placement_targets
     ]
+    buffer_rule = solver_input.dungeon.optimization_rules.buffer_placement
+    if buffer_rule is not None and buffer_rule.team_order:
+        primary_buffer_team_index = team_index_by_key[buffer_rule.team_order[0]]
+        (
+            primary_buffer_double_waves,
+            primary_high_buffer_indices,
+            primary_low_buffer_indices,
+            primary_buffer_single_waves,
+            primary_single_buffer_indices,
+        ) = _primary_buffer_rank_groups(
+            solver_input,
+            team_index_by_key,
+            buffer_placement_targets,
+        )
+        primary_buffer_indices = (
+            primary_high_buffer_indices
+            | primary_low_buffer_indices
+            | primary_single_buffer_indices
+        )
+        for participant_index in primary_buffer_indices:
+            # RED (or the configured first team) receives the global high-low
+            # buffer roster first. The exact RED wave remains flexible so player
+            # and availability constraints can choose a valid pairing.
+            model.add(
+                sum(
+                    x[participant_index, wave_no, primary_buffer_team_index]
+                    for wave_no in waves
+                )
+                == 1
+            )
+        for wave_no in primary_buffer_double_waves:
+            model.add(
+                sum(
+                    x[participant_index, wave_no, primary_buffer_team_index]
+                    for participant_index in primary_high_buffer_indices
+                )
+                == 1
+            )
+            model.add(
+                sum(
+                    x[participant_index, wave_no, primary_buffer_team_index]
+                    for participant_index in primary_low_buffer_indices
+                )
+                == 1
+            )
+        for wave_no in primary_buffer_single_waves:
+            model.add(
+                sum(
+                    x[participant_index, wave_no, primary_buffer_team_index]
+                    for participant_index in primary_single_buffer_indices
+                )
+                == 1
+            )
 
     metric_totals: dict[tuple[RoleType, int, int], cp_model.IntVar] = {}
     score_upper_bound = total_score
@@ -444,18 +497,18 @@ def solve(solver_input: SolverInput) -> SolverResult:
                 metric_totals[metric, wave_no, team_index] = total
 
     strength_order_penalties: list[cp_model.LinearExpr] = []
-    buffer_strength_order_penalties: list[cp_model.LinearExpr] = []
-    hard_buffer_strength_order = (
+    ordered_buffer_placement = (
         solver_input.dungeon.optimization_rules.buffer_placement is not None
-        and any(
-            order.metric == RoleType.BUFFER
-            for order in solver_input.dungeon.strength_order_rules.orders
-        )
     )
     strength_order_pairs: list[
         tuple[int, cp_model.LinearExpr, cp_model.LinearExpr]
     ] = []
     for order_index, order in enumerate(solver_input.dungeon.strength_order_rules.orders):
+        if order.metric == RoleType.BUFFER and ordered_buffer_placement:
+            # A first-buffer dungeon orders individual buffer placements. Team
+            # buffer sums are not a substitute for putting the strongest and
+            # weakest buffers into the configured double-buffer teams.
+            continue
         for wave_no in waves:
             for pair_index, (stronger_key, weaker_key) in enumerate(
                 zip(order.teams, order.teams[1:], strict=False)
@@ -467,24 +520,11 @@ def solve(solver_input: SolverInput) -> SolverResult:
                     score_upper_bound,
                     f"strength_order_slack_{order_index}_{wave_no}_{pair_index}",
                 )
-                if (
-                    order.metric == RoleType.BUFFER
-                    and solver_input.dungeon.optimization_rules.buffer_placement is not None
-                ):
-                    # A configured buffer-placement phase means buffers are fixed
-                    # before damage dealers are assigned. Every wave must
-                    # preserve the configured buffer strength order; otherwise a
-                    # time-limited soft violation would be frozen permanently.
-                    model.add(stronger >= weaker)
-                    model.add(slack == 0)
-                else:
-                    model.add(slack >= weaker - stronger).only_enforce_if(
-                        wave_full[wave_no]
-                    )
-                    model.add(slack == 0).only_enforce_if(~wave_full[wave_no])
+                model.add(slack >= weaker - stronger).only_enforce_if(
+                    wave_full[wave_no]
+                )
+                model.add(slack == 0).only_enforce_if(~wave_full[wave_no])
                 strength_order_penalties.append(slack)
-                if order.metric == RoleType.BUFFER:
-                    buffer_strength_order_penalties.append(slack)
                 strength_order_pairs.append((wave_no, stronger, weaker))
 
     balance_penalties: list[tuple[RoleType, cp_model.LinearExpr]] = []
@@ -770,12 +810,12 @@ def solve(solver_input: SolverInput) -> SolverResult:
             time_limit_seconds=availability_budget * 0.75,
         )
         availability_elapsed += target_hint_elapsed
-        if target_hint is not None and hard_buffer_strength_order:
+        if target_hint is not None and ordered_buffer_placement:
             (
                 target_hint,
                 buffer_hint_status,
                 buffer_hint_elapsed,
-            ) = _repair_buffer_strength_order_hint(solver_input, target_hint)
+            ) = _optimize_buffer_placement_hint(solver_input, target_hint)
             availability_elapsed += buffer_hint_elapsed
             if target_hint is None:
                 return SolverResult(
@@ -846,7 +886,7 @@ def solve(solver_input: SolverInput) -> SolverResult:
                     # with a buffer from the same player/wave, so let the full
                     # model place damage dealers around the fixed buffer plan.
                     if (
-                        not hard_buffer_strength_order
+                        not ordered_buffer_placement
                         or participants[key[0]].role_type == RoleType.BUFFER
                     ):
                         availability_model.add(cloned_variable == target_hint[key])
@@ -854,7 +894,7 @@ def solve(solver_input: SolverInput) -> SolverResult:
                     cloned_variable = availability_model.get_bool_var_from_proto_index(
                         variable.index
                     )
-                    if not hard_buffer_strength_order:
+                    if not ordered_buffer_placement:
                         availability_model.add(cloned_variable == special_hint[key])
                 availability_objective = cp_model.LinearExpr.sum(
                     [
@@ -1000,14 +1040,6 @@ def solve(solver_input: SolverInput) -> SolverResult:
         model.add(evaluated_objective == stage_value)
 
     if buffer_placement_terms:
-        if buffer_strength_order_penalties:
-            optimize_and_fix_stage(
-                "BUFFER_STRENGTH_ORDER",
-                cp_model.LinearExpr.sum(buffer_strength_order_penalties),
-                maximize=False,
-                budget_ratio=0.06,
-                target_value=0,
-            )
         optimize_and_fix_stage(
             "BUFFER_PLACEMENT",
             cp_model.LinearExpr.sum(buffer_placement_terms),
@@ -1399,7 +1431,52 @@ def _build_buffer_placement_targets(
     return tuple(placements)
 
 
-def _repair_buffer_strength_order_hint(
+def _primary_buffer_rank_groups(
+    solver_input: SolverInput,
+    team_index_by_key: dict[str, int],
+    placements: tuple[tuple[int, int, int], ...],
+) -> tuple[
+    tuple[int, ...],
+    frozenset[int],
+    frozenset[int],
+    tuple[int, ...],
+    frozenset[int],
+]:
+    """Split the primary team's configured roster into high, low and single sets."""
+
+    rule = solver_input.dungeon.optimization_rules.buffer_placement
+    if rule is None or not rule.team_order:
+        return (), frozenset(), frozenset(), (), frozenset()
+    primary_team_key = rule.team_order[0]
+    primary_team_index = team_index_by_key[primary_team_key]
+    minimum_count = _buffer_count_bounds(solver_input)[primary_team_key][0]
+    buffer_targets = _buffer_count_targets(solver_input)
+    by_wave: defaultdict[int, list[int]] = defaultdict(list)
+    for participant_index, wave_no, team_index in placements:
+        if team_index == primary_team_index:
+            by_wave[wave_no].append(participant_index)
+
+    double_waves = tuple(
+        wave_no
+        for wave_no in range(1, solver_input.wave_count + 1)
+        if buffer_targets.get((wave_no, primary_team_key), 0) > minimum_count
+    )
+    single_waves = tuple(
+        wave_no
+        for wave_no in range(1, solver_input.wave_count + 1)
+        if buffer_targets.get((wave_no, primary_team_key), 0) == minimum_count
+    )
+    high_indices = frozenset(by_wave[wave_no][0] for wave_no in double_waves)
+    low_indices = frozenset(by_wave[wave_no][-1] for wave_no in double_waves)
+    single_indices = frozenset(
+        participant_index
+        for wave_no in single_waves
+        for participant_index in by_wave[wave_no]
+    )
+    return double_waves, high_indices, low_indices, single_waves, single_indices
+
+
+def _optimize_buffer_placement_hint(
     solver_input: SolverInput,
     hint: dict[tuple[int, int, int], int],
 ) -> tuple[
@@ -1407,15 +1484,10 @@ def _repair_buffer_strength_order_hint(
     SolverStatus,
     float,
 ]:
-    """Repair the aggregate hint with a small buffer-only assignment model."""
+    """Place buffers by configured individual rank before assigning damage."""
 
-    order_rules = tuple(
-        order
-        for order in solver_input.dungeon.strength_order_rules.orders
-        if order.metric == RoleType.BUFFER
-    )
     buffer_targets = _buffer_count_targets(solver_input)
-    if not order_rules or not buffer_targets:
+    if not buffer_targets:
         return hint, SolverStatus.FEASIBLE, 0.0
 
     model = cp_model.CpModel()
@@ -1561,36 +1633,106 @@ def _repair_buffer_strength_order_hint(
             )
             == target_count
         )
-    for order in order_rules:
-        for wave_no in waves:
-            totals = {
-                team_key: sum(
-                    participants[participant_index].score
-                    * variables[
-                        participant_index, wave_no, team_index_by_key[team_key]
-                    ]
-                    for participant_index in buffer_indices
+    ideal_placements = _build_buffer_placement_targets(
+        solver_input, team_index_by_key
+    )
+    ideal_targets = set(ideal_placements)
+    buffer_placement_rule = solver_input.dungeon.optimization_rules.buffer_placement
+    if buffer_placement_rule is not None and buffer_placement_rule.team_order:
+        primary_team_key = buffer_placement_rule.team_order[0]
+        primary_team_index = team_index_by_key[primary_team_key]
+        (
+            primary_double_waves,
+            primary_high_buffer_indices,
+            primary_low_buffer_indices,
+            primary_single_waves,
+            primary_single_buffer_indices,
+        ) = _primary_buffer_rank_groups(
+            solver_input,
+            team_index_by_key,
+            ideal_placements,
+        )
+        primary_buffer_indices = (
+            primary_high_buffer_indices
+            | primary_low_buffer_indices
+            | primary_single_buffer_indices
+        )
+        forced_primary_buffer_indices = {
+            participant_index
+            for participant_index in buffer_indices
+            if (
+                participants[participant_index].allowed_team_keys is not None
+                and set(participants[participant_index].allowed_team_keys or ())
+                == {primary_team_key}
+            )
+            or required_teams_by_participant.get(participant_index)
+            == {primary_team_index}
+        }
+        primary_capacity = sum(
+            target_count
+            for (_wave_no, team_key), target_count in buffer_targets.items()
+            if team_key == primary_team_key
+        )
+        if len(primary_buffer_indices | forced_primary_buffer_indices) > primary_capacity:
+            return None, SolverStatus.INFEASIBLE, 0.0
+        if any(
+            (
+                participants[participant_index].allowed_team_keys is not None
+                and primary_team_key
+                not in (participants[participant_index].allowed_team_keys or ())
+            )
+            or (
+                participant_index in required_teams_by_participant
+                and primary_team_index
+                not in required_teams_by_participant[participant_index]
+            )
+            for participant_index in primary_buffer_indices
+        ):
+            return None, SolverStatus.INFEASIBLE, 0.0
+        for participant_index in primary_buffer_indices:
+            model.add(
+                sum(
+                    variables[participant_index, wave_no, primary_team_index]
+                    for wave_no in waves
                 )
-                for team_key in order.teams
-            }
-            for stronger_key, weaker_key in zip(
-                order.teams, order.teams[1:], strict=False
-            ):
-                model.add(totals[stronger_key] >= totals[weaker_key])
-
-    ideal_targets = set(
-        _build_buffer_placement_targets(solver_input, team_index_by_key)
+                == 1
+            )
+        for wave_no in primary_double_waves:
+            model.add(
+                sum(
+                    variables[participant_index, wave_no, primary_team_index]
+                    for participant_index in primary_high_buffer_indices
+                )
+                == 1
+            )
+            model.add(
+                sum(
+                    variables[participant_index, wave_no, primary_team_index]
+                    for participant_index in primary_low_buffer_indices
+                )
+                == 1
+            )
+        for wave_no in primary_single_waves:
+            model.add(
+                sum(
+                    variables[participant_index, wave_no, primary_team_index]
+                    for participant_index in primary_single_buffer_indices
+                )
+                == 1
+            )
+    ideal_placement_count = sum(
+        variable for key, variable in variables.items() if key in ideal_targets
+    )
+    aggregate_hint_match_count = sum(
+        variable for key, variable in variables.items() if hint[key]
     )
     model.maximize(
-        sum(
-            (100 if hint[key] else 0) * variable
-            + (1 if key in ideal_targets else 0) * variable
-            for key, variable in variables.items()
-        )
+        (len(buffer_indices) + 1) * ideal_placement_count
+        + aggregate_hint_match_count
     )
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = max(
-        0.5, min(2.0, solver_input.time_limit_seconds * 0.10)
+        1.0, min(4.0, solver_input.time_limit_seconds * 0.20)
     )
     solver.parameters.random_seed = solver_input.random_seed
     solver.parameters.num_search_workers = 1
@@ -2612,6 +2754,11 @@ def _strength_order_violations(
     for wave_no in sorted(complete_waves):
         summary_by_team = {summary.team_key: summary for summary in by_wave[wave_no]}
         for order in solver_input.dungeon.strength_order_rules.orders:
+            if (
+                order.metric == RoleType.BUFFER
+                and solver_input.dungeon.optimization_rules.buffer_placement is not None
+            ):
+                continue
             for stronger_key, weaker_key in zip(order.teams, order.teams[1:], strict=False):
                 stronger_summary = summary_by_team[stronger_key]
                 weaker_summary = summary_by_team[weaker_key]

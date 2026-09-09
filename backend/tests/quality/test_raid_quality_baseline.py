@@ -363,6 +363,9 @@ def _anonymized_eleven_player_profile() -> QualityScenario:
             strength_order_violation_count=0,
             unassigned_codes={"UNASSIGNED_PLAYER_CONFLICT": 10},
             wave_fill=(11,) * 12,
+            # Legacy fixed-RED buffers occupy slots required by the global
+            # high-low primary-team roster.
+            expected_status=SolverStatus.INFEASIBLE,
         ),
     )
 
@@ -383,6 +386,8 @@ def _anonymized_twelve_player_complete_profile() -> QualityScenario:
             special_rule_satisfied_count=0,
             unassigned_codes={"UNASSIGNED_PLAYER_CONFLICT": 10},
             wave_fill=(12,) * 12,
+            # Legacy fixed-RED buffers conflict with the primary-team roster.
+            expected_status=SolverStatus.INFEASIBLE,
         ),
     )
 
@@ -426,8 +431,7 @@ def _split_availability_complete_profile() -> QualityScenario:
             special_rule_satisfied_count=0,
             unassigned_codes={},
             wave_fill=(12,) * 12,
-            # The only RED-eligible buffer player is weaker than the remaining
-            # YELLOW/GREEN pool in both availability segments.
+            # The globally strongest buffers cannot enter the primary team.
             expected_status=SolverStatus.INFEASIBLE,
         ),
     )
@@ -485,8 +489,7 @@ def _fixed_lead_buffer_with_player_limits() -> QualityScenario:
             max_strength_order_violation_count=13,
             unassigned_codes={"UNASSIGNED_PLAYER_CONFLICT": 36},
             wave_fill=(12,) * 12,
-            # Both RED-only buffer players are collectively weaker than the
-            # four players that must fill YELLOW/GREEN across all waves.
+            # The two RED-only players are not the globally strongest buffers.
             expected_status=SolverStatus.INFEASIBLE,
         ),
     )

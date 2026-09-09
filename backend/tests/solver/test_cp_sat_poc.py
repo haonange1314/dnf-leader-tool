@@ -153,7 +153,50 @@ def test_builtin_rule_reports_infeasible_when_locks_conflict_with_buffer_structu
     assert result.status == SolverStatus.INFEASIBLE
 
 
-def test_builtin_rule_reports_infeasible_when_locks_invert_buffer_strength_order() -> None:
+def test_builtin_rule_places_global_strongest_and_weakest_buffers_in_red() -> None:
+    participants = tuple(
+        [
+            SolverParticipant(
+                f"damage-{index}", f"damage-player-{index}", RoleType.DAMAGE, 1_000
+            )
+            for index in range(8)
+        ]
+        + [
+            SolverParticipant(
+                f"buffer-{index}",
+                f"buffer-player-{index}",
+                RoleType.BUFFER,
+                (index + 1) * 100,
+            )
+            for index in range(4)
+        ]
+    )
+
+    solver_input = SolverInput(
+        dungeon=default_raid_12_input().dungeon,
+        wave_count=1,
+        participants=participants,
+        time_limit_seconds=3,
+    )
+    result = solve(solver_input)
+
+    participant_by_id = {
+        participant.participant_id: participant for participant in participants
+    }
+    red_buffer_scores = {
+        participant_by_id[assignment.participant_id].score
+        for assignment in result.assignments
+        if assignment.team_key == "RED"
+        and participant_by_id[assignment.participant_id].role_type == RoleType.BUFFER
+    }
+
+    assert result.status in {SolverStatus.OPTIMAL, SolverStatus.FEASIBLE}
+    assert red_buffer_scores == {100, 400}
+    assert result.objective_summary.buffer_placement_count == 4
+    assert result.objective_summary.strength_order_violation_count == 0
+
+
+def test_builtin_rule_rejects_lock_that_moves_strongest_buffer_out_of_red() -> None:
     participants = tuple(
         [
             SolverParticipant(
@@ -177,10 +220,7 @@ def test_builtin_rule_reports_infeasible_when_locks_invert_buffer_strength_order
             dungeon=default_raid_12_input().dungeon,
             wave_count=1,
             participants=participants,
-            locked_assignments=(
-                LockedAssignment("buffer-0", 1, "YELLOW"),
-                LockedAssignment("buffer-3", 1, "GREEN"),
-            ),
+            locked_assignments=(LockedAssignment("buffer-3", 1, "GREEN"),),
             time_limit_seconds=3,
         )
     )
@@ -251,10 +291,10 @@ def test_late_stage_timeout_keeps_incumbent_and_records_remaining_stages(
     stage_by_code = {stage.code: stage for stage in result.objective_stages}
     assert {
         "COMPOSITION_PRIORITY",
-        "STRENGTH_ORDER",
         "BALANCE_DAMAGE",
         "BALANCE_BUFFER",
     } <= stage_by_code.keys()
+    assert "STRENGTH_ORDER" not in stage_by_code
     assert result.status == SolverStatus.FEASIBLE
     assert stage_by_code["BALANCE_DAMAGE"].value == result.objective_summary.damage_spread
     assert stage_by_code["BALANCE_BUFFER"].value == result.objective_summary.buffer_spread
