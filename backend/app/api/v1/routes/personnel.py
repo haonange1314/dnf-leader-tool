@@ -10,8 +10,9 @@ from sqlalchemy.orm import selectinload
 from app.api.dependencies import DbSession, RosterReader, RosterWriter
 from app.core.errors import AppError
 from app.domain.personnel import normalize_key
+from app.domain.scoring.buffer_conversion import calculate_actual_buffer_score
+from app.models.buffer_conversion import BufferConversionVersion
 from app.models.personnel import Character, Player
-from app.models.schedule import ScheduleParticipant, SchedulePlayerPreference
 from app.schemas.personnel import (
     BatchUpdateResult,
     CharacterBatchUpdate,
@@ -28,6 +29,23 @@ from app.schemas.personnel import (
 router = APIRouter()
 
 
+def _annotate_actual_scores(db: DbSession, characters: list[Character]) -> None:
+    version = db.scalar(
+        select(BufferConversionVersion)
+        .where(BufferConversionVersion.is_active.is_(True))
+        .order_by(BufferConversionVersion.version.desc())
+        .limit(1)
+    )
+    rules = version.rules if version is not None else []
+    for character in characters:
+        actual = (
+            calculate_actual_buffer_score(character.buffer_score, character.profession, rules)
+            if character.role_type == "BUFFER" and character.buffer_score is not None
+            else None
+        )
+        character.actual_buffer_score = actual
+
+
 def _commit(db: DbSession, duplicate_message: str) -> None:
     try:
         db.commit()
@@ -36,22 +54,12 @@ def _commit(db: DbSession, duplicate_message: str) -> None:
         raise AppError(409, "PERSONNEL_DUPLICATE", duplicate_message) from exc
 
 
-def _commit_delete(db: DbSession, message: str) -> None:
-    try:
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        raise AppError(409, "PERSONNEL_DELETE_REFERENCED", message) from exc
-
-
 @router.get("/players", response_model=PlayerList)
 def list_players(
     db: DbSession,
     current_user: RosterReader,
     search: str | None = None,
     role_type: str | None = Query(default=None, alias="roleType", pattern="^(DAMAGE|BUFFER)$"),
-    is_treasure: bool | None = Query(default=None, alias="isTreasure"),
-    default_participant: bool | None = Query(default=None, alias="defaultParticipant"),
     is_active: bool | None = Query(default=None, alias="isActive"),
 ) -> PlayerList:
     del current_user
@@ -72,16 +80,15 @@ def list_players(
     character_filters = []
     if role_type:
         character_filters.append(Character.role_type == role_type)
-    if is_treasure is not None:
-        character_filters.append(Character.is_treasure_damage == is_treasure)
-    if default_participant is not None:
-        character_filters.append(Character.default_raid_participant == default_participant)
     if character_filters:
         stmt = stmt.join(Player.characters)
         filters.extend(character_filters)
     if filters:
         stmt = stmt.where(*filters).distinct()
     players = list(db.scalars(stmt).unique())
+    _annotate_actual_scores(
+        db, [character for player in players for character in player.characters]
+    )
     db.commit()
     return PlayerList(
         items=[PlayerView.model_validate(player) for player in players], total=len(players)
@@ -102,6 +109,7 @@ def create_player(payload: PlayerCreate, db: DbSession, current_user: RosterWrit
     db.add(player)
     _commit(db, "玩家称呼或同玩家相同职业已存在")
     db.refresh(player)
+    _annotate_actual_scores(db, list(player.characters))
     return player
 
 
@@ -128,6 +136,7 @@ def get_player(player_id: uuid.UUID, db: DbSession, current_user: RosterReader) 
     )
     if player is None:
         raise AppError(404, "PLAYER_NOT_FOUND", "玩家不存在")
+    _annotate_actual_scores(db, list(player.characters))
     db.commit()
     return player
 
@@ -145,6 +154,7 @@ def update_player(
     player.is_active = payload.is_active
     _commit(db, "玩家称呼已存在")
     db.refresh(player)
+    _annotate_actual_scores(db, list(player.characters))
     return player
 
 
@@ -161,32 +171,8 @@ def delete_player(
     )
     if player is None:
         raise AppError(404, "PLAYER_NOT_FOUND", "玩家不存在")
-    participant_count = db.scalar(
-        select(func.count())
-        .select_from(ScheduleParticipant)
-        .where(
-            ScheduleParticipant.character_id.in_(
-                select(Character.id).where(Character.player_id == player_id)
-            )
-        )
-    ) or 0
-    preference_count = db.scalar(
-        select(func.count())
-        .select_from(SchedulePlayerPreference)
-        .where(SchedulePlayerPreference.player_id == player_id)
-    ) or 0
-    if participant_count or preference_count:
-        raise AppError(
-            409,
-            "PERSONNEL_DELETE_REFERENCED",
-            "该玩家已被排表引用，不能永久删除，请改用停用",
-            details={
-                "scheduleParticipants": participant_count,
-                "schedulePreferences": preference_count,
-            },
-        )
     db.delete(player)
-    _commit_delete(db, "该玩家已被排表引用，不能永久删除，请改用停用")
+    db.commit()
 
 
 @router.post("/players/{player_id}/characters", response_model=CharacterView, status_code=201)
@@ -202,6 +188,7 @@ def create_character(
     db.add(character)
     _commit(db, "同一玩家不能存在相同职业")
     db.refresh(character)
+    _annotate_actual_scores(db, [character])
     return character
 
 
@@ -236,6 +223,7 @@ def update_character(
     _apply_character(character, payload)
     _commit(db, "同一玩家不能存在相同职业")
     db.refresh(character)
+    _annotate_actual_scores(db, [character])
     return character
 
 
@@ -247,20 +235,8 @@ def delete_character(
     character = db.get(Character, character_id, with_for_update=True)
     if character is None:
         raise AppError(404, "CHARACTER_NOT_FOUND", "角色不存在")
-    participant_count = db.scalar(
-        select(func.count())
-        .select_from(ScheduleParticipant)
-        .where(ScheduleParticipant.character_id == character_id)
-    ) or 0
-    if participant_count:
-        raise AppError(
-            409,
-            "PERSONNEL_DELETE_REFERENCED",
-            "该角色已被排表引用，不能永久删除，请改用停用",
-            details={"scheduleParticipants": participant_count},
-        )
     db.delete(character)
-    _commit_delete(db, "该角色已被排表引用，不能永久删除，请改用停用")
+    db.commit()
 
 
 @router.post("/characters/{character_id}/deactivate", response_model=CharacterView)
@@ -274,6 +250,7 @@ def deactivate_character(
     character.is_active = False
     db.commit()
     db.refresh(character)
+    _annotate_actual_scores(db, [character])
     return character
 
 
@@ -285,8 +262,6 @@ def batch_update_characters(
     values: dict[str, bool] = {}
     if payload.is_active is not None:
         values["is_active"] = payload.is_active
-    if payload.default_raid_participant is not None:
-        values["default_raid_participant"] = payload.default_raid_participant
     result = cast(
         CursorResult[Any],
         db.execute(update(Character).where(Character.id.in_(payload.ids)).values(**values)),
@@ -337,9 +312,4 @@ def _apply_character(character: Character, payload: CharacterCreate | CharacterU
     character.role_type = payload.role_type.value
     character.damage_score = payload.damage_score
     character.buffer_score = payload.buffer_score
-    character.is_treasure_damage = payload.is_treasure_damage
-    character.is_fixed_lead_team_buffer = payload.is_fixed_lead_team_buffer
-    character.is_group_hunt = payload.is_group_hunt
-    character.default_raid_participant = payload.default_raid_participant
-    character.note = payload.note.strip() if payload.note else None
     character.is_active = payload.is_active

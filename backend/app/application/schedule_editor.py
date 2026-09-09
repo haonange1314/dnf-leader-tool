@@ -104,7 +104,7 @@ def recompute_schedule(schedule: Schedule, version: DungeonVersion) -> None:
             )
             team.buffer_total = sum(
                 (
-                    member.buffer_score_snapshot or Decimal(0)
+                    member.actual_buffer_score_snapshot or Decimal(0)
                     for member in members
                     if member.role_type_snapshot == "BUFFER"
                 ),
@@ -143,7 +143,6 @@ def recompute_schedule(schedule: Schedule, version: DungeonVersion) -> None:
                 or location[1].team_key != special.target_team_key_snapshot
                 or participant is None
                 or participant.role_type_snapshot != "DAMAGE"
-                or not participant.is_treasure_snapshot
             ):
                 wave.special_assignments.remove(special)
 
@@ -280,8 +279,8 @@ def _apply_operation(
             or location[1].team_key != rule.target_team_key
         ):
             raise AppError(422, "WAVE_CORE_WRONG_TEAM", "核心角色必须位于该波次的目标队伍")
-        if participant.role_type_snapshot != "DAMAGE" or not participant.is_treasure_snapshot:
-            raise AppError(422, "WAVE_CORE_INELIGIBLE", "只有秘宝 C 可以设置为本波核心")
+        if participant.role_type_snapshot != "DAMAGE":
+            raise AppError(422, "WAVE_CORE_INELIGIBLE", "只有 C 可以设置为特殊角色")
         wave.special_assignments.append(
             WaveSpecialAssignment(
                 id=uuid.uuid4(),

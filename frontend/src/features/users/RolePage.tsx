@@ -44,6 +44,7 @@ const PERMISSION_DEPENDENCIES: Record<string, string[]> = {
   SHARE_MANAGE: ["SCHEDULE_READ"],
   USER_WRITE: ["USER_READ", "ROLE_READ"],
   ROLE_WRITE: ["ROLE_READ"],
+  BUFFER_CONVERSION_WRITE: ["BUFFER_CONVERSION_READ"],
 };
 
 function withPermissionDependencies(values: Array<string | number>): string[] {

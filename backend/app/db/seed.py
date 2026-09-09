@@ -26,15 +26,21 @@ def seed_builtin_dungeons(session: Session) -> tuple[SeedResult, ...]:
         .where(Dungeon.code == definition.dungeon_code)
     )
     if existing is not None:
-        if not any(
-            version.version_no == definition.version_no for version in existing.versions
-        ):
-            formula = _get_or_create_formula(session, definition)
-            existing.versions.append(_build_version(definition, formula))
-            session.flush()
-            return (SeedResult(dungeon_code=definition.dungeon_code, created=True),)
-        _validate_existing_builtin(existing, definition)
-        return (SeedResult(dungeon_code=definition.dungeon_code, created=False),)
+        if any(not _builtin_version_drift(version, definition) for version in existing.versions):
+            return (SeedResult(dungeon_code=definition.dungeon_code, created=False),)
+        formula = _get_or_create_formula(session, definition)
+        for version in existing.versions:
+            if version.status == "PUBLISHED":
+                version.status = "RETIRED"
+        next_version_no = max(
+            definition.version_no,
+            max((version.version_no for version in existing.versions), default=0) + 1,
+        )
+        existing.versions.append(
+            _build_version(definition, formula, version_no=next_version_no)
+        )
+        session.flush()
+        return (SeedResult(dungeon_code=definition.dungeon_code, created=True),)
 
     formula = _get_or_create_formula(session, definition)
     dungeon = Dungeon(
@@ -50,10 +56,13 @@ def seed_builtin_dungeons(session: Session) -> tuple[SeedResult, ...]:
 
 
 def _build_version(
-    definition: DungeonVersionDefinition, formula: FormulaVersion
+    definition: DungeonVersionDefinition,
+    formula: FormulaVersion,
+    *,
+    version_no: int | None = None,
 ) -> DungeonVersion:
     version = DungeonVersion(
-        version_no=definition.version_no,
+        version_no=version_no or definition.version_no,
         status="PUBLISHED",
         default_wave_count=definition.default_wave_count,
         min_wave_count=definition.min_wave_count,
@@ -111,6 +120,15 @@ def _validate_existing_builtin(dungeon: Dungeon, definition: DungeonVersionDefin
     if version is None:
         raise RuntimeError(f"内置副本 {definition.dungeon_code} 缺少 v{definition.version_no}")
 
+    drift = _builtin_version_drift(version, definition)
+    if drift:
+        fields = ", ".join(sorted(set(drift)))
+        raise RuntimeError(f"内置副本 {definition.dungeon_code} 与代码定义不一致: {fields}")
+
+
+def _builtin_version_drift(
+    version: DungeonVersion, definition: DungeonVersionDefinition
+) -> list[str]:
     expected_rules = {
         "composition_rules": definition.composition_rules.model_dump(mode="json", by_alias=True),
         "special_role_rules": definition.special_role_rules.model_dump(mode="json", by_alias=True),
@@ -172,6 +190,4 @@ def _validate_existing_builtin(dungeon: Dungeon, definition: DungeonVersionDefin
     if actual_teams != expected_teams:
         drift.append("teams")
 
-    if drift:
-        fields = ", ".join(sorted(set(drift)))
-        raise RuntimeError(f"内置副本 {definition.dungeon_code} 与代码定义不一致: {fields}")
+    return drift

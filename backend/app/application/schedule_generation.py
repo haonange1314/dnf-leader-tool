@@ -6,6 +6,7 @@ import uuid
 from dataclasses import asdict
 from decimal import Decimal
 
+from app.domain.scoring.buffer_conversion import calculate_actual_buffer_score
 from app.models.dungeon import DungeonVersion, FormulaVersion
 from app.models.schedule import (
     Schedule,
@@ -83,17 +84,20 @@ def build_solver_input(
                 int(participant.damage_score_snapshot * formula.damage_scale)
                 if participant.role_type_snapshot == RoleType.DAMAGE
                 and participant.damage_score_snapshot is not None
-                else int(participant.buffer_score_snapshot * formula.buffer_scale)
+                else int(
+                    calculate_actual_buffer_score(
+                        participant.buffer_score_snapshot,
+                        participant.profession_snapshot,
+                        schedule.buffer_conversion_version.rules,
+                    )
+                    * formula.buffer_scale
+                )
                 if participant.buffer_score_snapshot is not None
                 else 0
             ),
-            is_treasure_damage=participant.is_treasure_snapshot,
+            is_treasure_damage=False,
             allowed_waves=_allowed_waves(participant.player_id_snapshot, preference_by_player),
-            allowed_team_keys=(
-                _lead_team_keys(definition)
-                if participant.is_fixed_lead_team_buffer_snapshot
-                else None
-            ),
+            allowed_team_keys=None,
         )
         for participant in schedule.participants
         if participant.is_selected
@@ -326,21 +330,11 @@ def _allowed_waves(
     return tuple(allowed_waves) if allowed_waves is not None else None
 
 
-def _lead_team_keys(definition: DungeonVersionDefinition) -> tuple[str, ...] | None:
-    ranked_teams = [team for team in definition.teams if team.strength_rank is not None]
-    if not ranked_teams:
-        return None
-    lead_rank = min(
-        team.strength_rank for team in ranked_teams if team.strength_rank is not None
-    )
-    return tuple(team.team_key for team in ranked_teams if team.strength_rank == lead_rank)
-
-
 def _participant_score(participant: ScheduleParticipant) -> int:
     role_type = participant.role_type_snapshot
     score = (
         participant.damage_score_snapshot
         if role_type == RoleType.DAMAGE
-        else participant.buffer_score_snapshot
+        else participant.actual_buffer_score_snapshot
     )
     return int((score or 0) * 100)

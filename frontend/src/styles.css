@@ -1100,3 +1100,29 @@ body {
     grid-column: 1 / -1;
   }
 }
+.buffer-conversion-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr);
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+@media (max-width: 900px) {
+  .buffer-conversion-grid { grid-template-columns: 1fr; }
+}
+.buffer-conversion-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr);
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.buffer-conversion-grid .ant-form-item {
+  margin-bottom: 8px;
+}
+
+@media (max-width: 900px) {
+  .buffer-conversion-grid {
+    grid-template-columns: 1fr;
+  }
+}

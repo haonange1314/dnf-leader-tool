@@ -489,9 +489,7 @@ def test_deepseek_provider_requests_json_and_validates_response() -> None:
         "characterName": "剑魂",
         "profession": "剑魂",
         "roleType": "DAMAGE",
-        "isTreasureDamage": False,
-        "isGroupHunt": False,
-        "allowedWaves": None,
+            "allowedWaves": None,
         "maxWaveCount": None,
         "allowedTeamNames": None,
     }

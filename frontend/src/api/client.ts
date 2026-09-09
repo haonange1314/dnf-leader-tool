@@ -45,6 +45,18 @@ export interface AuditLog {
   details: Record<string, unknown>;
   createdAt: string;
 }
+export interface BufferConversionRule {
+  profession: string;
+  multiplier: string;
+}
+export interface BufferConversionVersion {
+  id: string;
+  version: number;
+  rules: BufferConversionRule[];
+  isActive: boolean;
+  createdBy: string | null;
+  createdAt: string;
+}
 export interface EditLock {
   scheduleId: string;
   held: boolean;
@@ -146,11 +158,7 @@ export interface Character {
   roleType: "DAMAGE" | "BUFFER";
   damageScore: string | null;
   bufferScore: string | null;
-  isTreasureDamage: boolean;
-  isFixedLeadTeamBuffer: boolean;
-  isGroupHunt: boolean;
-  defaultRaidParticipant: boolean;
-  note: string | null;
+  actualBufferScore: string | null;
   isActive: boolean;
 }
 export interface Player {
@@ -169,14 +177,11 @@ export interface ImportBatch {
     create: number;
     update: number;
     ignore: number;
-    deactivate: number;
-    deactivate_players: number;
     delete?: number;
     delete_players?: number;
     reactivate_players: number;
     reorder: number;
     sync_fingerprint?: number;
-    deactivation_fingerprint?: number;
     error: number;
   };
   created_at: string;
@@ -191,8 +196,6 @@ export interface ImportChange {
     | "REACTIVATE"
     | "DELETE_PLAYER"
     | "DELETE_CHARACTER"
-    | "DEACTIVATE_PLAYER"
-    | "DEACTIVATE_CHARACTER"
     | "REORDER";
   player_name: string;
   profession: string | null;
@@ -226,6 +229,7 @@ export interface ScheduleSummary {
   id: string;
   name: string;
   dungeonVersionId: string;
+  bufferConversionVersionId: string;
   waveCount: number;
   status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
   revision: number;
@@ -236,7 +240,7 @@ export interface ScheduleSummary {
 }
 export interface ScheduleParticipant {
   id: string;
-  characterId: string;
+  characterId: string | null;
   playerIdSnapshot: string;
   playerNameSnapshot: string;
   characterNameSnapshot: string;
@@ -244,9 +248,7 @@ export interface ScheduleParticipant {
   roleTypeSnapshot: "DAMAGE" | "BUFFER";
   damageScoreSnapshot: string | null;
   bufferScoreSnapshot: string | null;
-  isTreasureSnapshot: boolean;
-  isFixedLeadTeamBufferSnapshot: boolean;
-  isGroupHuntSnapshot: boolean;
+  actualBufferScoreSnapshot: string | null;
   isSelected: boolean;
   isLocked: boolean;
   unassignedReason: Record<string, unknown> | null;

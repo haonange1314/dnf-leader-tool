@@ -7,7 +7,7 @@ from app.application.schedule_rules import (
 from app.domain.schedule.rules import rule_context_hash
 
 
-def test_build_rule_context_snapshots_availability_and_fixed_team_constraints() -> None:
+def test_build_rule_context_snapshots_availability() -> None:
     player_id = "player-1"
     schedule = SimpleNamespace(
         id="schedule-1",
@@ -28,9 +28,6 @@ def test_build_rule_context_snapshots_availability_and_fixed_team_constraints() 
                 character_name_snapshot="奶爸",
                 profession_snapshot="奶爸",
                 role_type_snapshot="BUFFER",
-                is_treasure_snapshot=False,
-                is_fixed_lead_team_buffer_snapshot=True,
-                is_group_hunt_snapshot=False,
                 is_selected=True,
             )
         ],
@@ -60,7 +57,7 @@ def test_build_rule_context_snapshots_availability_and_fixed_team_constraints() 
     assert [team.team_key for team in context.teams] == ["RED", "YELLOW"]
     assert context.participants[0].allowed_waves == (1, 2)
     assert context.participants[0].max_wave_count == 1
-    assert context.participants[0].allowed_team_keys == ("RED",)
+    assert context.participants[0].allowed_team_keys is None
 
 
 def test_active_rule_set_context_detects_constraint_changes() -> None:
@@ -97,9 +94,6 @@ def _schedule_fixture() -> SimpleNamespace:
                 character_name_snapshot="奶爸",
                 profession_snapshot="奶爸",
                 role_type_snapshot="BUFFER",
-                is_treasure_snapshot=False,
-                is_fixed_lead_team_buffer_snapshot=False,
-                is_group_hunt_snapshot=False,
                 is_selected=True,
             )
         ],

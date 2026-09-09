@@ -9,7 +9,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, File, UploadFile
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
@@ -20,7 +20,6 @@ from app.core.security import utc_now
 from app.domain.personnel import normalize_key
 from app.imports import (
     CharacterExportRow,
-    CharacterImportDefaults,
     build_error_workbook,
     build_roster_workbook,
     build_template,
@@ -28,7 +27,6 @@ from app.imports import (
 )
 from app.models.imports import ImportBatch, ImportRow
 from app.models.personnel import Character, Player
-from app.models.schedule import ScheduleParticipant, SchedulePlayerPreference
 from app.schemas.imports import ImportBatchListView, ImportBatchSummaryView, ImportBatchView
 
 router = APIRouter()
@@ -38,26 +36,12 @@ router = APIRouter()
 class RosterSyncPlan:
     delete_players: list[Player]
     delete_characters: list[Character]
-    deactivate_players: list[Player]
-    deactivate_characters: list[Character]
-
-
-def _character_import_defaults() -> CharacterImportDefaults:
-    settings = get_settings()
-    return CharacterImportDefaults(
-        is_treasure_damage=settings.import_default_treasure_damage,
-        is_fixed_lead_team_buffer=settings.import_default_fixed_lead_team_buffer,
-        is_group_hunt=settings.import_default_group_hunt,
-        default_raid_participant=settings.import_default_raid_participant,
-    )
 
 
 @router.get("/template")
 def download_template(current_user: RosterReader) -> StreamingResponse:
     del current_user
-    return _xlsx_response(
-        build_template(_character_import_defaults()), "DNF角色导入模板.xlsx"
-    )
+    return _xlsx_response(build_template(), "DNF角色导入模板.xlsx")
 
 
 @router.get("/export.xlsx")
@@ -78,10 +62,6 @@ def download_current_roster(db: DbSession, current_user: RosterReader) -> Stream
             role_type=character.role_type,
             damage_score=character.damage_score,
             buffer_score=character.buffer_score,
-            is_treasure_damage=character.is_treasure_damage,
-            is_fixed_lead_team_buffer=character.is_fixed_lead_team_buffer,
-            is_group_hunt=character.is_group_hunt,
-            default_raid_participant=character.default_raid_participant,
         )
         for player in players
         for character in player.characters
@@ -89,7 +69,7 @@ def download_current_roster(db: DbSession, current_user: RosterReader) -> Stream
     ]
     db.commit()
     try:
-        content = build_roster_workbook(rows, _character_import_defaults())
+        content = build_roster_workbook(rows)
     except ValueError as exc:
         raise AppError(409, "ROSTER_EXPORT_INVALID", str(exc)) from exc
     return _xlsx_response(content, "DNF当前人员表.xlsx")
@@ -136,10 +116,15 @@ async def preview_import(
         parsed_rows = parse_character_workbook(
             content,
             settings.import_max_rows,
-            _character_import_defaults(),
         )
     except ValueError as exc:
         raise AppError(422, "IMPORT_WORKBOOK_INVALID", str(exc)) from exc
+
+    # A preview is a short-lived view of the next complete roster state. Keeping
+    # older previews would let a user confirm a file that is no longer the latest
+    # source of truth, so every successful upload invalidates previous previews.
+    db.execute(text("LOCK TABLE import_batches IN SHARE ROW EXCLUSIVE MODE"))
+    db.execute(delete(ImportBatch).where(ImportBatch.status == "PREVIEWED"))
 
     players = list(
         db.scalars(
@@ -156,14 +141,12 @@ async def preview_import(
         "create": 0,
         "update": 0,
         "ignore": 0,
-        "deactivate": 0,
-        "deactivate_players": 0,
         "delete": 0,
         "delete_players": 0,
         "reactivate_players": 0,
         "reorder": 0,
         "error": 0,
-        "sync": 2,
+        "sync": 3,
         "sync_fingerprint": 0,
     }
     batch = ImportBatch(
@@ -201,6 +184,8 @@ async def preview_import(
             action = "ERROR"
         elif character is not None:
             changes = _changes(character, parsed.payload)
+            if player is not None and player.display_name != parsed.payload["player_name"]:
+                changes.insert(0, "玩家名称")
             if reactivate_player:
                 changes.insert(0, "玩家状态")
             action = "UPDATE" if changes else "IGNORE"
@@ -248,8 +233,6 @@ async def preview_import(
         )
         summary["delete"] = len(sync_plan.delete_characters)
         summary["delete_players"] = len(sync_plan.delete_players)
-        summary["deactivate"] = len(sync_plan.deactivate_characters)
-        summary["deactivate_players"] = len(sync_plan.deactivate_players)
         summary["sync_fingerprint"] = _sync_fingerprint(sync_plan)
         change_details.extend(
             {
@@ -270,26 +253,6 @@ async def preview_import(
                 "fields": ["永久删除角色"],
             }
             for character in sync_plan.delete_characters
-        )
-        change_details.extend(
-            {
-                "action": "DEACTIVATE_PLAYER",
-                "player_name": player.display_name,
-                "profession": None,
-                "row_no": None,
-                "fields": ["已有排表引用，改为停用玩家"],
-            }
-            for player in sync_plan.deactivate_players
-        )
-        change_details.extend(
-            {
-                "action": "DEACTIVATE_CHARACTER",
-                "player_name": character.player.display_name,
-                "profession": character.profession,
-                "row_no": None,
-                "fields": ["已有排表引用，改为停用角色"],
-            }
-            for character in sync_plan.deactivate_characters
         )
         ordering_changes = _ordering_change_details(
             players,
@@ -319,12 +282,12 @@ def get_import(batch_id: uuid.UUID, db: DbSession, current_user: RosterImporter)
 @router.post("/{batch_id}/commit", response_model=ImportBatchView)
 def commit_import(batch_id: uuid.UUID, db: DbSession, current_user: RosterImporter) -> ImportBatch:
     del current_user
-    batch = _load_batch(db, batch_id)
+    batch = _load_batch(db, batch_id, for_update=True)
     if batch.status != "PREVIEWED":
         raise AppError(409, "IMPORT_ALREADY_COMMITTED", "该导入批次已经确认")
     if any(row.action == "ERROR" for row in batch.rows):
         raise AppError(409, "IMPORT_HAS_ERRORS", "请先修正错误行后重新预览")
-    if batch.summary.get("sync") != 2:
+    if batch.summary.get("sync") != 3:
         raise AppError(409, "IMPORT_PREVIEW_EXPIRED", "导入规则已更新，请重新预览")
     imported_professions = _imported_professions(row.payload for row in batch.rows)
     existing_players = list(
@@ -334,9 +297,6 @@ def commit_import(batch_id: uuid.UUID, db: DbSession, current_user: RosterImport
     if (
         len(sync_plan.delete_characters) != batch.summary.get("delete", 0)
         or len(sync_plan.delete_players) != batch.summary.get("delete_players", 0)
-        or len(sync_plan.deactivate_characters) != batch.summary.get("deactivate", 0)
-        or len(sync_plan.deactivate_players)
-        != batch.summary.get("deactivate_players", 0)
         or _sync_fingerprint(sync_plan) != batch.summary.get("sync_fingerprint")
     ):
         raise AppError(409, "IMPORT_DATA_CHANGED", "人员数据已变化，请重新预览")
@@ -363,6 +323,8 @@ def commit_import(batch_id: uuid.UUID, db: DbSession, current_user: RosterImport
                 db.flush()
             player_cache[payload["player_key"]] = player
         player.is_active = True
+        player.display_name = str(payload["player_name"])
+        player.display_name_key = str(payload["player_key"])
         if player.id not in imported_player_id_set:
             imported_player_ids.append(player.id)
             imported_player_id_set.add(player.id)
@@ -395,10 +357,6 @@ def commit_import(batch_id: uuid.UUID, db: DbSession, current_user: RosterImport
         if row.action != "IGNORE":
             _apply_payload(character, payload)
 
-    for character in sync_plan.deactivate_characters:
-        character.is_active = False
-    for player in sync_plan.deactivate_players:
-        player.is_active = False
     for character in sync_plan.delete_characters:
         db.delete(character)
     for player in sync_plan.delete_players:
@@ -458,12 +416,17 @@ def download_errors(
     return _xlsx_response(build_error_workbook(rows), f"{batch_id}-errors.xlsx")
 
 
-def _load_batch(db: DbSession, batch_id: uuid.UUID) -> ImportBatch:
-    batch = db.scalar(
+def _load_batch(
+    db: DbSession, batch_id: uuid.UUID, *, for_update: bool = False
+) -> ImportBatch:
+    stmt = (
         select(ImportBatch)
         .where(ImportBatch.id == batch_id)
         .options(selectinload(ImportBatch.rows))
     )
+    if for_update:
+        stmt = stmt.with_for_update()
+    batch = db.scalar(stmt)
     if batch is None:
         raise AppError(404, "IMPORT_BATCH_NOT_FOUND", "导入批次不存在")
     return batch
@@ -478,27 +441,11 @@ def _changes(character: Character, payload: dict[str, object]) -> list[str]:
             character.damage_score,
             _payload_decimal(payload["damage_score"]),
         ),
-        "奶评分": (
+        "站街奶量": (
             character.buffer_score,
             _payload_decimal(payload["buffer_score"]),
         ),
     }
-    if _field_was_provided(payload, "is_treasure_damage"):
-        fields["秘宝C"] = (character.is_treasure_damage, payload["is_treasure_damage"])
-    if _field_was_provided(payload, "is_fixed_lead_team_buffer"):
-        fields["固定红队奶"] = (
-            character.is_fixed_lead_team_buffer,
-            payload["is_fixed_lead_team_buffer"],
-        )
-    if _field_was_provided(payload, "is_group_hunt"):
-        fields["群猎"] = (character.is_group_hunt, payload["is_group_hunt"])
-    if _field_was_provided(payload, "note"):
-        fields["备注"] = (character.note, payload["note"])
-    if _field_was_provided(payload, "default_raid_participant"):
-        fields["默认参团"] = (
-            character.default_raid_participant,
-            payload["default_raid_participant"],
-        )
     return [name for name, (old, new) in fields.items() if old != new]
 
 
@@ -519,41 +466,16 @@ def _build_roster_sync_plan(
     players: list[Player],
     imported_professions: dict[str, set[str]],
 ) -> RosterSyncPlan:
-    character_ids = [character.id for player in players for character in player.characters]
-    player_ids = [player.id for player in players]
-    referenced_character_ids = set(
-        db.scalars(
-            select(ScheduleParticipant.character_id).where(
-                ScheduleParticipant.character_id.in_(character_ids)
-            )
-        )
-    ) if character_ids else set()
-    referenced_player_ids = set(
-        db.scalars(
-            select(SchedulePlayerPreference.player_id).where(
-                SchedulePlayerPreference.player_id.in_(player_ids)
-            )
-        )
-    ) if player_ids else set()
-    return _roster_sync_plan(
-        players,
-        imported_professions,
-        referenced_player_ids=referenced_player_ids,
-        referenced_character_ids=referenced_character_ids,
-    )
+    del db
+    return _roster_sync_plan(players, imported_professions)
 
 
 def _roster_sync_plan(
     players: list[Player],
     imported_professions: dict[str, set[str]],
-    *,
-    referenced_player_ids: set[uuid.UUID],
-    referenced_character_ids: set[uuid.UUID],
 ) -> RosterSyncPlan:
     delete_players: list[Player] = []
     delete_characters: list[Character] = []
-    deactivate_players: list[Player] = []
-    deactivate_characters: list[Character] = []
     for player in players:
         professions = imported_professions.get(player.display_name_key)
         missing_characters = (
@@ -566,36 +488,19 @@ def _roster_sync_plan(
             ]
         )
         if professions is None:
-            has_reference = (
-                player.id in referenced_player_ids
-                or any(
-                    character.id in referenced_character_ids
-                    for character in player.characters
-                )
-            )
-            if not has_reference:
-                delete_players.append(player)
-            elif player.is_active:
-                deactivate_players.append(player)
+            delete_players.append(player)
         for character in missing_characters:
-            if character.id in referenced_character_ids:
-                if character.is_active:
-                    deactivate_characters.append(character)
-            else:
+            if professions is not None:
                 delete_characters.append(character)
     return RosterSyncPlan(
         delete_players=delete_players,
         delete_characters=delete_characters,
-        deactivate_players=deactivate_players,
-        deactivate_characters=deactivate_characters,
     )
 
 
 def _sync_fingerprint(plan: RosterSyncPlan) -> int:
     parts = [*(f"DP:{player.id}" for player in plan.delete_players)]
     parts.extend(f"DC:{character.id}" for character in plan.delete_characters)
-    parts.extend(f"XP:{player.id}" for player in plan.deactivate_players)
-    parts.extend(f"XC:{character.id}" for character in plan.deactivate_characters)
     material = "\n".join(sorted(parts)).encode()
     return int(sha256(material).hexdigest()[:13], 16)
 
@@ -709,27 +614,7 @@ def _apply_payload(character: Character, payload: dict[str, object]) -> None:
     character.role_type = str(payload["role_type"])
     character.damage_score = payload["damage_score"]  # type: ignore[assignment]
     character.buffer_score = payload["buffer_score"]  # type: ignore[assignment]
-    if _field_was_provided(payload, "is_treasure_damage"):
-        character.is_treasure_damage = bool(payload["is_treasure_damage"])
-    if _field_was_provided(payload, "is_fixed_lead_team_buffer"):
-        character.is_fixed_lead_team_buffer = bool(payload["is_fixed_lead_team_buffer"])
-    if _field_was_provided(payload, "is_group_hunt"):
-        character.is_group_hunt = bool(payload["is_group_hunt"])
-    if character.role_type == "DAMAGE":
-        character.is_fixed_lead_team_buffer = False
-    else:
-        character.is_treasure_damage = False
-        character.is_group_hunt = False
-    if _field_was_provided(payload, "default_raid_participant"):
-        character.default_raid_participant = bool(payload["default_raid_participant"])
-    if _field_was_provided(payload, "note"):
-        character.note = str(payload["note"]) if payload["note"] else None
     character.is_active = True
-
-
-def _field_was_provided(payload: dict[str, object], field: str) -> bool:
-    provided = payload.get("provided_fields")
-    return isinstance(provided, list) and field in provided
 
 
 def _payload_decimal(value: object) -> Decimal | None:

@@ -1361,12 +1361,12 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
         const leftScore = Number(
           left.roleTypeSnapshot === "DAMAGE"
             ? left.damageScoreSnapshot
-            : left.bufferScoreSnapshot,
+            : left.actualBufferScoreSnapshot,
         );
         const rightScore = Number(
           right.roleTypeSnapshot === "DAMAGE"
             ? right.damageScoreSnapshot
-            : right.bufferScoreSnapshot,
+            : right.actualBufferScoreSnapshot,
         );
         return rightScore - leftScore;
       }
@@ -2237,7 +2237,7 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
         okButtonProps={{ disabled: !canGenerateSchedule }}
       >
         <Typography.Paragraph type="secondary">
-          求解器会优先安排更多角色、填满前面波次并优化队伍组成、核心秘宝、跨波平衡和强度顺序。
+          求解器会优先安排更多角色、填满前面波次并优化队伍组成、跨波平衡和强度顺序。
         </Typography.Paragraph>
         {validation ? (
           <Alert
@@ -3071,7 +3071,7 @@ export function applyOptimisticAssignment(
         members.reduce((total, item) => total + Number(item.damageScoreSnapshot ?? 0), 0),
       );
       team.bufferTotal = String(
-        members.reduce((total, item) => total + Number(item.bufferScoreSnapshot ?? 0), 0),
+        members.reduce((total, item) => total + Number(item.actualBufferScoreSnapshot ?? 0), 0),
       );
     }
     wave.damageTotal = String(

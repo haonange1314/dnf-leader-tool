@@ -302,6 +302,9 @@ def copy_schedule_version_as_draft(
         name=payload.name,
         dungeon_version_id=uuid.UUID(str(snapshot["dungeonVersionId"])),
         formula_version_id=version.formula_version_id,
+        buffer_conversion_version_id=uuid.UUID(
+            str(snapshot["bufferConversionVersionId"])
+        ),
         wave_count=int(str(snapshot["waveCount"])),
         status="DRAFT",
         note=str(snapshot["note"]) if snapshot.get("note") is not None else None,

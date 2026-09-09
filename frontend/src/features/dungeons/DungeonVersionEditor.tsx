@@ -520,54 +520,8 @@ function OptimizationFields({
   teamOptions: Array<{ label: string; value: string }>;
   readOnly: boolean;
 }) {
-  const treasureEnabled = Form.useWatch("treasureRuleEnabled");
   return (
     <>
-      <Card size="small" title="秘宝 C 规则" className="dungeon-editor-section">
-        <Form.Item
-          label="启用每波秘宝 C 核心"
-          name="treasureRuleEnabled"
-          valuePropName="checked"
-        >
-          <Switch />
-        </Form.Item>
-        {treasureEnabled && (
-          <Row gutter={12}>
-            <Col xs={24} md={6}>
-              <Form.Item label="每波数量" name="treasureCount">
-                <InputNumber min={1} max={64} className="full-width" />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={8}>
-              <Form.Item
-                label="目标队伍"
-                name="treasureTargetTeamKey"
-                rules={[{ required: true, message: "请选择目标队伍" }]}
-              >
-                <Select options={teamOptions} />
-              </Form.Item>
-            </Col>
-            <Col xs={12} md={5}>
-              <Form.Item
-                label="完整波必须满足"
-                name="treasureRequired"
-                valuePropName="checked"
-              >
-                <Switch />
-              </Form.Item>
-            </Col>
-            <Col xs={12} md={5}>
-              <Form.Item
-                label="搭配较弱普通 C"
-                name="treasureCompanionOptimization"
-                valuePropName="checked"
-              >
-                <Switch />
-              </Form.Item>
-            </Col>
-          </Row>
-        )}
-      </Card>
       <Card size="small" title="强度与跨波优化" className="dungeon-editor-section">
         <Form.List name="strengthOrders">
           {(fields, { add, remove }) => (

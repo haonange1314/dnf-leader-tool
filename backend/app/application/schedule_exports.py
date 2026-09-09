@@ -59,9 +59,7 @@ def snapshot_workbook(snapshot: dict[str, Any], label: str, *, draft: bool = Fal
                 participant = participants.get(participant_id, {})
                 if participant:
                     assigned_ids.add(participant_id)
-                score = participant.get("damageScoreSnapshot") or participant.get(
-                    "bufferScoreSnapshot"
-                )
+                score = _participant_display_score(participant)
                 overview.append(
                     [
                         wave["waveNo"],
@@ -84,7 +82,7 @@ def snapshot_workbook(snapshot: dict[str, Any], label: str, *, draft: bool = Fal
         participant_id = str(participant["id"])
         if not participant.get("isSelected") or participant_id in assigned_ids:
             continue
-        score = participant.get("damageScoreSnapshot") or participant.get("bufferScoreSnapshot")
+        score = _participant_display_score(participant)
         reason = participant.get("unassignedReason")
         unassigned.append(
             [
@@ -132,6 +130,12 @@ def snapshot_workbook(snapshot: dict[str, Any], label: str, *, draft: bool = Fal
     workbook.save(output)
     output.seek(0)
     return output
+
+
+def _participant_display_score(participant: dict[str, Any]) -> object:
+    if participant.get("roleTypeSnapshot") == "BUFFER":
+        return participant.get("actualBufferScoreSnapshot")
+    return participant.get("damageScoreSnapshot")
 
 
 def snapshot_png(snapshot: dict[str, Any], label: str, *, draft: bool = False) -> io.BytesIO:

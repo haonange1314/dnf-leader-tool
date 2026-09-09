@@ -21,7 +21,7 @@ from app.models.schedule import (
 from app.schemas.dungeon import SpecialRoleRules, StrengthOrderRules
 from app.schemas.schedule import IssueView, ScheduleDetail
 
-SNAPSHOT_SCHEMA_VERSION = 3
+SNAPSHOT_SCHEMA_VERSION = 4
 
 
 def create_schedule_snapshot(
@@ -62,6 +62,11 @@ def create_schedule_snapshot(
         "code": version.formula_version.code,
         "version": version.formula_version.version,
         "config": version.formula_version.config,
+    }
+    snapshot["bufferConversion"] = {
+        "id": str(schedule.buffer_conversion_version.id),
+        "version": schedule.buffer_conversion_version.version,
+        "rules": schedule.buffer_conversion_version.rules,
     }
     snapshot["issues"] = [issue.model_dump(mode="json") for issue in issues]
     if schedule.active_rule_set is not None:
@@ -281,7 +286,11 @@ def restore_snapshot(
             ScheduleParticipant(
                 id=participant_id,
                 schedule_id=schedule.id,
-                character_id=uuid.UUID(str(row["characterId"])),
+                character_id=(
+                    uuid.UUID(str(row["characterId"]))
+                    if row.get("characterId") is not None
+                    else None
+                ),
                 player_id_snapshot=uuid.UUID(str(row["playerIdSnapshot"])),
                 player_name_snapshot=str(row["playerNameSnapshot"]),
                 character_name_snapshot=str(row["characterNameSnapshot"]),
@@ -289,11 +298,6 @@ def restore_snapshot(
                 role_type_snapshot=str(row["roleTypeSnapshot"]),
                 damage_score_snapshot=_decimal_or_none(row.get("damageScoreSnapshot")),
                 buffer_score_snapshot=_decimal_or_none(row.get("bufferScoreSnapshot")),
-                is_treasure_snapshot=bool(row["isTreasureSnapshot"]),
-                is_fixed_lead_team_buffer_snapshot=bool(
-                    row.get("isFixedLeadTeamBufferSnapshot", False)
-                ),
-                is_group_hunt_snapshot=bool(row.get("isGroupHuntSnapshot", False)),
                 is_selected=bool(row["isSelected"]),
                 is_locked=bool(row["isLocked"]),
                 unassigned_reason=row.get("unassignedReason"),

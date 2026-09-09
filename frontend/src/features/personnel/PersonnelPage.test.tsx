@@ -22,11 +22,7 @@ const player: Player = {
       roleType: "DAMAGE",
       damageScore: "100.00",
       bufferScore: null,
-      isTreasureDamage: false,
-      isFixedLeadTeamBuffer: false,
-      isGroupHunt: false,
-      defaultRaidParticipant: true,
-      note: null,
+      actualBufferScore: null,
       isActive: true,
     },
   ],
@@ -49,8 +45,6 @@ describe("PersonnelPage", () => {
             create: 0,
             update: 0,
             ignore: 0,
-            deactivate: 0,
-            deactivate_players: 0,
             delete: 0,
             delete_players: 0,
             reactivate_players: 0,
@@ -134,7 +128,6 @@ describe("PersonnelPage", () => {
     expect(await screen.findByText("伤害")).toBeInTheDocument();
     expect(screen.getByText("100")).toBeInTheDocument();
     expect(screen.getByText("启用")).toBeInTheDocument();
-    expect(screen.getByText("参团")).toBeInTheDocument();
     const manageCharacter = screen.getByRole("button", { name: "管理角色 剑魂" });
     expect(manageCharacter).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "停用" })).not.toBeInTheDocument();
@@ -143,13 +136,12 @@ describe("PersonnelPage", () => {
     expect(screen.queryByText("停用角色")).not.toBeInTheDocument();
   });
 
-  it("shows inactive and non-participating character states", async () => {
+  it("shows the inactive character state", async () => {
     const inactivePlayer: Player = {
       ...player,
       characters: [
         {
           ...player.characters[0],
-          defaultRaidParticipant: false,
           isActive: false,
         },
       ],
@@ -173,7 +165,6 @@ describe("PersonnelPage", () => {
       .closest(".character-card");
     expect(card).not.toBeNull();
     expect(within(card as HTMLElement).getByText("停用")).toBeInTheDocument();
-    expect(within(card as HTMLElement).getByText("不参团")).toBeInTheDocument();
   });
 
   it("shows the exact successful full-sync changes before commit", async () => {
@@ -191,8 +182,6 @@ describe("PersonnelPage", () => {
             create: 1,
             update: 0,
             ignore: 0,
-            deactivate: 0,
-            deactivate_players: 0,
             delete: 1,
             delete_players: 0,
             reactivate_players: 0,
@@ -250,8 +239,6 @@ describe("PersonnelPage", () => {
                 create: 0,
                 update: 1,
                 ignore: 0,
-                deactivate: 0,
-                deactivate_players: 0,
                 delete: 0,
                 delete_players: 0,
                 reactivate_players: 0,
@@ -277,8 +264,6 @@ describe("PersonnelPage", () => {
             create: 0,
             update: 1,
             ignore: 0,
-            deactivate: 0,
-            deactivate_players: 0,
             delete: 0,
             delete_players: 0,
             reactivate_players: 0,

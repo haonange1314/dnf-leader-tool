@@ -20,6 +20,7 @@ const summary = {
   id: "schedule-1",
   name: "周六团",
   dungeonVersionId: "version-1",
+  bufferConversionVersionId: "buffer-version-1",
   waveCount: 1,
   status: "DRAFT" as const,
   revision: 1,
@@ -42,9 +43,7 @@ const detail = {
       roleTypeSnapshot: "DAMAGE" as const,
       damageScoreSnapshot: "500",
       bufferScoreSnapshot: null,
-      isTreasureSnapshot: true,
-      isFixedLeadTeamBufferSnapshot: false,
-      isGroupHuntSnapshot: false,
+      actualBufferScoreSnapshot: null,
       isSelected: true,
       isLocked: false,
       unassignedReason: null,
@@ -249,7 +248,7 @@ describe("SchedulePage", () => {
               versions: [
                 {
                   id: "version-1",
-                  versionNo: 3,
+                  versionNo: 4,
                   status: "PUBLISHED",
                   defaultWaveCount: 12,
                 },
@@ -269,11 +268,11 @@ describe("SchedulePage", () => {
     render(<SchedulePage userRole="OWNER" onError={vi.fn()} onSuccess={vi.fn()} />);
 
     expect(
-      await screen.findByText("12 人团本 · 副本第 3 版 · 1 波 · 修订 1"),
+      await screen.findByText("12 人团本 · 副本第 4 版 · 1 波 · 修订 1"),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByText("周六团"));
     expect(
-      await screen.findByText("12 人团本 · 副本第 3 版 · 1 波 · 修订 1 · 草稿"),
+      await screen.findByText("12 人团本 · 副本第 4 版 · 1 波 · 修订 1 · 草稿"),
     ).toBeInTheDocument();
   });
 
@@ -745,7 +744,7 @@ describe("SchedulePage", () => {
     expect(onError).toHaveBeenCalledWith(expect.objectContaining({
       code: "SCHEDULE_GENERATION_TIMEOUT",
     }));
-  });
+  }, 20_000);
 
   it("shows server publication issues before enabling publish", async () => {
     vi.mocked(api).mockImplementation(async (path: string) => {

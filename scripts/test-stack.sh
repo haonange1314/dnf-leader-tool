@@ -14,6 +14,11 @@ compose() {
 }
 
 cleanup() {
+    status=$?
+    trap - EXIT INT TERM
+    if [ "$status" -ne 0 ]; then
+        compose logs --no-color api >&2 || true
+    fi
     if [ -n "$backup_file" ]; then
         rm -f "$backup_file"
     fi
@@ -21,6 +26,7 @@ cleanup() {
         rm -f "$invalid_backup_file"
     fi
     compose down --volumes --remove-orphans >/dev/null 2>&1 || true
+    exit "$status"
 }
 
 trap cleanup EXIT INT TERM
@@ -56,7 +62,7 @@ database_state="$(
         "'
 )"
 
-if [ "$database_state" != "20260904_0016|1|1|3|12|1|1|1|4|3|17|32" ]; then
+if [ "$database_state" != "20260909_0017|1|1|3|12|1|1|1|4|3|19|34" ]; then
     echo "unexpected database state: $database_state" >&2
     exit 1
 fi

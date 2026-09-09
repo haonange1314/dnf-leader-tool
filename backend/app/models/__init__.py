@@ -1,3 +1,4 @@
+from app.models.buffer_conversion import BufferConversionVersion
 from app.models.dungeon import Dungeon, DungeonTeamTemplate, DungeonVersion, FormulaVersion
 from app.models.identity import (
     AuditLog,
@@ -29,6 +30,7 @@ from app.models.schedule import (
 
 __all__ = [
     "AuditLog",
+    "BufferConversionVersion",
     "Character",
     "Dungeon",
     "DungeonTeamTemplate",

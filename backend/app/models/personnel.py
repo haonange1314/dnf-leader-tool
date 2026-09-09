@@ -49,18 +49,6 @@ class Character(TimestampMixin, Base):
             name="score_matches_role_type",
         ),
         CheckConstraint(
-            "role_type = 'DAMAGE' OR is_treasure_damage = false",
-            name="treasure_requires_damage",
-        ),
-        CheckConstraint(
-            "role_type = 'BUFFER' OR is_fixed_lead_team_buffer = false",
-            name="fixed_lead_team_requires_buffer",
-        ),
-        CheckConstraint(
-            "role_type = 'DAMAGE' OR is_group_hunt = false",
-            name="group_hunt_requires_damage",
-        ),
-        CheckConstraint(
             "(damage_score IS NULL OR damage_score >= 0) AND "
             "(buffer_score IS NULL OR buffer_score >= 0)",
             name="non_negative_scores",
@@ -80,12 +68,6 @@ class Character(TimestampMixin, Base):
     role_type: Mapped[str] = mapped_column(String(16), nullable=False)
     damage_score: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
     buffer_score: Mapped[Decimal | None] = mapped_column(Numeric(8, 2))
-    is_treasure_damage: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    is_fixed_lead_team_buffer: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    is_group_hunt: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    default_raid_participant: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True, server_default="true"
-    )
     note: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     sort_order: Mapped[int] = mapped_column(
@@ -93,3 +75,11 @@ class Character(TimestampMixin, Base):
     )
 
     player: Mapped[Player] = relationship(back_populates="characters")
+
+    @property
+    def actual_buffer_score(self) -> Decimal | None:
+        return self.__dict__.get("_actual_buffer_score")
+
+    @actual_buffer_score.setter
+    def actual_buffer_score(self, value: Decimal | None) -> None:
+        self.__dict__["_actual_buffer_score"] = value

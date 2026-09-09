@@ -53,7 +53,7 @@ describe("DungeonPage", () => {
       const payload = JSON.parse(String(createCall?.[1]?.body));
       expect(payload.teams).toHaveLength(3);
       expect(payload.compositionRules.allowed).toHaveLength(2);
-      expect(payload.specialRoleRules.rules[0].targetTeamKey).toBe("RED");
+      expect(payload.specialRoleRules.rules).toEqual([]);
     },
     20_000,
   );
