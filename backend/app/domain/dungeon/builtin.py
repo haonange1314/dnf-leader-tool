@@ -1,6 +1,8 @@
 from app.schemas.dungeon import (
+    BufferPlacementRule,
     CompositionRule,
     CompositionRules,
+    DamagePlacementRule,
     DungeonVersionDefinition,
     FormulaDefinition,
     MissingSlotPolicy,
@@ -21,9 +23,12 @@ def builtin_raid_12_definition() -> DungeonVersionDefinition:
     return DungeonVersionDefinition(
         dungeon_code="BUILTIN_RAID_12",
         dungeon_name="12 人团本",
-        description="内置 12 人团本：红黄绿三队，优先 3C1奶。",
-        version_no=4,
-        default_wave_count=12,
+        description=(
+            "内置 12 人团本：先按实际奶量安排红黄双奶与首尾配对，"
+            "再将强 C 优先放入红队并平衡黄绿队平均伤害。"
+        ),
+        version_no=5,
+        default_wave_count=13,
         min_wave_count=1,
         max_wave_count=50,
         formula=TEAM_SCORE_V2,
@@ -72,12 +77,19 @@ def builtin_raid_12_definition() -> DungeonVersionDefinition:
         special_role_rules=SpecialRoleRules(),
         strength_order_rules=StrengthOrderRules(
             orders=(
-                StrengthOrder(metric=RoleType.DAMAGE, teams=team_keys),
                 StrengthOrder(metric=RoleType.BUFFER, teams=team_keys),
             )
         ),
         optimization_rules=OptimizationRules(
-            balance_across_waves=(RoleType.DAMAGE, RoleType.BUFFER)
+            balance_across_waves=(RoleType.DAMAGE, RoleType.BUFFER),
+            buffer_placement=BufferPlacementRule(
+                team_order=team_keys,
+                double_buffer_team_keys=("RED", "YELLOW"),
+            ),
+            damage_placement=DamagePlacementRule(
+                primary_team_key="RED",
+                balanced_team_keys=("YELLOW", "GREEN"),
+            ),
         ),
         missing_slot_policy=MissingSlotPolicy(mode="FILL_EARLIER_WAVES"),
     )

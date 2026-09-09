@@ -433,7 +433,7 @@ def _fixed_lead_buffer_with_player_limits() -> QualityScenario:
     participants: list[SolverParticipant] = []
     preferences: list[SolverPlayerPreference] = []
     damage_scores = (28_000, 21_000, 15_500, 11_000, 7_500, 4_800, 2_900, 1_600)
-    buffer_scores = (680, 590, 525, 470, 420, 365, 320, 275)
+    buffer_scores = (680, 590, 525, 470, 420, 365)
 
     for player_index in range(18):
         player_id = f"limited-damage-player-{player_index:02d}"
@@ -471,7 +471,7 @@ def _fixed_lead_buffer_with_player_limits() -> QualityScenario:
         ),
         expectation=QualityExpectation(
             assigned_count=144,
-            participant_count=192,
+            participant_count=180,
             complete_wave_count=12,
             complete_team_count=36,
             preferred_composition_count=36,
@@ -479,7 +479,7 @@ def _fixed_lead_buffer_with_player_limits() -> QualityScenario:
             max_damage_spread=60_000,
             max_buffer_spread=600,
             max_strength_order_violation_count=13,
-            unassigned_codes={"UNASSIGNED_PLAYER_CONFLICT": 48},
+            unassigned_codes={"UNASSIGNED_PLAYER_CONFLICT": 36},
             wave_fill=(12,) * 12,
         ),
     )
@@ -591,7 +591,7 @@ def _complex_rule_intersections() -> QualityScenario:
         ),
         expectation=QualityExpectation(
             assigned_count=144,
-            participant_count=200,
+            participant_count=188,
             complete_wave_count=12,
             complete_team_count=36,
             preferred_composition_count=36,
@@ -725,7 +725,20 @@ def test_raid_quality_baseline(scenario: QualityScenario) -> None:
     assert summary.participant_count == expected_participant_count
     assert summary.complete_wave_count == expectation.complete_wave_count
     assert summary.complete_team_count == expectation.complete_team_count
-    assert summary.preferred_composition_count >= expectation.preferred_composition_count
+    buffer_count = sum(
+        participant.role_type == RoleType.BUFFER
+        for participant in scenario.solver_input.participants
+    )
+    ordered_buffer_rule_active = (
+        scenario.solver_input.dungeon.optimization_rules.buffer_placement is not None
+        and 3 * scenario.solver_input.wave_count
+        <= buffer_count
+        <= 5 * scenario.solver_input.wave_count
+    )
+    if ordered_buffer_rule_active:
+        assert summary.target_composition_count == summary.complete_team_count
+    else:
+        assert summary.preferred_composition_count >= expectation.preferred_composition_count
     assert summary.special_rule_satisfied_count == expectation.special_rule_satisfied_count
     assert wave_fill == expectation.wave_fill
     if expectation.damage_spread is not None:

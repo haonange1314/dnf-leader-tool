@@ -520,8 +520,99 @@ function OptimizationFields({
   teamOptions: Array<{ label: string; value: string }>;
   readOnly: boolean;
 }) {
+  const bufferPlacementEnabled = Form.useWatch("bufferPlacementEnabled");
+  const damagePlacementEnabled = Form.useWatch("damagePlacementEnabled");
   return (
     <>
+      <Card size="small" title="先奶后 C 排队" className="dungeon-editor-section">
+        <Row gutter={16}>
+          <Col xs={24} md={6}>
+            <Form.Item
+              label="启用动态奶位"
+              name="bufferPlacementEnabled"
+              valuePropName="checked"
+            >
+              <Switch />
+            </Form.Item>
+          </Col>
+          {bufferPlacementEnabled ? (
+            <>
+              <Col xs={24} md={7}>
+                <Form.Item
+                  label="奶分配队伍顺序"
+                  name="bufferTeamOrder"
+                  rules={[{ required: true, message: "请选择全部队伍" }]}
+                >
+                  <Select mode="multiple" options={teamOptions} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={7}>
+                <Form.Item
+                  label="优先双奶队伍"
+                  name="bufferDoubleTeamKeys"
+                  rules={[{ required: true, message: "请选择双奶队伍" }]}
+                >
+                  <Select mode="multiple" options={teamOptions} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={4}>
+                <Form.Item
+                  label="奶量首尾配对"
+                  name="bufferPairExtremes"
+                  valuePropName="checked"
+                >
+                  <Switch />
+                </Form.Item>
+              </Col>
+            </>
+          ) : null}
+        </Row>
+        <Row gutter={16}>
+          <Col xs={24} md={6}>
+            <Form.Item
+              label="启用 C 分配规则"
+              name="damagePlacementEnabled"
+              valuePropName="checked"
+            >
+              <Switch />
+            </Form.Item>
+          </Col>
+          {damagePlacementEnabled ? (
+            <>
+              <Col xs={24} md={6}>
+                <Form.Item
+                  label="强 C 主队"
+                  name="damagePrimaryTeamKey"
+                  rules={[{ required: true, message: "请选择强 C 主队" }]}
+                >
+                  <Select options={teamOptions} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={8}>
+                <Form.Item
+                  label="按平均伤害平衡的队伍"
+                  name="damageBalancedTeamKeys"
+                  rules={[{ required: true, message: "至少选择两支队伍" }]}
+                >
+                  <Select mode="multiple" options={teamOptions} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={4}>
+                <Form.Item
+                  label="双奶波 C 首尾配对"
+                  name="damagePairExtremes"
+                  valuePropName="checked"
+                >
+                  <Switch />
+                </Form.Item>
+              </Col>
+            </>
+          ) : null}
+        </Row>
+        <Typography.Text type="secondary">
+          黄绿队平均伤害浮动不存入副本版本，由每张排表单独设置。
+        </Typography.Text>
+      </Card>
       <Card size="small" title="强度与跨波优化" className="dungeon-editor-section">
         <Form.List name="strengthOrders">
           {(fields, { add, remove }) => (

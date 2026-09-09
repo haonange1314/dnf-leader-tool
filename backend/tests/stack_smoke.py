@@ -680,7 +680,8 @@ schedule = request(
     "POST",
     {"name": "阶段2全栈验收", "dungeonVersionId": source_version["id"]},
 )
-assert isinstance(schedule, dict) and len(schedule["waves"]) == 12
+assert isinstance(schedule, dict) and len(schedule["waves"]) == 13
+assert schedule["damageBalanceTolerancePercent"] == 20
 missing_lock = request_error(
     f"/schedules/{schedule['id']}",
     "PATCH",
@@ -777,10 +778,15 @@ assert isinstance(report, dict) and report["revision"] == 1
 schedule = request(
     f"/schedules/{schedule['id']}",
     "PATCH",
-    {"baseRevision": 1, "waveCount": 2},
+    {
+        "baseRevision": 1,
+        "waveCount": 2,
+        "damageBalanceTolerancePercent": 35,
+    },
 )
 assert isinstance(schedule, dict) and schedule["revision"] == 2
 assert len(schedule["waves"]) == 2
+assert schedule["damageBalanceTolerancePercent"] == 35
 schedule = request(
     f"/schedules/{schedule['id']}",
     "PATCH",
@@ -1215,7 +1221,7 @@ assert isinstance(published_schedule, dict)
 assert published_schedule["schedule"]["status"] == "PUBLISHED"
 assert published_schedule["schedule"]["revision"] == 6
 assert published_schedule["version"]["versionNo"] == 1
-assert published_schedule["version"]["snapshot"]["schemaVersion"] == 4
+assert published_schedule["version"]["snapshot"]["schemaVersion"] == 5
 assert published_schedule["version"]["snapshot"]["dungeon"]["versionId"] == published["id"]
 assert published_schedule["version"]["snapshot"]["formula"]["code"]
 assert "issues" in published_schedule["version"]["snapshot"]

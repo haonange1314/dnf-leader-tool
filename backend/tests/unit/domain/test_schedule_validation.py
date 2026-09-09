@@ -8,6 +8,7 @@ from app.domain.schedule import (
     composition_feasibility,
     composition_role_requirements,
     distinct_player_feasibility,
+    ordered_buffer_limits,
 )
 from app.schemas.dungeon import CompositionRule, CompositionRules, RoleType
 from app.schemas.schedule import (
@@ -25,8 +26,23 @@ def test_builtin_raid_role_requirements_follow_composition_priorities() -> None:
 
     requirements = composition_role_requirements(definition.composition_rules, team_keys)
 
-    assert requirements.ideal_damage == 108
-    assert requirements.base_buffers == 36
+    assert requirements.ideal_damage == 117
+    assert requirements.base_buffers == 39
+
+
+def test_builtin_ordered_buffer_range_stops_before_green_double_buffer() -> None:
+    definition = builtin_raid_12_definition()
+    placement = definition.optimization_rules.buffer_placement
+    assert placement is not None
+    team_keys = [team.team_key for team in definition.teams] * 13
+
+    minimum, maximum = ordered_buffer_limits(
+        definition.composition_rules,
+        team_keys,
+        placement.double_buffer_team_keys,
+    )
+
+    assert (minimum, maximum) == (39, 65)
 
 
 def test_custom_damage_only_composition_does_not_require_a_buffer() -> None:
@@ -127,6 +143,18 @@ def test_schedule_name_is_trimmed_before_persistence() -> None:
 def test_schedule_update_requires_a_business_change() -> None:
     with pytest.raises(ValidationError, match="至少修改"):
         ScheduleUpdate(base_revision=1)
+
+
+def test_schedule_damage_balance_tolerance_defaults_to_twenty_percent() -> None:
+    payload = ScheduleCreate(name="周六团", dungeon_version_id=uuid.uuid4())
+
+    assert payload.damage_balance_tolerance_percent == 20
+
+
+@pytest.mark.parametrize("value", [-1, 101])
+def test_schedule_damage_balance_tolerance_stays_in_supported_range(value: int) -> None:
+    with pytest.raises(ValidationError):
+        ScheduleUpdate(base_revision=1, damage_balance_tolerance_percent=value)
 
 
 def test_schedule_copy_name_is_trimmed() -> None:
