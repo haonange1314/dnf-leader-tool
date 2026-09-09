@@ -260,6 +260,96 @@ describe("SchedulePage", () => {
     expect(screen.getByText("位置 1 · 待排")).toBeInTheDocument();
   });
 
+  it("edits wave count and damage tolerance from one parameter dialog", async () => {
+    const onSuccess = vi.fn();
+    vi.mocked(api).mockImplementation(async (path: string, options?: RequestInit) => {
+      if (path.endsWith("/lock")) return editLockResponse(path);
+      if (path === "/schedules?includeArchived=false") return { items: [summary], total: 1 };
+      if (path === "/dungeons") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1" && options?.method === "PATCH") {
+        const payload = JSON.parse(String(options.body));
+        return {
+          ...detail,
+          revision: 2,
+          waveCount: payload.waveCount,
+          damageBalanceTolerancePercent: payload.damageBalanceTolerancePercent,
+        };
+      }
+      if (path === "/schedules/schedule-1") return detail;
+      if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1/versions") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1/rule-sets") return emptyRuleSetList;
+      throw new Error(`unexpected API path: ${path}`);
+    });
+
+    render(<SchedulePage userRole="OWNER" onError={vi.fn()} onSuccess={onSuccess} />);
+    fireEvent.click(await screen.findByText("周六团"));
+    const editButton = await screen.findByRole("button", { name: "编辑排表参数" });
+    await waitFor(() => expect(editButton).toBeEnabled());
+    fireEvent.click(editButton);
+
+    const dialog = await screen.findByRole("dialog", { name: "编辑排表参数" });
+    const inputs = within(dialog).getAllByRole("spinbutton");
+    fireEvent.change(inputs[0], { target: { value: "2" } });
+    fireEvent.change(inputs[1], { target: { value: "25" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存更改" }));
+
+    await waitFor(() => expect(onSuccess).toHaveBeenCalledWith("排表参数已更新"));
+    const patchCall = vi
+      .mocked(api)
+      .mock.calls.find(
+        ([path, options]) =>
+          path === "/schedules/schedule-1" && options?.method === "PATCH",
+      );
+    expect(JSON.parse(String(patchCall?.[1]?.body))).toMatchObject({
+      baseRevision: 1,
+      waveCount: 2,
+      damageBalanceTolerancePercent: 25,
+      confirmWaveReduction: false,
+    });
+  }, 15_000);
+
+  it("keeps unassigned roles searchable from the compact editor drawer", async () => {
+    const participants = [
+      detail.participants[0],
+      {
+        ...detail.participants[0],
+        id: "participant-2",
+        characterId: "character-2",
+        playerIdSnapshot: "player-2",
+        playerNameSnapshot: "玩家二",
+        characterNameSnapshot: "角色二",
+        professionSnapshot: "奶妈",
+        roleTypeSnapshot: "BUFFER" as const,
+        damageScoreSnapshot: null,
+        bufferScoreSnapshot: "4.5",
+        actualBufferScoreSnapshot: "4.68",
+      },
+    ];
+    vi.mocked(api).mockImplementation(async (path: string) => {
+      if (path.endsWith("/lock")) return editLockResponse(path);
+      if (path === "/schedules?includeArchived=false") return { items: [summary], total: 1 };
+      if (path === "/dungeons") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1") return { ...detail, participants };
+      if (path === "/schedules/schedule-1/generation-runs") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1/versions") return { items: [], total: 0 };
+      if (path === "/schedules/schedule-1/rule-sets") return emptyRuleSetList;
+      throw new Error(`unexpected API path: ${path}`);
+    });
+
+    render(<SchedulePage userRole="OWNER" onError={vi.fn()} onSuccess={vi.fn()} />);
+    fireEvent.click(await screen.findByText("周六团"));
+    fireEvent.click(await screen.findByRole("button", { name: "未分配角色 2" }));
+
+    const drawer = await screen.findByRole("dialog", { name: "未分配角色 · 2" });
+    const search = within(drawer).getByPlaceholderText("搜索玩家、角色或职业");
+    fireEvent.change(search, { target: { value: "奶妈" } });
+    expect(within(drawer).getByText(/玩家二 · 角色二/)).toBeInTheDocument();
+    expect(within(drawer).queryByText(/玩家一 · 角色一/)).not.toBeInTheDocument();
+    fireEvent.change(search, { target: { value: "不存在" } });
+    expect(within(drawer).getByText("当前筛选下没有角色")).toBeInTheDocument();
+  }, 15_000);
+
   it("shows the bound dungeon name and exact version in list and detail views", async () => {
     vi.mocked(api).mockImplementation(async (path: string) => {
       if (path.endsWith("/lock")) return editLockResponse(path);
