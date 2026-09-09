@@ -153,6 +153,41 @@ def test_builtin_rule_reports_infeasible_when_locks_conflict_with_buffer_structu
     assert result.status == SolverStatus.INFEASIBLE
 
 
+def test_builtin_rule_reports_infeasible_when_locks_invert_buffer_strength_order() -> None:
+    participants = tuple(
+        [
+            SolverParticipant(
+                f"damage-{index}", f"damage-player-{index}", RoleType.DAMAGE, 1_000
+            )
+            for index in range(8)
+        ]
+        + [
+            SolverParticipant(
+                f"buffer-{index}",
+                f"buffer-player-{index}",
+                RoleType.BUFFER,
+                (index + 1) * 100,
+            )
+            for index in range(4)
+        ]
+    )
+
+    result = solve(
+        SolverInput(
+            dungeon=default_raid_12_input().dungeon,
+            wave_count=1,
+            participants=participants,
+            locked_assignments=(
+                LockedAssignment("buffer-0", 1, "YELLOW"),
+                LockedAssignment("buffer-3", 1, "GREEN"),
+            ),
+            time_limit_seconds=3,
+        )
+    )
+
+    assert result.status == SolverStatus.INFEASIBLE
+
+
 def test_builtin_damage_shortage_keeps_red_full_and_completes_earlier_waves() -> None:
     participants = tuple(
         [

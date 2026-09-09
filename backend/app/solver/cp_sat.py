@@ -445,6 +445,13 @@ def solve(solver_input: SolverInput) -> SolverResult:
 
     strength_order_penalties: list[cp_model.LinearExpr] = []
     buffer_strength_order_penalties: list[cp_model.LinearExpr] = []
+    hard_buffer_strength_order = (
+        solver_input.dungeon.optimization_rules.buffer_placement is not None
+        and any(
+            order.metric == RoleType.BUFFER
+            for order in solver_input.dungeon.strength_order_rules.orders
+        )
+    )
     strength_order_pairs: list[
         tuple[int, cp_model.LinearExpr, cp_model.LinearExpr]
     ] = []
@@ -460,8 +467,21 @@ def solve(solver_input: SolverInput) -> SolverResult:
                     score_upper_bound,
                     f"strength_order_slack_{order_index}_{wave_no}_{pair_index}",
                 )
-                model.add(slack >= weaker - stronger).only_enforce_if(wave_full[wave_no])
-                model.add(slack == 0).only_enforce_if(~wave_full[wave_no])
+                if (
+                    order.metric == RoleType.BUFFER
+                    and solver_input.dungeon.optimization_rules.buffer_placement is not None
+                ):
+                    # A configured buffer-placement phase means buffers are fixed
+                    # before damage dealers are assigned. Every wave must
+                    # preserve the configured buffer strength order; otherwise a
+                    # time-limited soft violation would be frozen permanently.
+                    model.add(stronger >= weaker)
+                    model.add(slack == 0)
+                else:
+                    model.add(slack >= weaker - stronger).only_enforce_if(
+                        wave_full[wave_no]
+                    )
+                    model.add(slack == 0).only_enforce_if(~wave_full[wave_no])
                 strength_order_penalties.append(slack)
                 if order.metric == RoleType.BUFFER:
                     buffer_strength_order_penalties.append(slack)
@@ -750,6 +770,37 @@ def solve(solver_input: SolverInput) -> SolverResult:
             time_limit_seconds=availability_budget * 0.75,
         )
         availability_elapsed += target_hint_elapsed
+        if target_hint is not None and hard_buffer_strength_order:
+            (
+                target_hint,
+                buffer_hint_status,
+                buffer_hint_elapsed,
+            ) = _repair_buffer_strength_order_hint(solver_input, target_hint)
+            availability_elapsed += buffer_hint_elapsed
+            if target_hint is None:
+                return SolverResult(
+                    status=buffer_hint_status,
+                    assignments=(),
+                    special_assignments=(),
+                    unassigned_participant_ids=tuple(
+                        participant.participant_id for participant in participants
+                    ),
+                    unassigned=tuple(
+                        UnassignedReason(
+                            participant_id=participant.participant_id,
+                            code="UNASSIGNED_ROLE_COMPOSITION",
+                            message_params={},
+                        )
+                        for participant in participants
+                    ),
+                    team_summaries=(),
+                    issues=(),
+                    objective_summary=ObjectiveSummary(
+                        0, len(participants), 0, 0, 0, 0, 0, 0, 0
+                    ),
+                    objective_value=None,
+                    wall_time_seconds=availability_elapsed,
+                )
         if target_hint is not None:
             protect_stage_incumbent = True
             model.add(assigned_total >= target_hint_count)
@@ -790,12 +841,21 @@ def solve(solver_input: SolverInput) -> SolverResult:
                     cloned_variable = availability_model.get_bool_var_from_proto_index(
                         variable.index
                     )
-                    availability_model.add(cloned_variable == target_hint[key])
+                    # The repaired buffer plan is the first, mandatory phase.
+                    # Damage assignments from the aggregate hint may now collide
+                    # with a buffer from the same player/wave, so let the full
+                    # model place damage dealers around the fixed buffer plan.
+                    if (
+                        not hard_buffer_strength_order
+                        or participants[key[0]].role_type == RoleType.BUFFER
+                    ):
+                        availability_model.add(cloned_variable == target_hint[key])
                 for key, variable in special_variables.items():
                     cloned_variable = availability_model.get_bool_var_from_proto_index(
                         variable.index
                     )
-                    availability_model.add(cloned_variable == special_hint[key])
+                    if not hard_buffer_strength_order:
+                        availability_model.add(cloned_variable == special_hint[key])
                 availability_objective = cp_model.LinearExpr.sum(
                     [
                         availability_model.get_bool_var_from_proto_index(variable.index)
@@ -1337,6 +1397,211 @@ def _build_buffer_placement_targets(
             while placed_count[wave_no, team_key] < targets[wave_no, team_key]:
                 take_largest(wave_no, team_key)
     return tuple(placements)
+
+
+def _repair_buffer_strength_order_hint(
+    solver_input: SolverInput,
+    hint: dict[tuple[int, int, int], int],
+) -> tuple[
+    dict[tuple[int, int, int], int] | None,
+    SolverStatus,
+    float,
+]:
+    """Repair the aggregate hint with a small buffer-only assignment model."""
+
+    order_rules = tuple(
+        order
+        for order in solver_input.dungeon.strength_order_rules.orders
+        if order.metric == RoleType.BUFFER
+    )
+    buffer_targets = _buffer_count_targets(solver_input)
+    if not order_rules or not buffer_targets:
+        return hint, SolverStatus.FEASIBLE, 0.0
+
+    model = cp_model.CpModel()
+    participants = solver_input.participants
+    teams = solver_input.dungeon.teams
+    waves = tuple(range(1, solver_input.wave_count + 1))
+    team_index_by_key = {team.team_key: index for index, team in enumerate(teams)}
+    participant_index_by_id = {
+        participant.participant_id: index for index, participant in enumerate(participants)
+    }
+    buffer_indices = tuple(
+        participant_index
+        for participant_index, participant in enumerate(participants)
+        if participant.role_type == RoleType.BUFFER
+    )
+    allowed_waves_by_player = {
+        player_id: set(waves)
+        for player_id in {participant.player_id for participant in participants}
+    }
+    forbidden_waves_by_player: defaultdict[str, set[int]] = defaultdict(set)
+    required_waves_by_participant: dict[int, set[int]] = {}
+    required_teams_by_participant: dict[int, set[int]] = {}
+    for rule in solver_input.schedule_rules:
+        if rule.type == SolverScheduleRuleType.PLAYER_ALLOWED_WAVES:
+            for player_id in rule.player_ids:
+                allowed_waves_by_player[player_id].intersection_update(rule.waves)
+        elif rule.type == SolverScheduleRuleType.PLAYER_FORBIDDEN_WAVES:
+            for player_id in rule.player_ids:
+                forbidden_waves_by_player[player_id].update(rule.waves)
+        elif rule.type == SolverScheduleRuleType.CHARACTER_REQUIRED_WAVE:
+            required_waves_by_participant[
+                participant_index_by_id[rule.participant_id or ""]
+            ] = set(rule.waves)
+        elif rule.type == SolverScheduleRuleType.CHARACTER_REQUIRED_TEAM:
+            required_teams_by_participant[
+                participant_index_by_id[rule.participant_id or ""]
+            ] = {team_index_by_key[rule.team_key or ""]}
+    for locked in solver_input.locked_assignments:
+        participant_index = participant_index_by_id[locked.participant_id]
+        if participants[participant_index].role_type != RoleType.BUFFER:
+            continue
+        required_waves_by_participant[participant_index] = {locked.wave_no}
+        required_teams_by_participant[participant_index] = {
+            team_index_by_key[locked.team_key]
+        }
+
+    variables: dict[tuple[int, int, int], cp_model.IntVar] = {}
+    for participant_index in buffer_indices:
+        participant = participants[participant_index]
+        participant_waves = set(
+            waves if participant.allowed_waves is None else participant.allowed_waves
+        )
+        participant_waves.intersection_update(
+            allowed_waves_by_player[participant.player_id]
+        )
+        participant_waves.difference_update(
+            forbidden_waves_by_player[participant.player_id]
+        )
+        if participant_index in required_waves_by_participant:
+            participant_waves.intersection_update(
+                required_waves_by_participant[participant_index]
+            )
+        participant_teams = {
+            team_index
+            for team_index, team in enumerate(teams)
+            if participant.allowed_team_keys is None
+            or team.team_key in participant.allowed_team_keys
+        }
+        if participant_index in required_teams_by_participant:
+            participant_teams.intersection_update(
+                required_teams_by_participant[participant_index]
+            )
+        participant_variables: list[cp_model.IntVar] = []
+        for wave_no in waves:
+            for team_index, _team in enumerate(teams):
+                variable = model.new_bool_var(
+                    f"buffer_hint_{participant_index}_{wave_no}_{team_index}"
+                )
+                variables[participant_index, wave_no, team_index] = variable
+                participant_variables.append(variable)
+                if (
+                    wave_no not in participant_waves
+                    or team_index not in participant_teams
+                ):
+                    model.add(variable == 0)
+                model.add_hint(
+                    variable, hint[participant_index, wave_no, team_index]
+                )
+        model.add(sum(participant_variables) == 1)
+
+    buffer_indices_by_player: defaultdict[str, list[int]] = defaultdict(list)
+    for participant_index in buffer_indices:
+        buffer_indices_by_player[participants[participant_index].player_id].append(
+            participant_index
+        )
+    preference_by_player = {
+        preference.player_id: preference
+        for preference in solver_input.player_preferences
+    }
+    for player_id, player_buffer_indices in buffer_indices_by_player.items():
+        for wave_no in waves:
+            model.add(
+                sum(
+                    variables[participant_index, wave_no, team_index]
+                    for participant_index in player_buffer_indices
+                    for team_index, _team in enumerate(teams)
+                )
+                <= 1
+            )
+        preference = preference_by_player.get(player_id)
+        if preference is not None and preference.max_wave_count is not None:
+            model.add(
+                sum(
+                    variables[participant_index, wave_no, team_index]
+                    for participant_index in player_buffer_indices
+                    for wave_no in waves
+                    for team_index, _team in enumerate(teams)
+                )
+                <= preference.max_wave_count
+            )
+
+    for rule in solver_input.schedule_rules:
+        if rule.type != SolverScheduleRuleType.PLAYERS_NOT_SAME_WAVE:
+            continue
+        player_ids = set(rule.player_ids)
+        for wave_no in waves:
+            model.add(
+                sum(
+                    variables[participant_index, wave_no, team_index]
+                    for participant_index in buffer_indices
+                    if participants[participant_index].player_id in player_ids
+                    for team_index, _team in enumerate(teams)
+                )
+                <= 1
+            )
+
+    for (wave_no, team_key), target_count in buffer_targets.items():
+        team_index = team_index_by_key[team_key]
+        model.add(
+            sum(
+                variables[participant_index, wave_no, team_index]
+                for participant_index in buffer_indices
+            )
+            == target_count
+        )
+    for order in order_rules:
+        for wave_no in waves:
+            totals = {
+                team_key: sum(
+                    participants[participant_index].score
+                    * variables[
+                        participant_index, wave_no, team_index_by_key[team_key]
+                    ]
+                    for participant_index in buffer_indices
+                )
+                for team_key in order.teams
+            }
+            for stronger_key, weaker_key in zip(
+                order.teams, order.teams[1:], strict=False
+            ):
+                model.add(totals[stronger_key] >= totals[weaker_key])
+
+    ideal_targets = set(
+        _build_buffer_placement_targets(solver_input, team_index_by_key)
+    )
+    model.maximize(
+        sum(
+            (100 if hint[key] else 0) * variable
+            + (1 if key in ideal_targets else 0) * variable
+            for key, variable in variables.items()
+        )
+    )
+    solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = max(
+        0.5, min(2.0, solver_input.time_limit_seconds * 0.10)
+    )
+    solver.parameters.random_seed = solver_input.random_seed
+    solver.parameters.num_search_workers = 1
+    status = _status(solver.solve(model))
+    if status not in (SolverStatus.OPTIMAL, SolverStatus.FEASIBLE):
+        return None, status, solver.wall_time
+
+    repaired = dict(hint)
+    for key, variable in variables.items():
+        repaired[key] = round(solver.value(variable))
+    return repaired, status, solver.wall_time
 
 
 def _damage_average_scale(solver_input: SolverInput) -> int:

@@ -36,6 +36,7 @@ class QualityExpectation:
     max_buffer_spread: int | None = None
     max_strength_order_violation_count: int | None = None
     unassigned_codes: dict[str, int] | None = None
+    expected_status: SolverStatus | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -425,6 +426,9 @@ def _split_availability_complete_profile() -> QualityScenario:
             special_rule_satisfied_count=0,
             unassigned_codes={},
             wave_fill=(12,) * 12,
+            # The only RED-eligible buffer player is weaker than the remaining
+            # YELLOW/GREEN pool in both availability segments.
+            expected_status=SolverStatus.INFEASIBLE,
         ),
     )
 
@@ -481,6 +485,9 @@ def _fixed_lead_buffer_with_player_limits() -> QualityScenario:
             max_strength_order_violation_count=13,
             unassigned_codes={"UNASSIGNED_PLAYER_CONFLICT": 36},
             wave_fill=(12,) * 12,
+            # Both RED-only buffer players are collectively weaker than the
+            # four players that must fill YELLOW/GREEN across all waves.
+            expected_status=SolverStatus.INFEASIBLE,
         ),
     )
 
@@ -600,6 +607,7 @@ def _complex_rule_intersections() -> QualityScenario:
             max_buffer_spread=450,
             max_strength_order_violation_count=14,
             wave_fill=(12,) * 12,
+            expected_status=SolverStatus.INFEASIBLE,
         ),
     )
 
@@ -714,6 +722,11 @@ def test_raid_quality_baseline(scenario: QualityScenario) -> None:
             ensure_ascii=False,
         )
     )
+
+    if expectation.expected_status is not None:
+        assert result.status == expectation.expected_status
+        assert not result.assignments
+        return
 
     assert result.status in {SolverStatus.OPTIMAL, SolverStatus.FEASIBLE, SolverStatus.PARTIAL}
     assert summary.assigned_count == expectation.assigned_count
