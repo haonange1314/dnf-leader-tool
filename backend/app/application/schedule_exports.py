@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import math
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, cast
 
@@ -105,7 +106,7 @@ def snapshot_workbook(snapshot: dict[str, Any], label: str, *, draft: bool = Fal
                 [
                     wave["waveNo"],
                     team["displayNameSnapshot"],
-                    team.get("compositionCode", ""),
+                    _composition_display_name(str(team.get("compositionCode", ""))),
                     team.get("damageTotal", 0),
                     team.get("bufferTotal", 0),
                     f"C {wave.get('damageTotal', 0)} / 奶 {wave.get('bufferTotal', 0)}",
@@ -215,7 +216,7 @@ def snapshot_png(snapshot: dict[str, Any], label: str, *, draft: bool = False) -
             )
             team_title = (
                 f"{team.get('displayNameSnapshot', team.get('teamKey', '队伍'))}"
-                f"  ·  {team.get('compositionCode', '')}"
+                f"  ·  {_composition_display_name(str(team.get('compositionCode', '')))}"
             )
             draw.text(
                 (card_x + 14, card_y + 18),
@@ -243,12 +244,34 @@ def snapshot_png(snapshot: dict[str, Any], label: str, *, draft: bool = False) -
                         f"{participant.get('characterNameSnapshot', '')}{core}"
                     )
                     color = "#292724"
-                draw.text(
-                    (member_x, member_y),
-                    _fit_text(draw, member_text, small_font, column_width - 10),
-                    font=small_font,
-                    fill=color,
-                )
+                if participant is None:
+                    draw.text(
+                        (member_x, member_y),
+                        _fit_text(draw, member_text, small_font, column_width - 10),
+                        font=small_font,
+                        fill=color,
+                    )
+                else:
+                    score_text = _participant_image_score(participant)
+                    score_width = draw.textlength(score_text, font=small_font)
+                    score_x = member_x + column_width - 10 - score_width
+                    draw.text(
+                        (member_x, member_y),
+                        _fit_text(
+                            draw,
+                            member_text,
+                            small_font,
+                            max(40, int(score_x - member_x - 10)),
+                        ),
+                        font=small_font,
+                        fill=color,
+                    )
+                    draw.text(
+                        (score_x, member_y),
+                        score_text,
+                        font=small_font,
+                        fill="#6b7280",
+                    )
         if draft:
             watermark = "草稿 · 非最终版本"
             watermark_width = draw.textlength(watermark, font=title_font)
@@ -269,6 +292,31 @@ def snapshot_png(snapshot: dict[str, Any], label: str, *, draft: bool = False) -
 def _wave_image_height(wave: dict[str, Any], member_columns: int) -> int:
     max_slots = max((len(team.get("slots", [])) for team in wave.get("teams", [])), default=1)
     return 154 + math.ceil(max_slots / max(1, member_columns)) * 42
+
+
+def _composition_display_name(code: str) -> str:
+    return {
+        "3D1B": "3C1奶",
+        "2D2B": "2C2奶",
+        "INCOMPLETE": "待补",
+        "INVALID": "组成无效",
+    }.get(code, code)
+
+
+def _participant_image_score(participant: dict[str, Any]) -> str:
+    if participant.get("roleTypeSnapshot") == "BUFFER":
+        return (
+            f"实际奶量 {_format_export_number(participant.get('actualBufferScoreSnapshot'), 2)} 万"
+        )
+    return f"模拟伤害 {_format_export_number(participant.get('damageScoreSnapshot'), 0)} 亿"
+
+
+def _format_export_number(value: object, decimal_places: int) -> str:
+    try:
+        number = Decimal(str(value if value is not None else 0))
+    except InvalidOperation:
+        number = Decimal(0)
+    return f"{number:,.{decimal_places}f}"
 
 
 def _font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:

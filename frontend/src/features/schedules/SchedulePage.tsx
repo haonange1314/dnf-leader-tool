@@ -82,6 +82,7 @@ import {
   ScheduleEditorWave,
   ScheduleParticipantLabel,
   ScheduleUnassignedDropZone,
+  formatCompositionCode,
 } from "./ScheduleEditor";
 
 interface Props {
@@ -2771,7 +2772,7 @@ function ScheduleSnapshotPreview({ schedule }: { schedule: ScheduleDetail }) {
                     size="small"
                     className="team-card"
                     style={{ borderTopColor: team.displayColorSnapshot }}
-                    title={`${team.displayNameSnapshot} · ${team.compositionCode}`}
+                    title={`${team.displayNameSnapshot} · ${formatCompositionCode(team.compositionCode)}`}
                   >
                     {team.slots.map((slot) => {
                       const participant = slot.participantId

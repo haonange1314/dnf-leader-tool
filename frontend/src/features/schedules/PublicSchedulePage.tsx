@@ -1,7 +1,7 @@
 import { Card, Col, Empty, Row, Skeleton, Tag, Typography } from "antd";
 import { useEffect, useState } from "react";
 import { api, type PublicScheduleVersion } from "../../api/client";
-import { ScheduleParticipantLabel } from "./ScheduleEditor";
+import { formatCompositionCode, ScheduleParticipantLabel } from "./ScheduleEditor";
 
 export function PublicSchedulePage({ token }: { token: string }) {
   const [version, setVersion] = useState<PublicScheduleVersion | null>(null);
@@ -49,7 +49,7 @@ export function PublicSchedulePage({ token }: { token: string }) {
                 <Col xs={24} xl={Math.max(6, Math.floor(24 / wave.teams.length))} key={team.id}>
                   <Card
                     size="small"
-                    title={`${team.displayNameSnapshot} · ${team.compositionCode}`}
+                    title={`${team.displayNameSnapshot} · ${formatCompositionCode(team.compositionCode)}`}
                     extra={`C ${team.damageTotal} · 奶 ${team.bufferTotal}`}
                     className="team-card"
                     style={{ borderTopColor: team.displayColorSnapshot }}
