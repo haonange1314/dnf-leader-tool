@@ -24,12 +24,13 @@ URL 中的保留字符必须百分号编码。生产叠加配置会强制：
 - 登录页不编译本地示例账号；
 - PostgreSQL、API 和 Web 不发布宿主机端口；
 - Caddy 暴露 80/443、申请证书并设置 HSTS、CSP 等安全响应头；
-- 生产 API 镜像默认使用腾讯云 Debian 镜像并强制 IPv4、自动重试，降低大陆服务器首次构建时的软件包下载失败率；
+- 生产 API 镜像默认使用腾讯云 Debian 和 PyPI 镜像，并为 APT 强制 IPv4、自动重试，降低大陆服务器首次构建时的依赖下载失败率；
 - 后端拒绝 localhost、HTTP CORS、示例数据库密码或示例 Owner 密码。
 
 如需改回 Debian 官方软件源，可在 `.env.production` 中将 `DEBIAN_MIRROR` 和
 `DEBIAN_SECURITY_MIRROR` 分别设置为 `http://deb.debian.org/debian` 和
-`http://deb.debian.org/debian-security`。
+`http://deb.debian.org/debian-security`，并将 `PYPI_INDEX_URL` 设置为
+`https://pypi.org/simple`。
 
 提交前检查最终配置，不要把 `.env.production` 加入 Git：
 

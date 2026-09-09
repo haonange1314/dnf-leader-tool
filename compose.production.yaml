@@ -12,6 +12,7 @@ services:
       args:
         DEBIAN_MIRROR: ${DEBIAN_MIRROR:-https://mirrors.cloud.tencent.com/debian}
         DEBIAN_SECURITY_MIRROR: ${DEBIAN_SECURITY_MIRROR:-https://mirrors.cloud.tencent.com/debian-security}
+        PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://mirrors.cloud.tencent.com/pypi/simple}
     environment:
       DATABASE_URL: ${CONTAINER_DATABASE_URL:?set CONTAINER_DATABASE_URL in the production env file}
       ENVIRONMENT: production

@@ -2,6 +2,7 @@ FROM python:3.12.10-slim-bookworm
 
 ARG DEBIAN_MIRROR=http://deb.debian.org/debian
 ARG DEBIAN_SECURITY_MIRROR=http://deb.debian.org/debian-security
+ARG PYPI_INDEX_URL=https://pypi.org/simple
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -17,9 +18,14 @@ RUN sed -i \
     && apt-get update \
     && apt-get install --yes --no-install-recommends fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
-RUN pip install --no-cache-dir uv==0.11.8
+RUN pip install --no-cache-dir --index-url "${PYPI_INDEX_URL}" uv==0.11.8
 COPY backend/pyproject.toml backend/uv.lock ./
-RUN uv sync --frozen --no-dev
+RUN uv export --frozen --no-dev --no-emit-project --no-header --no-annotate \
+        --output-file /tmp/requirements.txt > /dev/null \
+    && uv venv .venv \
+    && uv pip sync --python .venv/bin/python --require-hashes \
+        --default-index "${PYPI_INDEX_URL}" /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
 COPY backend/ ./
 
 EXPOSE 8000
