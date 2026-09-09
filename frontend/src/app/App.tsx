@@ -1,5 +1,6 @@
 import {
   CalendarOutlined,
+  CalculatorOutlined,
   CrownOutlined,
   DatabaseOutlined,
   FileSearchOutlined,
@@ -53,6 +54,9 @@ const RolePage = lazy(() =>
 const AuditLogPage = lazy(() =>
   import("../features/users/AuditLogPage").then((module) => ({ default: module.AuditLogPage })),
 );
+const BufferConversionPage = lazy(() =>
+  import("../features/scoring/BufferConversionPage").then((module) => ({ default: module.BufferConversionPage })),
+);
 
 const { Content, Header, Sider } = Layout;
 
@@ -64,6 +68,7 @@ function firstAllowedSection(user: User): string {
     ["USER_READ", "users"],
     ["ROLE_READ", "roles"],
     ["AUDIT_READ", "audit"],
+    ["BUFFER_CONVERSION_READ", "buffer-conversion"],
   ];
   return entries.find(([permission]) => user.permissions.includes(permission))?.[1] ?? "none";
 }
@@ -247,6 +252,7 @@ export function App() {
                   ...(user.permissions.includes("USER_READ") ? [{ key: "users", icon: <UserOutlined />, label: "用户管理" }] : []),
                   ...(user.permissions.includes("ROLE_READ") ? [{ key: "roles", icon: <SafetyCertificateOutlined />, label: "角色与权限" }] : []),
                   ...(user.permissions.includes("AUDIT_READ") ? [{ key: "audit", icon: <FileSearchOutlined />, label: "操作日志" }] : []),
+                  ...(user.permissions.includes("BUFFER_CONVERSION_READ") ? [{ key: "buffer-conversion", icon: <CalculatorOutlined />, label: "奶量换算" }] : []),
                 ]}
               />
             </Sider>
@@ -284,6 +290,8 @@ export function App() {
                   <RolePage permissions={user.permissions} onError={onError} onSuccess={messageApi.success} />
                 ) : section === "audit" ? (
                   <AuditLogPage onError={onError} />
+                ) : section === "buffer-conversion" ? (
+                  <BufferConversionPage permissions={user.permissions} onError={onError} onSuccess={messageApi.success} />
                 ) : (
                   <Empty description="当前角色没有可访问的功能，请联系管理员分配权限" />
                 )}

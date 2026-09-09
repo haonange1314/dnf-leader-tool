@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.api.v1.routes.audit_logs import router as audit_logs_router
 from app.api.v1.routes.auth import router as auth_router
+from app.api.v1.routes.buffer_conversion import router as buffer_conversion_router
 from app.api.v1.routes.dungeons import router as dungeon_router
 from app.api.v1.routes.edit_locks import router as edit_locks_router
 from app.api.v1.routes.editor import router as editor_router
@@ -23,6 +24,7 @@ api_router.include_router(publication_router, tags=["schedule-publication"])
 api_router.include_router(generation_router, tags=["generation"])
 api_router.include_router(rule_sets_router, tags=["schedule-rules"])
 api_router.include_router(auth_router, prefix="/auth", tags=["auth"])
+api_router.include_router(buffer_conversion_router, tags=["buffer-conversions"])
 api_router.include_router(audit_logs_router, tags=["audit-logs"])
 api_router.include_router(dungeon_router, tags=["dungeons"])
 api_router.include_router(imports_router, prefix="/imports/characters", tags=["imports"])

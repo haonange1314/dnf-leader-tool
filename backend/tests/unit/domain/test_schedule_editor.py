@@ -165,7 +165,6 @@ def _participant(
         role_type_snapshot=role_type,
         damage_score_snapshot=damage,
         buffer_score_snapshot=buffer,
-        is_treasure_snapshot=False,
         is_selected=True,
         is_locked=False,
     )

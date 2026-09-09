@@ -24,6 +24,7 @@ from app.domain.schedule import (
     composition_role_requirements,
     distinct_player_feasibility,
 )
+from app.models.buffer_conversion import BufferConversionVersion
 from app.models.dungeon import DungeonVersion
 from app.models.personnel import Character, Player
 from app.models.schedule import (
@@ -36,7 +37,7 @@ from app.models.schedule import (
     TeamSlot,
     Wave,
 )
-from app.schemas.dungeon import CompositionRules, SpecialRoleRules, StrengthOrderRules
+from app.schemas.dungeon import CompositionRules, StrengthOrderRules
 from app.schemas.schedule import (
     IssueView,
     ScheduleCopy,
@@ -60,6 +61,18 @@ from app.schemas.schedule import (
 )
 
 router = APIRouter()
+
+
+def _current_buffer_conversion(db: DbSession) -> BufferConversionVersion:
+    version = db.scalar(
+        select(BufferConversionVersion)
+        .where(BufferConversionVersion.is_active.is_(True))
+        .order_by(BufferConversionVersion.version.desc())
+        .limit(1)
+    )
+    if version is None:
+        raise AppError(409, "BUFFER_CONVERSION_MISSING", "奶量换算配置尚未初始化")
+    return version
 
 
 def _load(db: DbSession, schedule_id: uuid.UUID, *, for_update: bool = False) -> Schedule:
@@ -335,10 +348,6 @@ def _sync_source_state(
             "bufferScore": (
                 str(character.buffer_score) if character.buffer_score is not None else None
             ),
-            "treasure": character.is_treasure_damage,
-            "fixedLeadTeamBuffer": character.is_fixed_lead_team_buffer,
-            "groupHunt": character.is_group_hunt,
-            "defaultParticipant": character.default_raid_participant,
             "active": character.is_active,
         }
         for character in characters
@@ -390,9 +399,6 @@ def _sync_changes(
             "roleType": participant.role_type_snapshot,
             "damageScore": participant.damage_score_snapshot,
             "bufferScore": participant.buffer_score_snapshot,
-            "isTreasure": participant.is_treasure_snapshot,
-            "isFixedLeadTeamBuffer": participant.is_fixed_lead_team_buffer_snapshot,
-            "isGroupHunt": participant.is_group_hunt_snapshot,
         }
         source_values = {
             "playerName": character.player.display_name,
@@ -401,9 +407,6 @@ def _sync_changes(
             "roleType": character.role_type,
             "damageScore": character.damage_score,
             "bufferScore": character.buffer_score,
-            "isTreasure": character.is_treasure_damage,
-            "isFixedLeadTeamBuffer": character.is_fixed_lead_team_buffer,
-            "isGroupHunt": character.is_group_hunt,
         }
         changed_fields = [
             field for field, current in current_values.items() if current != source_values[field]
@@ -472,6 +475,7 @@ def create_schedule(
         name=payload.name,
         dungeon_version_id=version.id,
         formula_version_id=version.formula_version_id,
+        buffer_conversion_version_id=_current_buffer_conversion(db).id,
         wave_count=wave_count,
         status="DRAFT",
         note=payload.note,
@@ -502,10 +506,7 @@ def create_schedule(
                 role_type_snapshot=character.role_type,
                 damage_score_snapshot=character.damage_score,
                 buffer_score_snapshot=character.buffer_score,
-                is_treasure_snapshot=character.is_treasure_damage,
-                is_fixed_lead_team_buffer_snapshot=character.is_fixed_lead_team_buffer,
-                is_group_hunt_snapshot=character.is_group_hunt,
-                is_selected=character.default_raid_participant,
+                is_selected=True,
                 is_locked=False,
             )
         )
@@ -623,6 +624,7 @@ def copy_schedule(
         name=payload.name,
         dungeon_version_id=target_version.id,
         formula_version_id=target_version.formula_version_id,
+        buffer_conversion_version_id=_current_buffer_conversion(db).id,
         wave_count=preview.wave_count,
         status="DRAFT",
         note=source.note,
@@ -632,7 +634,11 @@ def copy_schedule(
     )
     copied_player_ids: set[uuid.UUID] = set()
     for source_participant in source.participants:
-        character = character_by_id.get(source_participant.character_id)
+        character = (
+            character_by_id.get(source_participant.character_id)
+            if source_participant.character_id is not None
+            else None
+        )
         if character is None:
             continue
         is_active = character.is_active and character.player.is_active
@@ -646,9 +652,6 @@ def copy_schedule(
                 role_type_snapshot=character.role_type,
                 damage_score_snapshot=character.damage_score,
                 buffer_score_snapshot=character.buffer_score,
-                is_treasure_snapshot=character.is_treasure_damage,
-                is_fixed_lead_team_buffer_snapshot=character.is_fixed_lead_team_buffer,
-                is_group_hunt_snapshot=character.is_group_hunt,
                 is_selected=source_participant.is_selected and is_active,
                 is_locked=False,
                 unassigned_reason=(
@@ -1152,10 +1155,7 @@ def commit_schedule_character_sync(
                 role_type_snapshot=character.role_type,
                 damage_score_snapshot=character.damage_score,
                 buffer_score_snapshot=character.buffer_score,
-                is_treasure_snapshot=character.is_treasure_damage,
-                is_fixed_lead_team_buffer_snapshot=character.is_fixed_lead_team_buffer,
-                is_group_hunt_snapshot=character.is_group_hunt,
-                is_selected=character.default_raid_participant,
+                is_selected=True,
                 is_locked=False,
             )
             item.participants.append(participant)
@@ -1181,9 +1181,6 @@ def commit_schedule_character_sync(
             participant.role_type_snapshot = character.role_type
             participant.damage_score_snapshot = character.damage_score
             participant.buffer_score_snapshot = character.buffer_score
-            participant.is_treasure_snapshot = character.is_treasure_damage
-            participant.is_fixed_lead_team_buffer_snapshot = character.is_fixed_lead_team_buffer
-            participant.is_group_hunt_snapshot = character.is_group_hunt
     if deselected_participant_ids:
         for wave in item.waves:
             for team in wave.teams:
@@ -1220,7 +1217,6 @@ def validate_schedule(
     if version is None:
         raise AppError(409, "DUNGEON_VERSION_MISSING", "排表引用的副本版本不存在")
     composition_rules = CompositionRules.model_validate(version.composition_rules)
-    special_role_rules = SpecialRoleRules.model_validate(version.special_role_rules)
     strength_order_rules = StrengthOrderRules.model_validate(version.strength_order_rules)
     teams = [team for wave in item.waves for team in wave.teams]
     capacity = sum(team.member_count_snapshot for team in teams)
@@ -1350,27 +1346,6 @@ def validate_schedule(
                     },
                 )
             )
-    treasure_required = item.wave_count * sum(
-        rule.count_per_wave
-        for rule in special_role_rules.rules
-        if rule.character_flag == "TREASURE_DAMAGE"
-    )
-    treasures = sum(
-        participant.is_treasure_snapshot and participant.role_type_snapshot == "DAMAGE"
-        for participant in selected
-    )
-    if treasures < treasure_required:
-        issues.append(
-            IssueView(
-                severity="WARNING",
-                code="TREASURE_SHORTAGE",
-                message_params={
-                    "required": treasure_required,
-                    "current": treasures,
-                    "shortage": treasure_required - treasures,
-                },
-            )
-        )
     if strength_order_rules.orders:
         issues.append(
             IssueView(

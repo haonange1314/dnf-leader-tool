@@ -39,24 +39,6 @@ def build_rule_context(schedule: Schedule) -> RuleInterpretationContext:
         if first_wave is not None
         else ()
     )
-    ranked_teams = (
-        [team for team in first_wave.teams if team.strength_rank_snapshot is not None]
-        if first_wave is not None
-        else []
-    )
-    lead_team_keys = None
-    if ranked_teams:
-        lead_rank = min(
-            team.strength_rank_snapshot
-            for team in ranked_teams
-            if team.strength_rank_snapshot is not None
-        )
-        lead_team_keys = tuple(
-            team.team_key
-            for team in ranked_teams
-            if team.strength_rank_snapshot == lead_rank
-        )
-
     selected = tuple(
         RuleContextParticipant(
             participant_id=str(participant.id),
@@ -65,8 +47,6 @@ def build_rule_context(schedule: Schedule) -> RuleInterpretationContext:
             character_name=participant.character_name_snapshot,
             profession=participant.profession_snapshot,
             role_type=participant.role_type_snapshot,
-            is_treasure_damage=participant.is_treasure_snapshot,
-            is_group_hunt=participant.is_group_hunt_snapshot,
             allowed_waves=(
                 tuple(
                     sorted(
@@ -86,11 +66,7 @@ def build_rule_context(schedule: Schedule) -> RuleInterpretationContext:
                 if participant.player_id_snapshot in preference_by_player
                 else None
             ),
-            allowed_team_keys=(
-                lead_team_keys
-                if participant.is_fixed_lead_team_buffer_snapshot
-                else None
-            ),
+            allowed_team_keys=None,
         )
         for participant in schedule.participants
         if participant.is_selected

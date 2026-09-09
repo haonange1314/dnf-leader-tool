@@ -87,6 +87,12 @@ UserWriter = Annotated[User, Depends(require_permission("USER_WRITE"))]
 RoleReader = Annotated[User, Depends(require_permission("ROLE_READ"))]
 RoleWriter = Annotated[User, Depends(require_permission("ROLE_WRITE"))]
 AuditReader = Annotated[User, Depends(require_permission("AUDIT_READ"))]
+BufferConversionReader = Annotated[
+    User, Depends(require_permission("BUFFER_CONVERSION_READ"))
+]
+BufferConversionWriter = Annotated[
+    User, Depends(require_permission("BUFFER_CONVERSION_WRITE"))
+]
 
 
 def enforce_schedule_edit_lock(

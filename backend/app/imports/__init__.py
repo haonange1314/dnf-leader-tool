@@ -1,6 +1,5 @@
 from app.imports.characters import (
     CharacterExportRow,
-    CharacterImportDefaults,
     build_error_workbook,
     build_roster_workbook,
     build_template,
@@ -9,7 +8,6 @@ from app.imports.characters import (
 
 __all__ = [
     "CharacterExportRow",
-    "CharacterImportDefaults",
     "build_error_workbook",
     "build_roster_workbook",
     "build_template",

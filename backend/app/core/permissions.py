@@ -37,6 +37,12 @@ PERMISSIONS = (
     PermissionDefinition("ROLE_READ", "查看角色权限", "系统管理", "查看角色和权限矩阵"),
     PermissionDefinition("ROLE_WRITE", "管理角色权限", "系统管理", "创建角色并调整权限"),
     PermissionDefinition("AUDIT_READ", "查看操作日志", "系统管理", "检索和查看操作审计记录"),
+    PermissionDefinition(
+        "BUFFER_CONVERSION_READ", "查看奶量换算", "系统管理", "查看奶量换算规则和历史版本"
+    ),
+    PermissionDefinition(
+        "BUFFER_CONVERSION_WRITE", "维护奶量换算", "系统管理", "创建新的奶量换算配置版本"
+    ),
 )
 
 ALL_PERMISSION_CODES = frozenset(permission.code for permission in PERMISSIONS)
@@ -51,6 +57,8 @@ EDITOR_PERMISSION_CODES = frozenset(
         "ROLE_READ",
         "ROLE_WRITE",
         "AUDIT_READ",
+        "BUFFER_CONVERSION_READ",
+        "BUFFER_CONVERSION_WRITE",
     }
 )
 VIEWER_PERMISSION_CODES = frozenset(

@@ -32,11 +32,6 @@ export interface DungeonVersionFormValues {
   maxWaveCount: number | null;
   teams: TeamFormValue[];
   compositions: CompositionFormValue[];
-  treasureRuleEnabled: boolean;
-  treasureCount: number;
-  treasureTargetTeamKey: string | null;
-  treasureRequired: boolean;
-  treasureCompanionOptimization: boolean;
   strengthOrders: StrengthOrderFormValue[];
   balanceMetrics: DungeonRoleType[];
   respectPlayerPreferences: boolean;
@@ -98,11 +93,6 @@ export function defaultDungeonVersionForm(): DungeonVersionFormValues {
         priority: 2,
       },
     ],
-    treasureRuleEnabled: true,
-    treasureCount: 1,
-    treasureTargetTeamKey: "RED",
-    treasureRequired: true,
-    treasureCompanionOptimization: true,
     strengthOrders: [
       { metric: "DAMAGE", teamKeys },
       { metric: "BUFFER", teamKeys },
@@ -114,9 +104,6 @@ export function defaultDungeonVersionForm(): DungeonVersionFormValues {
 }
 
 export function dungeonVersionToForm(version: DungeonVersion): DungeonVersionFormValues {
-  const treasureRule = version.specialRoleRules.rules.find(
-    (rule) => rule.characterFlag === "TREASURE_DAMAGE",
-  );
   return {
     defaultWaveCount: version.defaultWaveCount,
     minWaveCount: version.minWaveCount,
@@ -137,11 +124,6 @@ export function dungeonVersionToForm(version: DungeonVersion): DungeonVersionFor
       bufferCount: rule.roles.BUFFER ?? 0,
       priority: rule.priority,
     })),
-    treasureRuleEnabled: Boolean(treasureRule),
-    treasureCount: treasureRule?.countPerWave ?? 1,
-    treasureTargetTeamKey: treasureRule?.targetTeamKey ?? version.teams[0]?.teamKey ?? null,
-    treasureRequired: treasureRule?.requiredForCompleteWave ?? true,
-    treasureCompanionOptimization: Boolean(treasureRule?.companionPolicy),
     strengthOrders: version.strengthOrderRules.orders.map((order) => ({
       metric: order.metric,
       teamKeys: [...order.teams],
@@ -184,24 +166,7 @@ export function dungeonVersionFormToInput(
     },
     specialRoleRules: {
       schemaVersion: 1,
-      rules:
-        values.treasureRuleEnabled && values.treasureTargetTeamKey
-          ? [
-              {
-                code: "TREASURE_DAMAGE_CORE",
-                characterFlag: "TREASURE_DAMAGE",
-                countPerWave: values.treasureCount,
-                targetTeamKey: values.treasureTargetTeamKey.toUpperCase(),
-                requiredForCompleteWave: values.treasureRequired,
-                companionPolicy: values.treasureCompanionOptimization
-                  ? {
-                      roleType: "DAMAGE",
-                      objective: "MINIMIZE_OTHER_MEMBER_SCORE",
-                    }
-                  : null,
-              },
-            ]
-          : [],
+      rules: [],
     },
     strengthOrderRules: {
       schemaVersion: 1,
@@ -298,12 +263,6 @@ export function versionFormWarnings(values: DungeonVersionFormValues): string[] 
   );
   if (uncovered.length) {
     warnings.push(`这些队伍没有适用组成：${uncovered.map((team) => team.displayName).join("、")}`);
-  }
-  if (
-    values.treasureRuleEnabled &&
-    !teamKeys.includes(String(values.treasureTargetTeamKey ?? "").toUpperCase())
-  ) {
-    warnings.push("秘宝 C 目标队伍不存在");
   }
   return [...new Set(warnings)];
 }

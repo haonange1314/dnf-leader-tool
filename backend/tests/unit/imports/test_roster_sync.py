@@ -23,10 +23,6 @@ def _character(
         role_type="DAMAGE",
         damage_score=Decimal("100"),
         buffer_score=None,
-        is_treasure_damage=False,
-        is_fixed_lead_team_buffer=False,
-        is_group_hunt=False,
-        default_raid_participant=True,
         note=None,
         is_active=active,
         sort_order=0,
@@ -62,21 +58,16 @@ def test_full_sync_deletes_unreferenced_players_and_characters() -> None:
     plan = _roster_sync_plan(
         [imported_player, removed_player],
         imported,
-        referenced_player_ids=set(),
-        referenced_character_ids=set(),
     )
 
     assert plan.delete_players == [removed_player]
     assert plan.delete_characters == [
         removed_character,
         already_inactive,
-        removed_player_character,
     ]
-    assert plan.deactivate_players == []
-    assert plan.deactivate_characters == []
 
 
-def test_full_sync_deactivates_referenced_records_and_deletes_safe_siblings() -> None:
+def test_full_sync_hard_deletes_players_and_safe_siblings() -> None:
     player = _player("玩家A")
     referenced = _character(player.id, "剑魂")
     unreferenced = _character(player.id, "红眼")
@@ -85,14 +76,10 @@ def test_full_sync_deactivates_referenced_records_and_deletes_safe_siblings() ->
     plan = _roster_sync_plan(
         [player],
         {},
-        referenced_player_ids=set(),
-        referenced_character_ids={referenced.id},
     )
 
-    assert plan.delete_players == []
-    assert plan.delete_characters == [unreferenced]
-    assert plan.deactivate_players == [player]
-    assert plan.deactivate_characters == [referenced]
+    assert plan.delete_players == [player]
+    assert plan.delete_characters == []
 
 
 def test_preview_compares_decimal_scores_by_value() -> None:

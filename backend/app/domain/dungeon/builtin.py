@@ -1,5 +1,4 @@
 from app.schemas.dungeon import (
-    CompanionPolicy,
     CompositionRule,
     CompositionRules,
     DungeonVersionDefinition,
@@ -7,7 +6,6 @@ from app.schemas.dungeon import (
     MissingSlotPolicy,
     OptimizationRules,
     RoleType,
-    SpecialRoleRule,
     SpecialRoleRules,
     StrengthOrder,
     StrengthOrderRules,
@@ -23,8 +21,8 @@ def builtin_raid_12_definition() -> DungeonVersionDefinition:
     return DungeonVersionDefinition(
         dungeon_code="BUILTIN_RAID_12",
         dungeon_name="12 人团本",
-        description="内置 12 人团本：红黄绿三队，优先 3C1奶，每波一个红队秘宝 C。",
-        version_no=2,
+        description="内置 12 人团本：红黄绿三队，优先 3C1奶。",
+        version_no=4,
         default_wave_count=12,
         min_wave_count=1,
         max_wave_count=50,
@@ -71,19 +69,7 @@ def builtin_raid_12_definition() -> DungeonVersionDefinition:
                 ),
             )
         ),
-        special_role_rules=SpecialRoleRules(
-            rules=(
-                SpecialRoleRule(
-                    code="TREASURE_DAMAGE_CORE",
-                    character_flag="TREASURE_DAMAGE",
-                    count_per_wave=1,
-                    target_team_key="RED",
-                    companion_policy=CompanionPolicy(
-                        role_type=RoleType.DAMAGE, objective="MINIMIZE_OTHER_MEMBER_SCORE"
-                    ),
-                ),
-            )
-        ),
+        special_role_rules=SpecialRoleRules(),
         strength_order_rules=StrengthOrderRules(
             orders=(
                 StrengthOrder(metric=RoleType.DAMAGE, teams=team_keys),

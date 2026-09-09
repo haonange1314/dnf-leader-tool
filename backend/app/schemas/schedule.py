@@ -191,6 +191,7 @@ class ScheduleSummary(BaseModel):
     id: uuid.UUID
     name: str
     dungeon_version_id: uuid.UUID
+    buffer_conversion_version_id: uuid.UUID
     wave_count: int
     status: str
     revision: int
@@ -246,7 +247,7 @@ class WaveView(BaseModel):
 class ParticipantView(BaseModel):
     model_config = CFG
     id: uuid.UUID
-    character_id: uuid.UUID
+    character_id: uuid.UUID | None
     player_id_snapshot: uuid.UUID
     player_name_snapshot: str
     character_name_snapshot: str
@@ -254,9 +255,7 @@ class ParticipantView(BaseModel):
     role_type_snapshot: str
     damage_score_snapshot: Any | None
     buffer_score_snapshot: Any | None
-    is_treasure_snapshot: bool
-    is_fixed_lead_team_buffer_snapshot: bool
-    is_group_hunt_snapshot: bool
+    actual_buffer_score_snapshot: Any | None
     is_selected: bool
     is_locked: bool
     unassigned_reason: dict[str, Any] | None

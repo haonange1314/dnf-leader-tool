@@ -77,6 +77,7 @@ def _resolve_permissions(db: DbSession, codes: list[str]) -> list[Permission]:
         "SHARE_MANAGE": {"SCHEDULE_READ"},
         "USER_WRITE": {"USER_READ", "ROLE_READ"},
         "ROLE_WRITE": {"ROLE_READ"},
+        "BUFFER_CONVERSION_WRITE": {"BUFFER_CONVERSION_READ"},
     }
     missing = sorted(
         required

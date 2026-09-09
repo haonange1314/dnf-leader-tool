@@ -1,4 +1,4 @@
-import { CrownOutlined, LockOutlined, UnlockOutlined } from "@ant-design/icons";
+import { LockOutlined, UnlockOutlined } from "@ant-design/icons";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
 import { Button, Card, Col, Row, Space, Tag, Typography } from "antd";
@@ -127,22 +127,6 @@ function EditorSlot({
         className="editor-slot-actions"
         onPointerDown={(event) => event.stopPropagation()}
       >
-        {participant?.isTreasureSnapshot ? (
-          <Button
-            type="text"
-            size="small"
-            title={core ? "取消本波核心" : "设为本波核心"}
-            icon={<CrownOutlined />}
-            disabled={disabled || wave.isLocked}
-            onClick={() =>
-              onOperation(
-                core
-                  ? { type: "CLEAR_WAVE_CORE", waveId: wave.id, ruleCode: core.ruleCode }
-                  : { type: "SET_WAVE_CORE", waveId: wave.id, participantId: participant.id },
-              )
-            }
-          />
-        ) : null}
         {participant ? (
           <>
             <Button
@@ -249,11 +233,8 @@ export function ScheduleParticipantLabel({
       <Typography.Text type="secondary" className="participant-score">
         {participant.roleTypeSnapshot === "DAMAGE"
           ? `伤害 ${Number(participant.damageScoreSnapshot ?? 0).toLocaleString("zh-CN")} 亿`
-          : `奶量 ${Number(participant.bufferScoreSnapshot ?? 0).toFixed(2)} 万`}
+          : `奶量 ${Number(participant.actualBufferScoreSnapshot ?? 0).toFixed(2)} 万`}
       </Typography.Text>
-      {participant.isTreasureSnapshot ? <Tag color="purple">秘宝</Tag> : null}
-      {participant.isFixedLeadTeamBufferSnapshot ? <Tag color="red">固定红奶</Tag> : null}
-      {participant.isGroupHuntSnapshot ? <Tag color="orange">群猎</Tag> : null}
       {core ? <Tag color="purple">本波核心</Tag> : null}
       {participant.unassignedReason ? (
         <Tag color="warning">{describeUnassignedReason(participant.unassignedReason)}</Tag>

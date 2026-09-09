@@ -138,7 +138,7 @@ export function PersonnelPage({ userRole, permissions, onError, onSuccess }: Pro
   const deletePlayer = (player: Player) => {
     Modal.confirm({
       title: `永久删除玩家“${player.displayName}”？`,
-      content: `将同时永久删除该玩家的 ${player.characters.length} 个角色，且无法恢复。若已有排表引用，系统会拒绝删除。`,
+      content: `将同时永久删除该玩家的 ${player.characters.length} 个角色，且无法恢复；历史排表继续使用已保存的快照。`,
       okText: "永久删除",
       okButtonProps: { danger: true },
       cancelText: "取消",
@@ -164,10 +164,6 @@ export function PersonnelPage({ userRole, permissions, onError, onSuccess }: Pro
       profession: character.profession,
       roleType: character.roleType,
       score: character.damageScore ?? character.bufferScore,
-      isTreasureDamage: character.isTreasureDamage,
-      isFixedLeadTeamBuffer: character.isFixedLeadTeamBuffer,
-      isGroupHunt: character.isGroupHunt,
-      defaultRaidParticipant: character.defaultRaidParticipant,
       isActive: character.isActive,
     });
     setCharacterPlayer(player);
@@ -189,11 +185,6 @@ export function PersonnelPage({ userRole, permissions, onError, onSuccess }: Pro
       ...rest,
       damageScore: role === "DAMAGE" ? normalizedScore : null,
       bufferScore: role === "BUFFER" ? normalizedScore : null,
-      isTreasureDamage: role === "DAMAGE" && values.isTreasureDamage,
-      isFixedLeadTeamBuffer:
-        role === "BUFFER" && values.isFixedLeadTeamBuffer,
-      isGroupHunt: role === "DAMAGE" && values.isGroupHunt,
-      note: editingCharacter?.note ?? null,
     };
     try {
       await api(
@@ -215,7 +206,7 @@ export function PersonnelPage({ userRole, permissions, onError, onSuccess }: Pro
   const deleteCharacter = (character: Character) => {
     Modal.confirm({
       title: `永久删除角色“${character.profession}”？`,
-      content: "删除后无法恢复。若已有排表引用，系统会拒绝删除。",
+      content: "删除后无法恢复；历史排表继续使用已保存的角色快照。",
       okText: "永久删除",
       okButtonProps: { danger: true },
       cancelText: "取消",
@@ -274,10 +265,8 @@ export function PersonnelPage({ userRole, permissions, onError, onSuccess }: Pro
       title: "确认按 Excel 全量同步人员？",
       content: (
         <Typography.Text>
-          文件外且未被排表引用的 {batch.summary.delete_players ?? 0} 名玩家、
-          {batch.summary.delete ?? 0} 个角色将永久删除；已有排表引用的
-          {batch.summary.deactivate_players} 名玩家、{batch.summary.deactivate}
-          个角色将改为停用，历史排表不受影响。
+          文件外的 {batch.summary.delete_players ?? 0} 名玩家、
+          {batch.summary.delete ?? 0} 个角色将永久删除；已有排表继续使用保存的角色快照。
         </Typography.Text>
       ),
       okText: "确认同步",
@@ -285,9 +274,7 @@ export function PersonnelPage({ userRole, permissions, onError, onSuccess }: Pro
       okButtonProps: {
         danger:
           (batch.summary.delete_players ?? 0) > 0 ||
-          (batch.summary.delete ?? 0) > 0 ||
-          batch.summary.deactivate_players > 0 ||
-          batch.summary.deactivate > 0,
+          (batch.summary.delete ?? 0) > 0,
       },
       onOk: commit,
     });
@@ -382,7 +369,7 @@ export function PersonnelPage({ userRole, permissions, onError, onSuccess }: Pro
         <div>
           <Typography.Title level={2}>人员管理</Typography.Title>
           <Typography.Text type="secondary">
-            以玩家分组维护 C、奶与默认参团属性
+            以 Excel 全量同步为主，页面用于少量玩家、职业和启用状态调整
           </Typography.Text>
         </div>
         <Button
@@ -432,8 +419,7 @@ export function PersonnelPage({ userRole, permissions, onError, onSuccess }: Pro
                 {batch.summary.reactivate_players} · 忽略 {batch.summary.ignore} ·
                 将删除玩家 {batch.summary.delete_players ?? 0} · 将删除角色{" "}
                 {batch.summary.delete ?? 0} ·
-                将停用玩家 {batch.summary.deactivate_players} · 将停用角色{" "}
-                {batch.summary.deactivate} · 调整顺序 {batch.summary.reorder ?? 0} · 错误{" "}
+                调整顺序 {batch.summary.reorder ?? 0} · 错误{" "}
                 {batch.summary.error}
               </Tag>
               <Button
@@ -590,7 +576,7 @@ export function PersonnelPage({ userRole, permissions, onError, onSuccess }: Pro
             {
               title: "变更摘要",
               render: (_, item) =>
-                `新增 ${item.summary.create} · 更新 ${item.summary.update} · 删除 ${(item.summary.delete_players ?? 0) + (item.summary.delete ?? 0)} · 停用 ${item.summary.deactivate_players + item.summary.deactivate}`,
+                `新增 ${item.summary.create} · 更新 ${item.summary.update} · 删除 ${(item.summary.delete_players ?? 0) + (item.summary.delete ?? 0)}`,
             },
             {
               title: "时间",
@@ -636,10 +622,6 @@ export function PersonnelPage({ userRole, permissions, onError, onSuccess }: Pro
           layout="vertical"
           initialValues={{
             roleType: "DAMAGE",
-            isTreasureDamage: false,
-            isFixedLeadTeamBuffer: false,
-            isGroupHunt: false,
-            defaultRaidParticipant: true,
             isActive: true,
           }}
           onFinish={saveCharacter}
@@ -677,44 +659,9 @@ export function PersonnelPage({ userRole, permissions, onError, onSuccess }: Pro
           </div>
 
           <Typography.Text className="character-form-section-title">
-            角色标签
+            状态设置
           </Typography.Text>
           <div className="character-form-switch-grid">
-            {characterRole === "DAMAGE" ? (
-              <>
-                <CharacterSwitchField label="秘宝 C">
-                  <Form.Item name="isTreasureDamage" valuePropName="checked" noStyle>
-                    <Switch />
-                  </Form.Item>
-                </CharacterSwitchField>
-                <CharacterSwitchField label="群猎 C">
-                  <Form.Item name="isGroupHunt" valuePropName="checked" noStyle>
-                    <Switch />
-                  </Form.Item>
-                </CharacterSwitchField>
-              </>
-            ) : (
-              <CharacterSwitchField label="固定红队奶">
-                <Form.Item
-                  name="isFixedLeadTeamBuffer"
-                  valuePropName="checked"
-                  noStyle
-                >
-                  <Switch />
-                </Form.Item>
-              </CharacterSwitchField>
-            )}
-          </div>
-
-          <Typography.Text className="character-form-section-title">
-            参与设置
-          </Typography.Text>
-          <div className="character-form-switch-grid">
-            <CharacterSwitchField label="默认加入新排表">
-              <Form.Item name="defaultRaidParticipant" valuePropName="checked" noStyle>
-                <Switch />
-              </Form.Item>
-            </CharacterSwitchField>
             <CharacterSwitchField label="角色启用">
               <Form.Item name="isActive" valuePropName="checked" noStyle>
                 <Switch />
@@ -762,8 +709,6 @@ function importActionLabel(action: ImportChange["action"]): ReactNode {
     REACTIVATE: { color: "cyan", text: "恢复" },
     DELETE_PLAYER: { color: "red", text: "删除玩家" },
     DELETE_CHARACTER: { color: "volcano", text: "删除角色" },
-    DEACTIVATE_PLAYER: { color: "red", text: "停用玩家" },
-    DEACTIVATE_CHARACTER: { color: "orange", text: "停用角色" },
     REORDER: { color: "default", text: "调整顺序" },
   };
   const label = labels[action];
@@ -993,17 +938,6 @@ function SortableCharacterCard({
             <Typography.Text strong className="character-card-name">
               {character.profession}
             </Typography.Text>
-            {character.isTreasureDamage && (
-              <Tag className="character-trait-tag character-trait-treasure">秘宝 C</Tag>
-            )}
-            {character.isFixedLeadTeamBuffer && (
-              <Tag className="character-trait-tag character-trait-fixed-buffer">
-                固定红队奶
-              </Tag>
-            )}
-            {character.isGroupHunt && (
-              <Tag className="character-trait-tag character-trait-group-hunt">群猎 C</Tag>
-            )}
           </Space>
           <Space size={2}>
             <Button
@@ -1037,19 +971,16 @@ function SortableCharacterCard({
               />
               <span>{character.isActive ? "启用" : "停用"}</span>
             </span>
-            <span className="character-status-divider" aria-hidden="true" />
-            <span className="character-status-item">
-              <span
-                className={`character-status-dot ${character.defaultRaidParticipant ? "is-positive" : "is-negative"}`}
-                aria-hidden="true"
-              />
-              <span>{character.defaultRaidParticipant ? "参团" : "不参团"}</span>
-            </span>
           </div>
           <Typography.Text className="character-card-score">
-            <span>{scoreLabel}</span>
-            <strong>{scoreValue}</strong>
-            <span>{scoreUnit}</span>
+            {character.roleType === "BUFFER" ? (
+              <>
+                <span>站街</span><strong>{character.bufferScore ?? "—"}</strong><span>万</span>
+                <span>· 实际</span><strong>{character.actualBufferScore ?? "—"}</strong><span>万</span>
+              </>
+            ) : (
+              <><span>{scoreLabel}</span><strong>{scoreValue}</strong><span>{scoreUnit}</span></>
+            )}
           </Typography.Text>
         </div>
       </Card>

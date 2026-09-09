@@ -28,10 +28,7 @@ describe("dungeon version form mapping", () => {
       { metric: "DAMAGE", teams: ["RED", "YELLOW", "GREEN"] },
       { metric: "BUFFER", teams: ["RED", "YELLOW", "GREEN"] },
     ]);
-    expect(payload.specialRoleRules.rules[0]).toMatchObject({
-      characterFlag: "TREASURE_DAMAGE",
-      targetTeamKey: "RED",
-    });
+    expect(payload.specialRoleRules.rules).toEqual([]);
     expect(versionFormWarnings(values)).toEqual([]);
   });
 
@@ -110,18 +107,16 @@ describe("dungeon version form mapping", () => {
     );
   });
 
-  it("reports invalid wave ranges and stale treasure targets", () => {
+  it("reports invalid wave ranges", () => {
     const values = defaultDungeonVersionForm();
     values.minWaveCount = 8;
     values.maxWaveCount = 6;
     values.defaultWaveCount = 7;
-    values.treasureTargetTeamKey = "REMOVED_TEAM";
 
     expect(versionFormWarnings(values)).toEqual(
       expect.arrayContaining([
         "最多波数不能小于最少波数",
         "默认波数必须位于允许范围内",
-        "秘宝 C 目标队伍不存在",
       ]),
     );
   });

@@ -28,9 +28,7 @@ def test_default_12_wave_raid_is_complete_and_valid() -> None:
     assert Counter(a.wave_no for a in result.assignments) == {wave: 12 for wave in range(1, 13)}
     assert all(summary.member_count == 4 for summary in result.team_summaries)
     assert all(summary.composition_code == "3D1B" for summary in result.team_summaries)
-    assert Counter(a.wave_no for a in result.special_assignments) == {
-        wave: 1 for wave in range(1, 13)
-    }
+    assert result.special_assignments == ()
     assert all(a.team_key == "RED" for a in result.special_assignments)
     stage_codes = [stage.code for stage in result.objective_stages]
     assert stage_codes.index("BALANCE_DAMAGE") < stage_codes.index("BALANCE_BUFFER")
@@ -75,11 +73,9 @@ def test_late_stage_timeout_keeps_incumbent_and_records_remaining_stages(
     stage_by_code = {stage.code: stage for stage in result.objective_stages}
     assert {
         "COMPOSITION_PRIORITY",
-        "SPECIAL_ROLE",
         "STRENGTH_ORDER",
         "BALANCE_DAMAGE",
         "BALANCE_BUFFER",
-        "SPECIAL_COMPANION",
     } <= stage_by_code.keys()
     assert result.status == SolverStatus.FEASIBLE
     assert stage_by_code["BALANCE_DAMAGE"].value == result.objective_summary.damage_spread

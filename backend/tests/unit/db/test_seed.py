@@ -51,7 +51,7 @@ def test_existing_builtin_must_match_canonical_definition() -> None:
     dungeon, _version = _existing_builtin()
     definition = builtin_raid_12_definition()
 
-    assert definition.version_no == 2
+    assert definition.version_no == 4
     assert definition.formula.buffer_scale == 100
     _validate_existing_builtin(dungeon, definition)
 
@@ -68,5 +68,5 @@ def test_existing_builtin_rejects_missing_version() -> None:
     dungeon, _version = _existing_builtin()
     dungeon.versions = []
 
-    with pytest.raises(RuntimeError, match="缺少 v2"):
+    with pytest.raises(RuntimeError, match="缺少 v4"):
         _validate_existing_builtin(dungeon, builtin_raid_12_definition())

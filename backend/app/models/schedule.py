@@ -24,6 +24,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+from app.models.buffer_conversion import BufferConversionVersion
 from app.models.mixins import TimestampMixin
 
 
@@ -45,6 +46,12 @@ class Schedule(TimestampMixin, Base):
     formula_version_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("formula_versions.id", ondelete="RESTRICT"), nullable=False
     )
+    buffer_conversion_version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("buffer_conversion_versions.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    buffer_conversion_version: Mapped[BufferConversionVersion] = relationship(lazy="selectin")
     wave_count: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="DRAFT")
     note: Mapped[str | None] = mapped_column(Text)
@@ -181,8 +188,8 @@ class ScheduleParticipant(Base):
         nullable=False,
         index=True,
     )
-    character_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("characters.id", ondelete="RESTRICT"), nullable=False
+    character_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("characters.id", ondelete="SET NULL"), nullable=True
     )
     player_id_snapshot: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     player_name_snapshot: Mapped[str] = mapped_column(String(120), nullable=False)
@@ -191,15 +198,21 @@ class ScheduleParticipant(Base):
     role_type_snapshot: Mapped[str] = mapped_column(String(16), nullable=False)
     damage_score_snapshot: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
     buffer_score_snapshot: Mapped[Decimal | None] = mapped_column(Numeric(8, 2))
-    is_treasure_snapshot: Mapped[bool] = mapped_column(Boolean, nullable=False)
-    is_fixed_lead_team_buffer_snapshot: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False
-    )
-    is_group_hunt_snapshot: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_selected: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     is_locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     unassigned_reason: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     schedule: Mapped[Schedule] = relationship(back_populates="participants")
+
+    @property
+    def actual_buffer_score_snapshot(self) -> Decimal | None:
+        if self.buffer_score_snapshot is None or self.role_type_snapshot != "BUFFER":
+            return None
+        from app.domain.scoring.buffer_conversion import calculate_actual_buffer_score
+
+        rules = getattr(self.schedule.buffer_conversion_version, "rules", [])
+        return calculate_actual_buffer_score(
+            self.buffer_score_snapshot, self.profession_snapshot, rules
+        )
 
 
 class SchedulePlayerPreference(Base):
@@ -208,7 +221,7 @@ class SchedulePlayerPreference(Base):
         UUID(as_uuid=True), ForeignKey("schedules.id", ondelete="CASCADE"), primary_key=True
     )
     player_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("players.id", ondelete="RESTRICT"), primary_key=True
+        UUID(as_uuid=True), primary_key=True
     )
     allowed_waves: Mapped[list[int] | None] = mapped_column(ARRAY(SmallInteger))
     max_wave_count: Mapped[int | None] = mapped_column(SmallInteger)
@@ -233,7 +246,7 @@ class Wave(Base):
     wave_no: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     is_locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     damage_total: Mapped[Decimal] = mapped_column(Numeric(16, 2), nullable=False, default=0)
-    buffer_total: Mapped[Decimal] = mapped_column(Numeric(10, 1), nullable=False, default=0)
+    buffer_total: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=0)
     schedule: Mapped[Schedule] = relationship(back_populates="waves")
     teams: Mapped[list[Team]] = relationship(
         back_populates="wave", cascade="all, delete-orphan", order_by="Team.display_order_snapshot"
@@ -265,7 +278,7 @@ class Team(Base):
     member_count_snapshot: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     strength_rank_snapshot: Mapped[int | None] = mapped_column(SmallInteger)
     damage_total: Mapped[Decimal] = mapped_column(Numeric(16, 2), nullable=False, default=0)
-    buffer_total: Mapped[Decimal] = mapped_column(Numeric(10, 1), nullable=False, default=0)
+    buffer_total: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=0)
     composition_code: Mapped[str] = mapped_column(String(40), nullable=False, default="INCOMPLETE")
     wave: Mapped[Wave] = relationship(back_populates="teams")
     slots: Mapped[list[TeamSlot]] = relationship(

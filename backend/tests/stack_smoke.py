@@ -51,7 +51,11 @@ def client_request(
 
 
 def request(path: str, method: str = "GET", payload: dict[str, object] | None = None) -> object:
-    return client_request(opener, jar, path, method, payload)
+    try:
+        return client_request(opener, jar, path, method, payload)
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode(errors="replace")
+        raise AssertionError(f"unexpected HTTP {exc.code}: {method} {path}: {body}") from exc
 
 
 def upload_xlsx(path: str, filename: str, content: bytes) -> object:
@@ -176,12 +180,37 @@ editor_login = client_request(
 )
 assert isinstance(editor_login, dict) and editor_login["role"] == "EDITOR"
 permissions = request("/permissions")
-assert isinstance(permissions, dict) and permissions["total"] >= 17
+assert isinstance(permissions, dict) and permissions["total"] >= 19
 roles = request("/roles")
 assert isinstance(roles, dict) and {item["code"] for item in roles["items"]} >= {
     "OWNER",
     "EDITOR",
     "VIEWER",
+}
+buffer_conversion = request("/buffer-conversions/current")
+assert isinstance(buffer_conversion, dict) and buffer_conversion["version"] == 1
+buffer_preview = request(
+    "/buffer-conversions/preview",
+    "POST",
+    {"profession": "奶萝", "standingScore": "4.75"},
+)
+assert isinstance(buffer_preview, dict) and buffer_preview["actualScore"] == "4.94"
+buffer_conversion_v2 = request(
+    "/buffer-conversions/versions",
+    "POST",
+    {"rules": buffer_conversion["rules"]},
+)
+assert isinstance(buffer_conversion_v2, dict) and buffer_conversion_v2["version"] == 2
+viewer_buffer_denied = client_request_error(
+    viewer_opener,
+    viewer_jar,
+    "/buffer-conversions/current",
+    "GET",
+    {},
+    403,
+)
+assert viewer_buffer_denied["error"]["details"] == {
+    "requiredPermission": "BUFFER_CONVERSION_READ"
 }
 roster_reader_role = request(
     "/roles",
@@ -338,8 +367,6 @@ inactive_player = request(
                 "profession": "测试职业",
                 "roleType": "DAMAGE",
                 "damageScore": 100,
-                "isTreasureDamage": False,
-                "defaultRaidParticipant": True,
                 "isActive": True,
             }
         ],
@@ -356,15 +383,12 @@ workflow_player = request(
                 "profession": "测试职业",
                 "roleType": "DAMAGE",
                 "damageScore": 500,
-                "isTreasureDamage": True,
-                "defaultRaidParticipant": True,
                 "isActive": True,
             },
             {
                 "profession": "测试奶系",
                 "roleType": "BUFFER",
                 "bufferScore": 50,
-                "defaultRaidParticipant": True,
                 "isActive": True,
             },
         ],
@@ -414,8 +438,6 @@ duplicate_profession = request_error(
         "profession": "测试职业",
         "roleType": "DAMAGE",
         "damageScore": 450,
-        "isTreasureDamage": False,
-        "defaultRaidParticipant": True,
         "isActive": True,
     },
     409,
@@ -428,8 +450,6 @@ missing_from_import_character = request(
         "profession": "待同步停用职业",
         "roleType": "DAMAGE",
         "damageScore": 300,
-        "isTreasureDamage": False,
-        "defaultRaidParticipant": True,
         "isActive": True,
     },
 )
@@ -458,17 +478,13 @@ invalid_sheet.title = "角色数据"
 invalid_sheet.append(
     (
         "序号",
-        "玩家昵称",
+        "玩家",
         "职业",
         "类型",
-        "模拟伤害亿/增益量万",
-        "是否秘宝C",
-        "固定红队奶",
-        "是否群猎",
-        "是否参与团本",
+        "模拟伤害亿/站街奶量万",
     )
 )
-invalid_sheet.append((1, "错误预览玩家", "剑魂", "未知类型", 100, "否", "否", "否", "是"))
+invalid_sheet.append((1, "错误预览玩家", "剑魂", "未知类型", 100))
 invalid_stream = BytesIO()
 invalid_workbook.save(invalid_stream)
 invalid_preview = upload_xlsx(
@@ -490,19 +506,15 @@ sheet.title = "角色数据"
 sheet.append(
     (
         "序号",
-        "玩家昵称",
+        "玩家",
         "职业",
         "类型",
-        "模拟伤害亿/增益量万",
-        "是否秘宝C",
-        "固定红队奶",
-        "是否群猎",
-        "是否参与团本",
+        "模拟伤害亿/站街奶量万",
     )
 )
-sheet.append((1, "已停用验收玩家", "测试职业", "C", "100.00", "否", "否", "否", "是"))
-sheet.append((2, "排表工作流玩家", "测试职业", "C", "500.00", "是", "否", "否", "是"))
-sheet.append((3, "排表工作流玩家", "测试奶系", "奶", "50.00", "否", "否", "否", "是"))
+sheet.append((1, "已停用验收玩家", "测试职业", "C", "100"))
+sheet.append((2, "排表工作流玩家", "测试职业", "C", "500"))
+sheet.append((3, "排表工作流玩家", "测试奶系", "奶", "50.00"))
 workbook_stream = BytesIO()
 workbook.save(workbook_stream)
 import_preview = upload_xlsx(
@@ -517,8 +529,6 @@ assert {
         "create",
         "update",
         "ignore",
-        "deactivate",
-        "deactivate_players",
         "delete",
         "delete_players",
         "reactivate_players",
@@ -529,13 +539,11 @@ assert {
     "create": 0,
     "update": 1,
     "ignore": 2,
-    "deactivate": 0,
-    "deactivate_players": 0,
-    "delete": 2,
+    "delete": 1,
     "delete_players": 1,
     "reactivate_players": 1,
     "error": 0,
-    "sync": 2,
+    "sync": 3,
 }
 assert isinstance(import_preview["summary"]["sync_fingerprint"], int)
 assert any(
@@ -549,7 +557,7 @@ import_commit = request(
 )
 assert isinstance(import_commit, dict) and import_commit["status"] == "COMMITTED"
 import_history = request("/imports/characters/history?limit=10&offset=0")
-assert isinstance(import_history, dict) and import_history["total"] >= 2
+assert isinstance(import_history, dict) and import_history["total"] >= 1
 assert import_history["items"][0]["id"] == import_preview["id"]
 roster_export_response = opener.open(f"{BASE_URL}/imports/characters/export.xlsx")
 roster_export = load_workbook(BytesIO(roster_export_response.read()), read_only=True)
@@ -598,8 +606,6 @@ on_demand_character = request(
         "profession": "按需测试职业",
         "roleType": "DAMAGE",
         "damageScore": 350,
-        "isTreasureDamage": False,
-        "defaultRaidParticipant": False,
         "isActive": True,
     },
 )
@@ -611,20 +617,6 @@ lifecycle_schedule = request(
     {"name": "排表生命周期验收", "dungeonVersionId": source_version["id"]},
 )
 assert isinstance(lifecycle_schedule, dict) and lifecycle_schedule["revision"] == 1
-referenced_character_delete = request_error(
-    f"/characters/{workflow_player['characters'][0]['id']}",
-    "DELETE",
-    {},
-    expected_status=409,
-)
-assert referenced_character_delete["error"]["code"] == "PERSONNEL_DELETE_REFERENCED"
-referenced_player_delete = request_error(
-    f"/players/{workflow_player['id']}",
-    "DELETE",
-    {},
-    expected_status=409,
-)
-assert referenced_player_delete["error"]["code"] == "PERSONNEL_DELETE_REFERENCED"
 editor_delete_denied = client_request_error(
     editor_opener,
     editor_jar,
@@ -779,7 +771,7 @@ on_demand_participant = next(
     for participant in schedule["participants"]
     if participant["characterId"] == on_demand_character["id"]
 )
-assert on_demand_participant["isSelected"] is False
+assert on_demand_participant["isSelected"] is True
 report = request(f"/schedules/{schedule['id']}/validate", "POST", {"baseRevision": 1})
 assert isinstance(report, dict) and report["revision"] == 1
 schedule = request(
@@ -839,8 +831,6 @@ new_character = request(
         "profession": "测试职业二",
         "roleType": "DAMAGE",
         "damageScore": 450,
-        "isTreasureDamage": False,
-        "defaultRaidParticipant": True,
         "isActive": True,
     },
 )
@@ -852,8 +842,6 @@ new_on_demand_character = request(
         "profession": "按需测试职业二",
         "roleType": "DAMAGE",
         "damageScore": 325,
-        "isTreasureDamage": False,
-        "defaultRaidParticipant": False,
         "isActive": True,
     },
 )
@@ -875,7 +863,7 @@ synced_on_demand_participant = next(
     for participant in schedule["participants"]
     if participant["characterId"] == new_on_demand_character["id"]
 )
-assert synced_on_demand_participant["isSelected"] is False
+assert synced_on_demand_participant["isSelected"] is True
 workflow_report = request(f"/schedules/{schedule['id']}/validate", "POST", {"baseRevision": 7})
 assert isinstance(workflow_report, dict)
 workflow_issue_codes = {issue["code"] for issue in workflow_report["issues"]}
@@ -950,7 +938,7 @@ assert (
         participant["unassignedReason"] is not None
         for participant in generated_schedule["participants"]
     )
-    == 2
+    == 4
 )
 regeneration = request(
     f"/schedules/{copied_schedule['id']}/generate",
@@ -1116,12 +1104,9 @@ for index in range(11):
             "displayName": f"发布验收玩家 {index + 1}",
             "characters": [
                 {
-                    "name": f"发布验收 C {index + 1}",
                     "profession": "测试职业",
                     "roleType": "DAMAGE",
                     "damageScore": 400 + index,
-                    "isTreasureDamage": False,
-                    "defaultRaidParticipant": True,
                     "isActive": True,
                 }
             ],
@@ -1230,7 +1215,7 @@ assert isinstance(published_schedule, dict)
 assert published_schedule["schedule"]["status"] == "PUBLISHED"
 assert published_schedule["schedule"]["revision"] == 6
 assert published_schedule["version"]["versionNo"] == 1
-assert published_schedule["version"]["snapshot"]["schemaVersion"] == 3
+assert published_schedule["version"]["snapshot"]["schemaVersion"] == 4
 assert published_schedule["version"]["snapshot"]["dungeon"]["versionId"] == published["id"]
 assert published_schedule["version"]["snapshot"]["formula"]["code"]
 assert "issues" in published_schedule["version"]["snapshot"]

@@ -36,8 +36,6 @@ class RuleContextParticipant:
     character_name: str
     profession: str
     role_type: str
-    is_treasure_damage: bool = False
-    is_group_hunt: bool = False
     allowed_waves: tuple[int, ...] | None = None
     max_wave_count: int | None = None
     allowed_team_keys: tuple[str, ...] | None = None

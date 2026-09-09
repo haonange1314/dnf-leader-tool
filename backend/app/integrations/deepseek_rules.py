@@ -73,8 +73,6 @@ class DeepSeekRuleProvider:
                                         "characterName": participant.character_name,
                                         "profession": participant.profession,
                                         "roleType": participant.role_type,
-                                        "isTreasureDamage": participant.is_treasure_damage,
-                                        "isGroupHunt": participant.is_group_hunt,
                                         "allowedWaves": (
                                             list(participant.allowed_waves)
                                             if participant.allowed_waves is not None

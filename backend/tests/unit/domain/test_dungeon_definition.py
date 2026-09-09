@@ -12,7 +12,7 @@ def test_builtin_raid_is_versioned_and_capacity_is_derived() -> None:
     assert definition.participants_per_wave == 12
     assert [team.team_key for team in definition.teams] == ["RED", "YELLOW", "GREEN"]
     assert [rule.code for rule in definition.composition_rules.allowed] == ["3D1B", "2D2B"]
-    assert definition.special_role_rules.rules[0].target_team_key == "RED"
+    assert definition.special_role_rules.rules == ()
 
 
 def test_custom_party_proves_team_count_and_capacity_are_not_fixed() -> None:
@@ -47,8 +47,15 @@ def test_definition_rejects_composition_capacity_mismatch() -> None:
         (
             lambda payload: payload["special_role_rules"].update(
                 {
-                    "rules": payload["special_role_rules"]["rules"]
-                    + (payload["special_role_rules"]["rules"][0].copy(),)
+                    "rules": (
+                        {
+                            "code": "DUPLICATE",
+                            "character_flag": "TREASURE_DAMAGE",
+                            "count_per_wave": 1,
+                            "target_team_key": "RED",
+                        },
+                    )
+                    * 2
                 }
             ),
             "特殊角色规则 code 必须唯一",
