@@ -166,6 +166,9 @@ body {
   padding: 18px 20px 28px;
   overflow: auto;
 }
+.app-content-schedules {
+  overflow: visible;
+}
 .admin-stat-row {
   margin-bottom: 12px;
 }
@@ -659,20 +662,35 @@ body {
   justify-content: flex-end;
   max-width: 850px;
 }
+.schedule-overview-card > .ant-card-head {
+  min-height: 38px;
+}
+.schedule-overview-card > .ant-card-head .ant-card-head-title,
+.schedule-overview-card > .ant-card-head .ant-card-extra {
+  padding-block: 7px;
+}
 .schedule-overview-card .ant-card-body {
-  padding-block: 9px;
+  padding-block: 10px 12px;
 }
 .schedule-overview-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(72px, 1fr)) minmax(230px, 1.6fr);
+  grid-template-columns: repeat(6, minmax(72px, 1fr));
   align-items: center;
-  gap: 8px 18px;
+  gap: 10px 0;
 }
 .schedule-overview-grid .ant-statistic {
   min-width: 0;
+  padding-inline: 14px;
+  border-right: 1px solid #ededf0;
 }
-.schedule-overview-grid .ant-statistic-title,
-.wave-count-control > .ant-typography {
+.schedule-overview-grid .ant-statistic:first-child {
+  padding-left: 0;
+}
+.schedule-overview-grid .ant-statistic:last-child {
+  padding-right: 0;
+  border-right: 0;
+}
+.schedule-overview-grid .ant-statistic-title {
   margin-bottom: 0;
   font-size: 11px;
 }
@@ -680,10 +698,24 @@ body {
   font-size: 19px;
   line-height: 1.2;
 }
-.wave-count-control {
+.schedule-overview-grid .ant-statistic-content-suffix {
+  margin-left: 3px;
+  color: #86868b;
+  font-size: 11px;
+  font-weight: 400;
+}
+.schedule-parameter-grid {
   display: grid;
-  gap: 3px;
-  justify-self: end;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.schedule-parameter-grid label {
+  display: grid;
+  gap: 6px;
+}
+.schedule-parameter-grid .ant-space-compact,
+.schedule-parameter-grid .ant-input-number {
+  width: 100%;
 }
 .schedule-lock-alert {
   padding-block: 7px;
@@ -799,7 +831,7 @@ body {
 .editor-toolbar {
   position: sticky;
   z-index: 8;
-  top: 8px;
+  top: 64px;
   backdrop-filter: saturate(180%) blur(18px);
   background: rgb(255 255 255 / 86%);
 }
@@ -835,6 +867,69 @@ body {
   gap: 8px;
   margin-bottom: 8px;
 }
+.schedule-editor-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 320px);
+  align-items: start;
+  gap: 12px;
+}
+.schedule-editor-layout.unassigned-collapsed {
+  grid-template-columns: minmax(0, 1fr) 76px;
+}
+.schedule-editor-layout.editor-drawer-mode {
+  grid-template-columns: minmax(0, 1fr);
+}
+.schedule-editor-sidebar {
+  position: sticky;
+  top: 164px;
+  min-width: 0;
+  max-height: calc(100vh - 176px);
+}
+.schedule-editor-sidebar > .unassigned-panel {
+  margin-bottom: 0;
+  overflow: hidden;
+}
+.schedule-editor-sidebar > .unassigned-panel > .ant-card-body {
+  max-height: calc(100vh - 224px);
+  overflow: auto;
+}
+.schedule-editor-sidebar > .unassigned-pool {
+  min-height: 116px;
+  padding: 6px;
+  border-color: #d9d9df;
+  background: rgb(255 255 255 / 82%);
+}
+.unassigned-collapsed-button.ant-btn {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  min-height: 100px;
+  padding: 8px 4px;
+  color: #515154;
+  line-height: 1.2;
+  white-space: normal;
+}
+.unassigned-collapsed-button strong {
+  color: #0071e3;
+  font-size: 20px;
+}
+.unassigned-panel-content {
+  display: grid;
+  gap: 8px;
+}
+.unassigned-panel-content .unassigned-toolbar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  margin-bottom: 0;
+}
+.unassigned-panel-content .unassigned-toolbar .ant-select {
+  width: 100%;
+}
+.unassigned-panel-hint {
+  font-size: 11px;
+  line-height: 1.45;
+}
 .unassigned-pool {
   display: flex;
   flex-wrap: wrap;
@@ -864,6 +959,20 @@ body {
 .unassigned-pool > .draggable-participant:focus-visible {
   outline: 2px solid #1677ff;
   outline-offset: 2px;
+}
+.schedule-editor-sidebar .unassigned-pool,
+.unassigned-drawer .unassigned-pool {
+  display: grid;
+  align-content: start;
+  border-color: #e5e5ea;
+  background: #fafafa;
+}
+.schedule-editor-sidebar .unassigned-pool > .draggable-participant,
+.unassigned-drawer .unassigned-pool > .draggable-participant {
+  width: 100%;
+}
+.unassigned-drawer .ant-drawer-body {
+  padding: 14px;
 }
 .draggable-participant {
   width: fit-content;
@@ -1071,14 +1180,23 @@ body {
     justify-content: flex-start;
   }
   .editor-toolbar {
-    top: 4px;
+    top: 60px;
   }
   .schedule-overview-grid {
-    grid-template-columns: repeat(2, minmax(72px, 1fr));
+    grid-template-columns: repeat(3, minmax(72px, 1fr));
   }
-  .wave-count-control {
-    grid-column: 1 / -1;
-    justify-self: stretch;
+  .schedule-overview-grid .ant-statistic {
+    padding: 8px 10px;
+  }
+  .schedule-overview-grid .ant-statistic:nth-child(3n + 1) {
+    padding-left: 0;
+  }
+  .schedule-overview-grid .ant-statistic:nth-child(3n) {
+    padding-right: 0;
+    border-right: 0;
+  }
+  .schedule-parameter-grid {
+    grid-template-columns: 1fr;
   }
   .unassigned-toolbar,
   .preference-batch-toolbar {

@@ -256,7 +256,9 @@ export function App() {
                 ]}
               />
             </Sider>
-            <Content className="app-content">
+            <Content
+              className={`app-content${section === "schedules" ? " app-content-schedules" : ""}`}
+            >
               <Suspense fallback={<Skeleton active />}>
                 {section === "dungeons" ? (
                   <DungeonPage

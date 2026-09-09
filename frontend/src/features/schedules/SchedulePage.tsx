@@ -10,8 +10,8 @@ import {
   PlusOutlined,
   RedoOutlined,
   ReloadOutlined,
+  SearchOutlined,
   SendOutlined,
-  SettingOutlined,
   UndoOutlined,
 } from "@ant-design/icons";
 import {
@@ -29,9 +29,11 @@ import {
   Card,
   Checkbox,
   Col,
+  Drawer,
   Dropdown,
   Empty,
   Form,
+  Grid,
   Input,
   InputNumber,
   Modal,
@@ -258,11 +260,15 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
   const [waveCount, setWaveCount] = useState(1);
   const [damageBalanceTolerancePercent, setDamageBalanceTolerancePercent] =
     useState(20);
+  const [scheduleParametersOpen, setScheduleParametersOpen] = useState(false);
+  const [scheduleParametersPending, setScheduleParametersPending] = useState(false);
   const [metadataOpen, setMetadataOpen] = useState(false);
   const [metadataName, setMetadataName] = useState("");
   const [metadataNote, setMetadataNote] = useState("");
   const [participantPanelOpen, setParticipantPanelOpen] = useState(false);
   const [unassignedPanelOpen, setUnassignedPanelOpen] = useState(false);
+  const [unassignedDrawerOpen, setUnassignedDrawerOpen] = useState(false);
+  const [unassignedSearch, setUnassignedSearch] = useState("");
   const [unassignedRoleFilter, setUnassignedRoleFilter] = useState<"ALL" | "DAMAGE" | "BUFFER">("ALL");
   const [unassignedSort, setUnassignedSort] = useState<"ORDER" | "SCORE_DESC" | "PLAYER">("ORDER");
   const [preferencesSelectedOnly, setPreferencesSelectedOnly] = useState(true);
@@ -274,6 +280,8 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
+  const screens = Grid.useBreakpoint();
+  const useEditorSidebar = screens.xl ?? true;
   const {
     viewMode,
     selectedWaveNo,
@@ -462,11 +470,10 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
         api<ScheduleRuleSetList>(`/schedules/${scheduleId}/rule-sets`),
       ]);
       applyDetail(schedule, true);
-      const selectedParticipantCount = schedule.participants.filter(
-        (participant) => participant.isSelected,
-      ).length;
       setParticipantPanelOpen(schedule.participants.length <= 24);
-      setUnassignedPanelOpen(selectedParticipantCount <= 24);
+      setUnassignedPanelOpen(true);
+      setUnassignedDrawerOpen(false);
+      setUnassignedSearch("");
       resetEditor();
       setGenerationRuns(runs.items);
       setVersions(versionResult.items);
@@ -672,21 +679,31 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
     }
   };
 
-  const updateWaves = async (confirmWaveReduction = false) => {
+  const closeScheduleParameters = () => {
+    if (!detail || scheduleParametersPending) return;
+    setWaveCount(detail.waveCount);
+    setDamageBalanceTolerancePercent(detail.damageBalanceTolerancePercent);
+    setScheduleParametersOpen(false);
+  };
+
+  const updateScheduleParameters = async (confirmWaveReduction = false) => {
     if (!detail) return;
+    setScheduleParametersPending(true);
     try {
       const next = await api<ScheduleDetail>(`/schedules/${detail.id}`, {
         method: "PATCH",
         body: JSON.stringify({
           baseRevision: detail.revision,
           waveCount,
+          damageBalanceTolerancePercent,
           confirmWaveReduction,
         }),
       });
       applyDetail(next);
+      setScheduleParametersOpen(false);
       await reloadRuleSets(next.id);
       await loadList();
-      onSuccess("排表波数已更新");
+      onSuccess("排表参数已更新");
     } catch (error) {
       if (
         !confirmWaveReduction &&
@@ -702,29 +719,13 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
           okText: "确认缩减",
           cancelText: "取消",
           okButtonProps: { danger: true },
-          onOk: () => updateWaves(true),
+          onOk: () => updateScheduleParameters(true),
         });
         return;
       }
       onError(error);
-    }
-  };
-
-  const updateDamageBalanceTolerance = async () => {
-    if (!detail) return;
-    try {
-      const next = await api<ScheduleDetail>(`/schedules/${detail.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          baseRevision: detail.revision,
-          damageBalanceTolerancePercent,
-        }),
-      });
-      applyDetail(next);
-      await loadList();
-      onSuccess("黄绿队伤害浮动已更新");
-    } catch (error) {
-      onError(error);
+    } finally {
+      setScheduleParametersPending(false);
     }
   };
 
@@ -1345,7 +1346,10 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
     (participant) => participant.isSelected !== selectedIdSet.has(participant.id),
   );
   const waveCountDirty = waveCount !== detail.waveCount;
-  const hasUnsavedChanges = participantSelectionDirty || waveCountDirty;
+  const damageBalanceToleranceDirty =
+    damageBalanceTolerancePercent !== detail.damageBalanceTolerancePercent;
+  const scheduleParametersDirty = waveCountDirty || damageBalanceToleranceDirty;
+  const hasUnsavedChanges = participantSelectionDirty || scheduleParametersDirty;
   const damageCount = selectedParticipants.filter(
     (participant) => participant.roleTypeSnapshot === "DAMAGE",
   ).length;
@@ -1385,6 +1389,15 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
         unassignedRoleFilter === "ALL" ||
         participant.roleTypeSnapshot === unassignedRoleFilter,
     )
+    .filter((participant) => {
+      const query = unassignedSearch.trim().toLocaleLowerCase("zh-CN");
+      if (!query) return true;
+      return [
+        participant.playerNameSnapshot,
+        participant.characterNameSnapshot,
+        participant.professionSnapshot,
+      ].some((value) => value.toLocaleLowerCase("zh-CN").includes(query));
+    })
     .slice()
     .sort((left, right) => {
       if (unassignedSort === "PLAYER") {
@@ -1417,6 +1430,67 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
       });
     });
   };
+
+  const renderUnassignedPanelBody = () => (
+    <div className="unassigned-panel-content">
+      {unassignedParticipants.length ? (
+        <>
+          <div className="unassigned-toolbar">
+            <Segmented
+              size="small"
+              value={unassignedRoleFilter}
+              onChange={(value) =>
+                setUnassignedRoleFilter(value as "ALL" | "DAMAGE" | "BUFFER")
+              }
+              options={[
+                { label: "全部", value: "ALL" },
+                { label: "C", value: "DAMAGE" },
+                { label: "奶", value: "BUFFER" },
+              ]}
+            />
+            <Select
+              size="small"
+              value={unassignedSort}
+              onChange={setUnassignedSort}
+              aria-label="未分配角色排序"
+              options={[
+                { label: "按人员顺序", value: "ORDER" },
+                { label: "按数值从高到低", value: "SCORE_DESC" },
+                { label: "按玩家名称", value: "PLAYER" },
+              ]}
+            />
+          </div>
+          <Input
+            allowClear
+            size="small"
+            prefix={<SearchOutlined />}
+            value={unassignedSearch}
+            onChange={(event) => setUnassignedSearch(event.target.value)}
+            placeholder="搜索玩家、角色或职业"
+          />
+        </>
+      ) : null}
+      <ScheduleUnassignedDropZone active={canEditSchedule && !editorPending}>
+        {filteredUnassignedParticipants.map((participant) => (
+          <ScheduleDraggableParticipant
+            key={participant.id}
+            participant={participant}
+            disabled={!canEditSchedule || participant.isLocked || editorPending}
+          />
+        ))}
+        {!filteredUnassignedParticipants.length ? (
+          <Typography.Text type="secondary">
+            {unassignedParticipants.length
+              ? "当前筛选下没有角色"
+              : "所有参团角色都已安排，可将队伍角色拖回这里"}
+          </Typography.Text>
+        ) : null}
+      </ScheduleUnassignedDropZone>
+      <Typography.Text type="secondary" className="unassigned-panel-hint">
+        拖到空位即可安排，队伍角色也可拖回这里。
+      </Typography.Text>
+    </div>
+  );
 
   return (
     <section>
@@ -1725,56 +1799,36 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
         )}
       </Card>
 
-      <Card className="schedule-panel schedule-overview-card" size="small">
+      <Card
+        className="schedule-panel schedule-overview-card"
+        size="small"
+        title="排表概览"
+        extra={
+          <Button
+            type="link"
+            size="small"
+            disabled={!canEditSchedule}
+            onClick={() => {
+              setWaveCount(detail.waveCount);
+              setDamageBalanceTolerancePercent(detail.damageBalanceTolerancePercent);
+              setScheduleParametersOpen(true);
+            }}
+          >
+            编辑排表参数
+          </Button>
+        }
+      >
         <div className="schedule-overview-grid">
           <Statistic title="参团角色" value={selectedParticipants.length} />
           <Statistic title="已安排" value={assignedParticipantIds.size} />
           <Statistic title="C" value={damageCount} />
           <Statistic title="奶" value={selectedParticipants.length - damageCount} />
-          <div className="wave-count-control">
-            <Typography.Text type="secondary">波数</Typography.Text>
-            <Space.Compact>
-              <InputNumber
-                min={1}
-                max={50}
-                size="small"
-                disabled={!canEditSchedule}
-                value={waveCount}
-                onChange={(value) => setWaveCount(value ?? 1)}
-              />
-              <Button
-                size="small"
-                icon={<SettingOutlined />}
-                disabled={!canEditSchedule}
-                onClick={() => void updateWaves()}
-              >
-                更新波数
-              </Button>
-            </Space.Compact>
-          </div>
-          <div className="wave-count-control">
-            <Typography.Text type="secondary">黄绿队平均伤害浮动</Typography.Text>
-            <Space.Compact>
-              <InputNumber
-                min={0}
-                max={100}
-                size="small"
-                disabled={!canEditSchedule}
-                value={damageBalanceTolerancePercent}
-                onChange={(value) =>
-                  setDamageBalanceTolerancePercent(value ?? 20)
-                }
-              />
-              <Button
-                size="small"
-                icon={<SettingOutlined />}
-                disabled={!canEditSchedule}
-                onClick={() => void updateDamageBalanceTolerance()}
-              >
-                更新浮动
-              </Button>
-            </Space.Compact>
-          </div>
+          <Statistic title="波数" value={detail.waveCount} suffix="波" />
+          <Statistic
+            title="黄绿伤害浮动"
+            value={detail.damageBalanceTolerancePercent}
+            suffix="%"
+          />
         </div>
       </Card>
 
@@ -1909,6 +1963,11 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
           >
             恢复
           </Button>
+          {!useEditorSidebar ? (
+            <Button onClick={() => setUnassignedDrawerOpen(true)}>
+              未分配角色 {unassignedParticipants.length}
+            </Button>
+          ) : null}
           <Typography.Text type="secondary">拖动角色到空位，拖到其他角色上可直接交换</Typography.Text>
         </Space>
         <div className="wave-navigator" aria-label="波次导航">
@@ -1937,83 +1996,121 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
       </Card>
 
       <DndContext sensors={sensors} onDragEnd={(event) => void onDragEnd(event)}>
-        <Card
-          size="small"
-          title={`未分配角色 · ${unassignedParticipants.length}`}
-          className="schedule-panel unassigned-panel"
-          extra={
-            unassignedParticipants.length ? (
-              <Button
-                type="text"
-                size="small"
-                onClick={() => setUnassignedPanelOpen((open) => !open)}
-              >
-                {unassignedPanelOpen ? "收起" : "展开"}
-              </Button>
-            ) : null
-          }
+        <div
+          className={`schedule-editor-layout${
+            !useEditorSidebar
+              ? " editor-drawer-mode"
+              : !unassignedPanelOpen
+                ? " unassigned-collapsed"
+                : ""
+          }`}
         >
-          {unassignedPanelOpen && unassignedParticipants.length ? (
-            <>
-              <div className="unassigned-toolbar">
-                <Segmented
+          <div className="wave-list">
+            {visibleWaves.map((wave) => (
+              <ScheduleEditorWave
+                key={wave.id}
+                wave={wave}
+                participantsById={participantsById}
+                disabled={!canEditSchedule || editorPending}
+                onOperation={(operation) => void executeEditorOperations([operation])}
+              />
+            ))}
+          </div>
+          {useEditorSidebar ? (
+            <aside className="schedule-editor-sidebar" aria-label="未分配角色池">
+              {unassignedPanelOpen ? (
+                <Card
                   size="small"
-                  value={unassignedRoleFilter}
-                  onChange={(value) => setUnassignedRoleFilter(value as "ALL" | "DAMAGE" | "BUFFER")}
-                  options={[
-                    { label: "全部", value: "ALL" },
-                    { label: "C", value: "DAMAGE" },
-                    { label: "奶", value: "BUFFER" },
-                  ]}
-                />
-                <Select
-                  size="small"
-                  value={unassignedSort}
-                  onChange={setUnassignedSort}
-                  options={[
-                    { label: "按人员顺序", value: "ORDER" },
-                    { label: "按数值从高到低", value: "SCORE_DESC" },
-                    { label: "按玩家名称", value: "PLAYER" },
-                  ]}
-                  style={{ width: 154 }}
-                />
-                <Typography.Text type="secondary">
-                  可将队伍中的角色拖回这里
-                </Typography.Text>
-              </div>
-              <ScheduleUnassignedDropZone active={canEditSchedule && !editorPending}>
-              {filteredUnassignedParticipants.map((participant) => (
-                <ScheduleDraggableParticipant
-                  key={participant.id}
-                  participant={participant}
-                  disabled={!canEditSchedule || participant.isLocked || editorPending}
-                />
-              ))}
-              {!filteredUnassignedParticipants.length ? (
-                <Typography.Text type="secondary">当前筛选下没有角色</Typography.Text>
-              ) : null}
-              </ScheduleUnassignedDropZone>
-            </>
+                  title={`未分配角色 · ${unassignedParticipants.length}`}
+                  className="schedule-panel unassigned-panel"
+                  extra={
+                    <Button
+                      type="text"
+                      size="small"
+                      onClick={() => setUnassignedPanelOpen(false)}
+                    >
+                      收起
+                    </Button>
+                  }
+                >
+                  {renderUnassignedPanelBody()}
+                </Card>
+              ) : (
+                <ScheduleUnassignedDropZone active={canEditSchedule && !editorPending}>
+                  <Button
+                    type="text"
+                    className="unassigned-collapsed-button"
+                    onClick={() => setUnassignedPanelOpen(true)}
+                  >
+                    <span>未分配</span>
+                    <strong>{unassignedParticipants.length}</strong>
+                    <span>展开</span>
+                  </Button>
+                </ScheduleUnassignedDropZone>
+              )}
+            </aside>
           ) : (
-            <Typography.Text type="secondary">
-              {unassignedParticipants.length
-                ? "角色池已收起，展开后可拖入队伍。"
-                : "所有参团角色都已安排"}
-            </Typography.Text>
+            <Drawer
+              title={`未分配角色 · ${unassignedParticipants.length}`}
+              open={unassignedDrawerOpen}
+              size="min(360px, calc(100vw - 16px))"
+              mask={false}
+              push={false}
+              onClose={() => setUnassignedDrawerOpen(false)}
+              className="unassigned-drawer"
+            >
+              {renderUnassignedPanelBody()}
+            </Drawer>
           )}
-        </Card>
-        <div className="wave-list">
-          {visibleWaves.map((wave) => (
-            <ScheduleEditorWave
-              key={wave.id}
-              wave={wave}
-              participantsById={participantsById}
-              disabled={!canEditSchedule || editorPending}
-              onOperation={(operation) => void executeEditorOperations([operation])}
-            />
-          ))}
         </div>
       </DndContext>
+
+      <Modal
+        title="编辑排表参数"
+        open={scheduleParametersOpen}
+        onCancel={closeScheduleParameters}
+        onOk={() => void updateScheduleParameters()}
+        okText="保存更改"
+        cancelText="取消"
+        confirmLoading={scheduleParametersPending}
+        okButtonProps={{ disabled: !scheduleParametersDirty }}
+      >
+        <Typography.Paragraph type="secondary">
+          波数会改变排表结构；黄绿伤害浮动仅影响后续自动排表，允许范围为 0～100%。
+        </Typography.Paragraph>
+        <div className="schedule-parameter-grid">
+          <label>
+            <Typography.Text>波数</Typography.Text>
+            <Space.Compact block>
+              <InputNumber
+                min={1}
+                max={50}
+                disabled={!canEditSchedule}
+                value={waveCount}
+                onChange={(value) => setWaveCount(value ?? detail.waveCount)}
+              />
+              <Button disabled>波</Button>
+            </Space.Compact>
+          </label>
+          <label>
+            <Typography.Text>黄绿队平均伤害浮动</Typography.Text>
+            <Space.Compact block>
+              <InputNumber
+                min={0}
+                max={100}
+                disabled={!canEditSchedule}
+                value={damageBalanceTolerancePercent}
+                onChange={(value) =>
+                  setDamageBalanceTolerancePercent(
+                    value ?? detail.damageBalanceTolerancePercent,
+                  )
+                }
+              />
+              <Button disabled>%</Button>
+            </Space.Compact>
+          </label>
+        </div>
+      </Modal>
 
       <Modal
         title="发布排表"
