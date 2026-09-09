@@ -35,6 +35,14 @@ export interface DungeonVersionFormValues {
   strengthOrders: StrengthOrderFormValue[];
   balanceMetrics: DungeonRoleType[];
   respectPlayerPreferences: boolean;
+  bufferPlacementEnabled: boolean;
+  bufferTeamOrder: string[];
+  bufferDoubleTeamKeys: string[];
+  bufferPairExtremes: boolean;
+  damagePlacementEnabled: boolean;
+  damagePrimaryTeamKey: string;
+  damageBalancedTeamKeys: string[];
+  damagePairExtremes: boolean;
   missingSlotMode: "FILL_EARLIER_WAVES" | "SPREAD_EVENLY";
 }
 
@@ -51,7 +59,7 @@ export const DEFAULT_FORMULA: FormulaDefinition = {
 export function defaultDungeonVersionForm(): DungeonVersionFormValues {
   const teamKeys = ["RED", "YELLOW", "GREEN"];
   return {
-    defaultWaveCount: 12,
+    defaultWaveCount: 13,
     minWaveCount: 1,
     maxWaveCount: 50,
     teams: [
@@ -99,6 +107,14 @@ export function defaultDungeonVersionForm(): DungeonVersionFormValues {
     ],
     balanceMetrics: ["DAMAGE", "BUFFER"],
     respectPlayerPreferences: true,
+    bufferPlacementEnabled: true,
+    bufferTeamOrder: teamKeys,
+    bufferDoubleTeamKeys: ["RED", "YELLOW"],
+    bufferPairExtremes: true,
+    damagePlacementEnabled: true,
+    damagePrimaryTeamKey: "RED",
+    damageBalancedTeamKeys: ["YELLOW", "GREEN"],
+    damagePairExtremes: true,
     missingSlotMode: "FILL_EARLIER_WAVES",
   };
 }
@@ -130,6 +146,24 @@ export function dungeonVersionToForm(version: DungeonVersion): DungeonVersionFor
     })),
     balanceMetrics: version.optimizationRules.balanceAcrossWaves,
     respectPlayerPreferences: version.optimizationRules.respectPlayerPreferences,
+    bufferPlacementEnabled: Boolean(version.optimizationRules.bufferPlacement),
+    bufferTeamOrder:
+      version.optimizationRules.bufferPlacement?.teamOrder ??
+      version.teams.map((team) => team.teamKey),
+    bufferDoubleTeamKeys:
+      version.optimizationRules.bufferPlacement?.doubleBufferTeamKeys ?? [],
+    bufferPairExtremes:
+      version.optimizationRules.bufferPlacement?.pairExtremes ?? true,
+    damagePlacementEnabled: Boolean(version.optimizationRules.damagePlacement),
+    damagePrimaryTeamKey:
+      version.optimizationRules.damagePlacement?.primaryTeamKey ??
+      version.teams[0]?.teamKey ??
+      "",
+    damageBalancedTeamKeys:
+      version.optimizationRules.damagePlacement?.balancedTeamKeys ?? [],
+    damagePairExtremes:
+      version.optimizationRules.damagePlacement
+        ?.pairExtremesInDoubleBufferTeams ?? true,
     missingSlotMode: version.missingSlotPolicy.mode,
   };
 }
@@ -179,6 +213,26 @@ export function dungeonVersionFormToInput(
       schemaVersion: 1,
       balanceAcrossWaves: values.balanceMetrics,
       respectPlayerPreferences: values.respectPlayerPreferences,
+      bufferPlacement: values.bufferPlacementEnabled
+        ? {
+            mode: "EXTRAS_BY_TEAM_THEN_WAVE",
+            teamOrder: values.bufferTeamOrder.map((key) => key.toUpperCase()),
+            doubleBufferTeamKeys: values.bufferDoubleTeamKeys.map((key) =>
+              key.toUpperCase(),
+            ),
+            pairExtremes: values.bufferPairExtremes,
+          }
+        : null,
+      damagePlacement: values.damagePlacementEnabled
+        ? {
+            mode: "PRIMARY_THEN_BALANCE",
+            primaryTeamKey: values.damagePrimaryTeamKey.toUpperCase(),
+            balancedTeamKeys: values.damageBalancedTeamKeys.map((key) =>
+              key.toUpperCase(),
+            ),
+            pairExtremesInDoubleBufferTeams: values.damagePairExtremes,
+          }
+        : null,
     },
     missingSlotPolicy: {
       schemaVersion: 1,
@@ -263,6 +317,29 @@ export function versionFormWarnings(values: DungeonVersionFormValues): string[] 
   );
   if (uncovered.length) {
     warnings.push(`这些队伍没有适用组成：${uncovered.map((team) => team.displayName).join("、")}`);
+  }
+  if (values.bufferPlacementEnabled) {
+    const ordered = values.bufferTeamOrder.map((key) => key.toUpperCase());
+    const doubled = values.bufferDoubleTeamKeys.map((key) => key.toUpperCase());
+    if (
+      ordered.length !== teamKeys.length ||
+      ordered.some((key) => !teamKeys.includes(key))
+    ) {
+      warnings.push("奶排队顺序必须覆盖全部队伍");
+    }
+    if (new Set(ordered).size !== ordered.length) {
+      warnings.push("奶排队顺序中的队伍不能重复");
+    }
+    if (doubled.some((key) => !teamKeys.includes(key))) {
+      warnings.push("双奶优先队伍引用了不存在的队伍");
+    }
+  }
+  if (values.damagePlacementEnabled) {
+    const primary = values.damagePrimaryTeamKey.toUpperCase();
+    const balanced = values.damageBalancedTeamKeys.map((key) => key.toUpperCase());
+    if (!teamKeys.includes(primary)) warnings.push("强 C 主队不存在");
+    if (balanced.length < 2) warnings.push("C 平衡规则至少需要两支队伍");
+    if (balanced.includes(primary)) warnings.push("强 C 主队不能同时作为平衡队伍");
   }
   return [...new Set(warnings)];
 }

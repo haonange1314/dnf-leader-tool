@@ -95,7 +95,7 @@ const ISSUE_LABELS: Record<string, string> = {
   CAPACITY_EXCEEDED: "参团角色超过排表容量",
   PARTICIPANT_SHORTAGE: "参团角色少于排表容量",
   DISTINCT_PLAYER_SHORTAGE: "每波可用玩家人数不足",
-  DAMAGE_IDEAL_SHORTAGE: "C 数量不足理想组成",
+  DAMAGE_IDEAL_SHORTAGE: "C 数量不足目标组成",
   BUFFER_BASE_SHORTAGE: "奶数量不足基础组成",
   TREASURE_SHORTAGE: "秘宝 C 数量不足",
   PLAYER_WAVE_CAPACITY_INSUFFICIENT: "玩家可用波次不足",
@@ -106,6 +106,10 @@ const ISSUE_LABELS: Record<string, string> = {
   MISSING_WAVE_CORE: "完整波次缺少核心角色",
   DAMAGE_ORDER_VIOLATION: "C 强度顺序未满足",
   BUFFER_ORDER_VIOLATION: "奶强度顺序未满足",
+  DAMAGE_BALANCE_TOLERANCE_EXCEEDED: "黄绿队平均伤害浮动超出目标",
+  BUFFER_PLACEMENT_DEVIATION: "奶量理想顺序未完全满足",
+  DAMAGE_PRIMARY_SELECTION_DEVIATION: "强 C 未全部进入红队",
+  DAMAGE_PAIRING_DEVIATION: "红队双奶波 C 首尾配对未完全满足",
   TEAM_INCOMPLETE: "队伍存在待补位置",
   TEAM_COMPOSITION_INVALID: "队伍组成不符合副本规则",
   PLAYER_DUPLICATE_IN_WAVE: "同一玩家在同一波使用多个角色",
@@ -120,6 +124,13 @@ const OBJECTIVE_STAGE_LABELS: Record<string, string> = {
   COMPLETENESS: "完整波次与队伍",
   EARLY_FILL: "空位靠后",
   COMPOSITION_PRIORITY: "优先组成",
+  BUFFER_PLACEMENT: "奶量排序与首尾配对",
+  DAMAGE_PRIMARY_COUNT: "强 C 优先进入红队",
+  DAMAGE_PRIMARY_SCORE: "红队 C 总伤害",
+  DAMAGE_PRIMARY_PAIRING: "红队双奶波 C 首尾配对",
+  DAMAGE_PRIMARY_BALANCE: "红队单奶波伤害平衡",
+  DAMAGE_BALANCE_TOLERANCE: "黄绿队伤害浮动",
+  DAMAGE_BALANCE_SPREAD: "黄绿队平均伤害平衡",
   SPECIAL_ROLE: "特殊核心",
   STRENGTH_ORDER: "队伍强度顺序",
   BALANCE_DAMAGE: "C 跨波平衡",
@@ -244,6 +255,8 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
   const [sharePending, setSharePending] = useState(false);
   const [shareUrl, setShareUrl] = useState("");
   const [waveCount, setWaveCount] = useState(1);
+  const [damageBalanceTolerancePercent, setDamageBalanceTolerancePercent] =
+    useState(20);
   const [metadataOpen, setMetadataOpen] = useState(false);
   const [metadataName, setMetadataName] = useState("");
   const [metadataNote, setMetadataNote] = useState("");
@@ -336,6 +349,7 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
   const applyDetail = (next: ScheduleDetail, resetContext = false) => {
     setDetail(next);
     setWaveCount(next.waveCount);
+    setDamageBalanceTolerancePercent(next.damageBalanceTolerancePercent);
     setSelectedIds(
       next.participants.filter((participant) => participant.isSelected).map((item) => item.id),
     );
@@ -691,6 +705,24 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
         });
         return;
       }
+      onError(error);
+    }
+  };
+
+  const updateDamageBalanceTolerance = async () => {
+    if (!detail) return;
+    try {
+      const next = await api<ScheduleDetail>(`/schedules/${detail.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          baseRevision: detail.revision,
+          damageBalanceTolerancePercent,
+        }),
+      });
+      applyDetail(next);
+      await loadList();
+      onSuccess("黄绿队伤害浮动已更新");
+    } catch (error) {
       onError(error);
     }
   };
@@ -1719,6 +1751,29 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
               </Button>
             </Space.Compact>
           </div>
+          <div className="wave-count-control">
+            <Typography.Text type="secondary">黄绿队平均伤害浮动</Typography.Text>
+            <Space.Compact>
+              <InputNumber
+                min={0}
+                max={100}
+                size="small"
+                disabled={!canEditSchedule}
+                value={damageBalanceTolerancePercent}
+                onChange={(value) =>
+                  setDamageBalanceTolerancePercent(value ?? 20)
+                }
+              />
+              <Button
+                size="small"
+                icon={<SettingOutlined />}
+                disabled={!canEditSchedule}
+                onClick={() => void updateDamageBalanceTolerance()}
+              >
+                更新浮动
+              </Button>
+            </Space.Compact>
+          </div>
         </div>
       </Card>
 
@@ -2237,7 +2292,8 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
         okButtonProps={{ disabled: !canGenerateSchedule }}
       >
         <Typography.Paragraph type="secondary">
-          求解器会优先安排更多角色、填满前面波次并优化队伍组成、跨波平衡和强度顺序。
+          求解器会先安排并冻结奶位，再分配 C；C 不足时优先保证红队和前面波次完整。
+          当前黄绿队平均伤害浮动目标为 {detail?.damageBalanceTolerancePercent ?? 20}%。
         </Typography.Paragraph>
         {validation ? (
           <Alert
@@ -2617,6 +2673,32 @@ export function SchedulePage({ userRole, permissions, onError, onSuccess }: Prop
                     <Tag color="blue">已安排 {run.objectiveSummary.assignedCount}/{run.objectiveSummary.participantCount}</Tag>
                     <Tag>完整波次 {run.objectiveSummary.completeWaveCount}</Tag>
                     <Tag>完整队伍 {run.objectiveSummary.completeTeamCount}</Tag>
+                    {run.objectiveSummary.targetCompositionCount !== undefined ? (
+                      <Tag>
+                        {`目标组成 ${run.objectiveSummary.targetCompositionCount}/${run.objectiveSummary.completeTeamCount}`}
+                      </Tag>
+                    ) : null}
+                    {run.objectiveSummary.damagePrimaryCount !== undefined ? (
+                      <Tag>强 C 进红 {run.objectiveSummary.damagePrimaryCount}</Tag>
+                    ) : null}
+                    {run.objectiveSummary.damagePairCount !== undefined &&
+                    run.objectiveSummary.damagePairWaveCount !== undefined ? (
+                      <Tag>
+                        {`红队首尾配对 ${run.objectiveSummary.damagePairCount}/${run.objectiveSummary.damagePairWaveCount}`}
+                      </Tag>
+                    ) : null}
+                    {run.objectiveSummary.damageBalancePercent !== undefined ? (
+                      <Tag
+                        color={
+                          run.objectiveSummary.damageBalancePercent <=
+                          detail.damageBalanceTolerancePercent
+                            ? "green"
+                            : "orange"
+                        }
+                      >
+                        黄绿浮动 {run.objectiveSummary.damageBalancePercent}%
+                      </Tag>
+                    ) : null}
                     <Tag>强度冲突 {run.objectiveSummary.strengthOrderViolationCount}</Tag>
                   </>
                 ) : null}
@@ -2795,13 +2877,36 @@ function GenerationSummary({
             </Tag>
             <Tag color="cyan">完整波次 {summary.completeWaveCount}</Tag>
             <Tag color="purple">完整队伍 {summary.completeTeamCount}</Tag>
-            <Tag color="geekblue">优先组成 {summary.preferredCompositionCount}</Tag>
+            {summary.targetCompositionCount !== undefined ? (
+              <Tag color="geekblue">
+                目标组成 {summary.targetCompositionCount}/{summary.completeTeamCount}
+              </Tag>
+            ) : (
+              <Tag color="geekblue">优先组成 {summary.preferredCompositionCount}</Tag>
+            )}
+            {summary.bufferPlacementCount !== undefined ? (
+              <Tag>奶位排序命中 {summary.bufferPlacementCount}</Tag>
+            ) : null}
+            {summary.damagePrimaryCount !== undefined ? (
+              <Tag>强 C 进红 {summary.damagePrimaryCount}</Tag>
+            ) : null}
+            {summary.damagePairCount !== undefined &&
+            summary.damagePairWaveCount !== undefined ? (
+              <Tag>
+                红队首尾配对 {summary.damagePairCount}/{summary.damagePairWaveCount}
+              </Tag>
+            ) : null}
             <Tag color="gold">核心满足 {summary.specialRuleSatisfiedCount}</Tag>
             {summary.damageSpreadDisplay !== undefined ? (
               <Tag>C 跨波差 {summary.damageSpreadDisplay} 亿</Tag>
             ) : null}
             {summary.bufferSpreadDisplay !== undefined ? (
               <Tag>奶跨波差 {summary.bufferSpreadDisplay}</Tag>
+            ) : null}
+            {summary.damageBalancePercent !== undefined ? (
+              <Tag color={summary.damageBalanceToleranceExcess ? "orange" : "green"}>
+                黄绿平均伤害浮动 {summary.damageBalancePercent}%
+              </Tag>
             ) : null}
             <Tag color={summary.strengthOrderViolationCount ? "orange" : "green"}>
               强度顺序冲突 {summary.strengthOrderViolationCount}
@@ -3111,6 +3216,14 @@ function describeGenerationDiagnostic(
     case "DAMAGE_ORDER_VIOLATION":
     case "BUFFER_ORDER_VIOLATION":
       return `第 ${params.waveNo} 波 ${params.strongerTeamKey} 弱于 ${params.weakerTeamKey}。`;
+    case "DAMAGE_BALANCE_TOLERANCE_EXCEEDED":
+      return `黄绿队完整队伍的平均伤害浮动为 ${params.actualPercent}%，超过本次排表设置的 ${params.configuredPercent}%。`;
+    case "BUFFER_PLACEMENT_DEVIATION":
+      return `受可用波次、玩家出场上限或锁定影响，理想奶位满足 ${params.current}/${params.target}。`;
+    case "DAMAGE_PRIMARY_SELECTION_DEVIATION":
+      return `受硬约束影响，最强 C 进入 ${params.teamKey} 队 ${params.current}/${params.target}。`;
+    case "DAMAGE_PAIRING_DEVIATION":
+      return `受硬约束影响，红队双奶波首尾配对满足 ${params.current}/${params.target}。`;
     default:
       return Object.entries(params)
         .map(([key, value]) => `${key}: ${String(value)}`)
@@ -3136,6 +3249,8 @@ export function describeIssue(issue: ValidationIssue): string {
     case "DAMAGE_ORDER_VIOLATION":
     case "BUFFER_ORDER_VIOLATION":
       return `第 ${params.waveNo} 波 ${params.strongerTeamKey} 队弱于 ${params.weakerTeamKey} 队。`;
+    case "DAMAGE_BALANCE_TOLERANCE_EXCEEDED":
+      return `黄绿队完整队伍的平均伤害浮动为 ${params.actualPercent}%，超过本次排表设置的 ${params.configuredPercent}%。`;
     case "UNASSIGNED_SELECTED_PARTICIPANTS":
       return `仍有 ${params.count} 个已选角色未分配到位置。`;
     case "CAPACITY_EXCEEDED":

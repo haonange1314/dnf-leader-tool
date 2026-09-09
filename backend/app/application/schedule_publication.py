@@ -21,7 +21,7 @@ from app.models.schedule import (
 from app.schemas.dungeon import SpecialRoleRules, StrengthOrderRules
 from app.schemas.schedule import IssueView, ScheduleDetail
 
-SNAPSHOT_SCHEMA_VERSION = 4
+SNAPSHOT_SCHEMA_VERSION = 5
 
 
 def create_schedule_snapshot(
@@ -276,6 +276,9 @@ def restore_snapshot(
     schedule.note = str(note) if note is not None else None
     schedule.dungeon_version_id = uuid.UUID(str(snapshot["dungeonVersionId"]))
     schedule.wave_count = int(str(snapshot["waveCount"]))
+    schedule.damage_balance_tolerance_percent = int(
+        str(snapshot.get("damageBalanceTolerancePercent", 20))
+    )
 
     participant_rows = _list_of_dicts(snapshot.get("participants"))
     participant_id_map: dict[str, uuid.UUID] = {}

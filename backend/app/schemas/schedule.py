@@ -15,6 +15,7 @@ class ScheduleCreate(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     dungeon_version_id: uuid.UUID
     wave_count: int | None = Field(default=None, gt=0, le=MAX_WAVE_COUNT)
+    damage_balance_tolerance_percent: int = Field(default=20, ge=0, le=100)
     note: str | None = Field(default=None, max_length=2000)
 
     @field_validator("name")
@@ -33,6 +34,7 @@ class ScheduleUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=160)
     note: str | None = Field(default=None, max_length=2000)
     wave_count: int | None = Field(default=None, gt=0, le=MAX_WAVE_COUNT)
+    damage_balance_tolerance_percent: int | None = Field(default=None, ge=0, le=100)
     confirm_wave_reduction: bool = False
 
     @field_validator("name")
@@ -47,8 +49,11 @@ class ScheduleUpdate(BaseModel):
 
     @model_validator(mode="after")
     def require_change(self) -> "ScheduleUpdate":
-        if not ({"name", "note", "wave_count"} & self.model_fields_set):
-            raise ValueError("至少修改名称、备注或波数之一")
+        if not (
+            {"name", "note", "wave_count", "damage_balance_tolerance_percent"}
+            & self.model_fields_set
+        ):
+            raise ValueError("至少修改名称、备注、波数或伤害浮动之一")
         return self
 
 
@@ -193,6 +198,7 @@ class ScheduleSummary(BaseModel):
     dungeon_version_id: uuid.UUID
     buffer_conversion_version_id: uuid.UUID
     wave_count: int
+    damage_balance_tolerance_percent: int
     status: str
     revision: int
     validation_summary: dict[str, Any] | None

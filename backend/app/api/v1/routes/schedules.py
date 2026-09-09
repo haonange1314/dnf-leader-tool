@@ -23,6 +23,7 @@ from app.domain.schedule import (
     composition_feasibility,
     composition_role_requirements,
     distinct_player_feasibility,
+    ordered_buffer_limits,
 )
 from app.models.buffer_conversion import BufferConversionVersion
 from app.models.dungeon import DungeonVersion
@@ -37,7 +38,7 @@ from app.models.schedule import (
     TeamSlot,
     Wave,
 )
-from app.schemas.dungeon import CompositionRules, StrengthOrderRules
+from app.schemas.dungeon import CompositionRules, OptimizationRules, StrengthOrderRules
 from app.schemas.schedule import (
     IssueView,
     ScheduleCopy,
@@ -477,6 +478,7 @@ def create_schedule(
         formula_version_id=version.formula_version_id,
         buffer_conversion_version_id=_current_buffer_conversion(db).id,
         wave_count=wave_count,
+        damage_balance_tolerance_percent=payload.damage_balance_tolerance_percent,
         status="DRAFT",
         note=payload.note,
         revision=1,
@@ -626,6 +628,7 @@ def copy_schedule(
         formula_version_id=target_version.formula_version_id,
         buffer_conversion_version_id=_current_buffer_conversion(db).id,
         wave_count=preview.wave_count,
+        damage_balance_tolerance_percent=source.damage_balance_tolerance_percent,
         status="DRAFT",
         note=source.note,
         revision=1,
@@ -946,6 +949,8 @@ def update_schedule(
         item.name = payload.name
     if "note" in payload.model_fields_set:
         item.note = payload.note.strip() if payload.note else None
+    if payload.damage_balance_tolerance_percent is not None:
+        item.damage_balance_tolerance_percent = payload.damage_balance_tolerance_percent
     if new_wave_count is not None and new_wave_count != item.wave_count:
         if new_wave_count > item.wave_count:
             team_templates = list(item.waves[0].teams)
@@ -1217,6 +1222,7 @@ def validate_schedule(
     if version is None:
         raise AppError(409, "DUNGEON_VERSION_MISSING", "排表引用的副本版本不存在")
     composition_rules = CompositionRules.model_validate(version.composition_rules)
+    optimization_rules = OptimizationRules.model_validate(version.optimization_rules)
     strength_order_rules = StrengthOrderRules.model_validate(version.strength_order_rules)
     teams = [team for wave in item.waves for team in wave.teams]
     capacity = sum(team.member_count_snapshot for team in teams)
@@ -1276,15 +1282,27 @@ def validate_schedule(
         available_damage=damage,
         available_buffers=buffers,
     )
-    if damage < requirements.ideal_damage:
+    target_damage = requirements.ideal_damage
+    ordered_buffer_range: tuple[int, int] | None = None
+    ordered_buffer_target_active = False
+    if optimization_rules.buffer_placement is not None:
+        ordered_buffer_range = ordered_buffer_limits(
+            composition_rules,
+            (team.team_key for team in teams),
+            optimization_rules.buffer_placement.double_buffer_team_keys,
+        )
+        if ordered_buffer_range[0] <= buffers <= ordered_buffer_range[1]:
+            ordered_buffer_target_active = True
+            target_damage = capacity - buffers
+    if damage < target_damage:
         issues.append(
             IssueView(
                 severity="WARNING",
                 code="DAMAGE_IDEAL_SHORTAGE",
                 message_params={
-                    "required": requirements.ideal_damage,
+                    "required": target_damage,
                     "current": damage,
-                    "shortage": requirements.ideal_damage - damage,
+                    "shortage": target_damage - damage,
                 },
             )
         )
@@ -1300,7 +1318,11 @@ def validate_schedule(
                 },
             )
         )
-    if feasibility.can_fill_all_teams and damage < requirements.ideal_damage:
+    if (
+        not ordered_buffer_target_active
+        and feasibility.can_fill_all_teams
+        and damage < requirements.ideal_damage
+    ):
         issues.append(
             IssueView(
                 severity="INFO",

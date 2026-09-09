@@ -87,12 +87,36 @@ class StrengthOrderRules(BaseModel):
     orders: tuple[StrengthOrder, ...] = ()
 
 
+class BufferPlacementRule(BaseModel):
+    """Versioned buffer distribution policy expressed with dungeon team keys."""
+
+    model_config = FROZEN_MODEL_CONFIG
+
+    mode: Literal["EXTRAS_BY_TEAM_THEN_WAVE"] = "EXTRAS_BY_TEAM_THEN_WAVE"
+    team_order: tuple[str, ...]
+    double_buffer_team_keys: tuple[str, ...]
+    pair_extremes: bool = True
+
+
+class DamagePlacementRule(BaseModel):
+    """Versioned damage selection, pairing and team-balance policy."""
+
+    model_config = FROZEN_MODEL_CONFIG
+
+    mode: Literal["PRIMARY_THEN_BALANCE"] = "PRIMARY_THEN_BALANCE"
+    primary_team_key: str
+    balanced_team_keys: tuple[str, ...]
+    pair_extremes_in_double_buffer_teams: bool = True
+
+
 class OptimizationRules(BaseModel):
     model_config = FROZEN_MODEL_CONFIG
 
     schema_version: Literal[1] = 1
     balance_across_waves: tuple[RoleType, ...] = ()
     respect_player_preferences: bool = True
+    buffer_placement: BufferPlacementRule | None = None
+    damage_placement: DamagePlacementRule | None = None
 
 
 class MissingSlotPolicy(BaseModel):
@@ -162,6 +186,43 @@ class DungeonVersionDefinition(BaseModel):
         balance_metrics = self.optimization_rules.balance_across_waves
         if len(balance_metrics) != len(set(balance_metrics)):
             raise ValueError("跨波平衡指标必须唯一")
+        buffer_placement = self.optimization_rules.buffer_placement
+        if buffer_placement is not None:
+            if len(buffer_placement.team_order) != len(set(buffer_placement.team_order)):
+                raise ValueError("奶排队规则中的队伍顺序不能重复")
+            if len(buffer_placement.double_buffer_team_keys) != len(
+                set(buffer_placement.double_buffer_team_keys)
+            ):
+                raise ValueError("奶排队规则中的双奶队伍不能重复")
+            unknown = {
+                *buffer_placement.team_order,
+                *buffer_placement.double_buffer_team_keys,
+            } - team_by_key.keys()
+            if unknown:
+                raise ValueError(f"奶排队规则引用未知队伍: {sorted(unknown)}")
+            if set(buffer_placement.team_order) != team_by_key.keys():
+                raise ValueError("奶排队规则的队伍顺序必须覆盖全部队伍")
+            if not set(buffer_placement.double_buffer_team_keys) <= set(
+                buffer_placement.team_order
+            ):
+                raise ValueError("双奶队伍必须包含在奶排队顺序中")
+
+        damage_placement = self.optimization_rules.damage_placement
+        if damage_placement is not None:
+            if len(damage_placement.balanced_team_keys) < 2:
+                raise ValueError("C 平衡规则至少需要两支队伍")
+            if len(damage_placement.balanced_team_keys) != len(
+                set(damage_placement.balanced_team_keys)
+            ):
+                raise ValueError("C 平衡规则中的队伍不能重复")
+            unknown = {
+                damage_placement.primary_team_key,
+                *damage_placement.balanced_team_keys,
+            } - team_by_key.keys()
+            if unknown:
+                raise ValueError(f"C 排队规则引用未知队伍: {sorted(unknown)}")
+            if damage_placement.primary_team_key in damage_placement.balanced_team_keys:
+                raise ValueError("C 主队不能同时作为平衡队伍")
 
         covered: set[str] = set()
         composition_codes = [rule.code for rule in self.composition_rules.allowed]
@@ -179,6 +240,33 @@ class DungeonVersionDefinition(BaseModel):
                 covered.add(team_key)
         if covered != team_by_key.keys():
             raise ValueError("每支队伍必须至少有一条适用组成规则")
+
+        if buffer_placement is not None:
+            for team_key in buffer_placement.team_order:
+                buffer_counts = {
+                    rule.roles.get(RoleType.BUFFER, 0)
+                    for rule in self.composition_rules.allowed
+                    if team_key in rule.applicable_team_keys
+                }
+                if not buffer_counts or min(buffer_counts) <= 0:
+                    raise ValueError(f"奶排队规则的队伍 {team_key} 缺少单奶组成")
+                if (
+                    team_key in buffer_placement.double_buffer_team_keys
+                    and max(buffer_counts) < min(buffer_counts) + 1
+                ):
+                    raise ValueError(f"奶排队规则的队伍 {team_key} 缺少双奶组成")
+
+        if damage_placement is not None:
+            for team_key in {
+                damage_placement.primary_team_key,
+                *damage_placement.balanced_team_keys,
+            }:
+                if not any(
+                    team_key in rule.applicable_team_keys
+                    and rule.roles.get(RoleType.DAMAGE, 0) > 0
+                    for rule in self.composition_rules.allowed
+                ):
+                    raise ValueError(f"C 排队规则的队伍 {team_key} 缺少含 C 的组成")
 
         special_codes = [rule.code for rule in self.special_role_rules.rules]
         if len(special_codes) != len(set(special_codes)):

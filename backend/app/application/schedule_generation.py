@@ -30,7 +30,7 @@ from app.solver import (
 )
 from app.solver.models import SolverScheduleRule
 
-SOLVER_VERSION = "cp-sat-v3"
+SOLVER_VERSION = "cp-sat-v4"
 
 
 def build_solver_input(
@@ -149,6 +149,7 @@ def build_solver_input(
         dungeon=definition,
         wave_count=schedule.wave_count,
         participants=participants,
+        damage_balance_tolerance_percent=schedule.damage_balance_tolerance_percent,
         player_preferences=player_preferences,
         schedule_rules=schedule_rules,
         locked_assignments=tuple(locked_assignments),
@@ -319,6 +320,19 @@ def objective_summary_payload(
         "damageSpreadDisplay": str(Decimal(summary.damage_spread) / formula.damage_scale),
         "bufferSpreadDisplay": str(Decimal(summary.buffer_spread) / formula.buffer_scale),
         "strengthOrderViolationCount": summary.strength_order_violation_count,
+        "targetCompositionCount": summary.target_composition_count,
+        "bufferPlacementCount": summary.buffer_placement_count,
+        "damagePrimaryCount": summary.damage_primary_count,
+        "damagePairCount": summary.damage_pair_count,
+        "damagePairWaveCount": summary.damage_pair_wave_count,
+        "damageBalanceSpread": summary.damage_balance_spread,
+        "damageBalanceToleranceExcess": summary.damage_balance_tolerance_excess,
+        "damageBalancePercent": summary.damage_balance_percent,
+        "damageAverageScale": summary.damage_average_scale,
+        "damageBalanceSpreadDisplay": str(
+            Decimal(summary.damage_balance_spread)
+            / (formula.damage_scale * summary.damage_average_scale)
+        ),
     }
 
 

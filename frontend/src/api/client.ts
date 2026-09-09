@@ -128,6 +128,18 @@ export interface DungeonVersionInput {
     schemaVersion: 1;
     balanceAcrossWaves: DungeonRoleType[];
     respectPlayerPreferences: boolean;
+    bufferPlacement: {
+      mode: "EXTRAS_BY_TEAM_THEN_WAVE";
+      teamOrder: string[];
+      doubleBufferTeamKeys: string[];
+      pairExtremes: boolean;
+    } | null;
+    damagePlacement: {
+      mode: "PRIMARY_THEN_BALANCE";
+      primaryTeamKey: string;
+      balancedTeamKeys: string[];
+      pairExtremesInDoubleBufferTeams: boolean;
+    } | null;
   };
   missingSlotPolicy: {
     schemaVersion: 1;
@@ -231,6 +243,7 @@ export interface ScheduleSummary {
   dungeonVersionId: string;
   bufferConversionVersionId: string;
   waveCount: number;
+  damageBalanceTolerancePercent: number;
   status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
   revision: number;
   validationSummary: Record<string, number> | null;
@@ -369,6 +382,16 @@ export interface GenerationRun {
     damageSpreadDisplay?: string;
     bufferSpreadDisplay?: string;
     strengthOrderViolationCount: number;
+    targetCompositionCount?: number;
+    bufferPlacementCount?: number;
+    damagePrimaryCount?: number;
+    damagePairCount?: number;
+    damagePairWaveCount?: number;
+    damageBalanceSpread?: number;
+    damageBalanceToleranceExcess?: number;
+    damageBalancePercent?: number;
+    damageAverageScale?: number;
+    damageBalanceSpreadDisplay?: string;
   } | null;
   diagnostics: {
     solverStatus?: string;

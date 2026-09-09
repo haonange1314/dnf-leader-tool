@@ -1,4 +1,5 @@
 from collections import defaultdict
+from math import lcm
 
 from ortools.sat.python import cp_model
 
@@ -315,6 +316,37 @@ def solve(solver_input: SolverInput) -> SolverResult:
                     model.add(role_count == rule.roles.get(role_type, 0)).only_enforce_if(selection)
             model.add(sum(selections) == full)
 
+    buffer_count_targets = _buffer_count_targets(solver_input)
+    for (wave_no, team_key), target_count in buffer_count_targets.items():
+        team_index = team_index_by_key[team_key]
+        model.add(
+            sum(
+                x[participant_index, wave_no, team_index]
+                for participant_index, participant in enumerate(participants)
+                if participant.role_type == RoleType.BUFFER
+            )
+            == target_count
+        )
+
+    damage_rule = (
+        solver_input.dungeon.optimization_rules.damage_placement
+        if buffer_count_targets
+        else None
+    )
+    if damage_rule is not None:
+        primary_team_index = team_index_by_key[damage_rule.primary_team_key]
+        primary_capacity = teams[primary_team_index].member_count
+        for wave_no in waves:
+            model.add(
+                sum(
+                    x[participant_index, wave_no, primary_team_index]
+                    for participant_index, participant in enumerate(participants)
+                    if participant.role_type == RoleType.DAMAGE
+                )
+                == primary_capacity
+                - buffer_count_targets[wave_no, damage_rule.primary_team_key]
+            )
+
     wave_full: dict[int, cp_model.IntVar] = {}
     for wave_no in waves:
         full = model.new_bool_var(f"wave_full_{wave_no}")
@@ -385,6 +417,13 @@ def solve(solver_input: SolverInput) -> SolverResult:
         (composition_rules[rule_index].priority - 1) * variable
         for (_wave_no, _team_index, rule_index), variable in selected_composition.items()
     ]
+    buffer_placement_targets = _build_buffer_placement_targets(
+        solver_input, team_index_by_key
+    )
+    buffer_placement_terms = [
+        x[participant_index, wave_no, team_index]
+        for participant_index, wave_no, team_index in buffer_placement_targets
+    ]
 
     metric_totals: dict[tuple[RoleType, int, int], cp_model.IntVar] = {}
     score_upper_bound = total_score
@@ -405,6 +444,7 @@ def solve(solver_input: SolverInput) -> SolverResult:
                 metric_totals[metric, wave_no, team_index] = total
 
     strength_order_penalties: list[cp_model.LinearExpr] = []
+    buffer_strength_order_penalties: list[cp_model.LinearExpr] = []
     strength_order_pairs: list[
         tuple[int, cp_model.LinearExpr, cp_model.LinearExpr]
     ] = []
@@ -423,6 +463,8 @@ def solve(solver_input: SolverInput) -> SolverResult:
                 model.add(slack >= weaker - stronger).only_enforce_if(wave_full[wave_no])
                 model.add(slack == 0).only_enforce_if(~wave_full[wave_no])
                 strength_order_penalties.append(slack)
+                if order.metric == RoleType.BUFFER:
+                    buffer_strength_order_penalties.append(slack)
                 strength_order_pairs.append((wave_no, stronger, weaker))
 
     balance_penalties: list[tuple[RoleType, cp_model.LinearExpr]] = []
@@ -473,6 +515,169 @@ def solve(solver_input: SolverInput) -> SolverResult:
                 ]
             )
             companion_penalties.append(target_damage - selected_core_score)
+
+    damage_primary_terms: list[cp_model.LinearExpr] = []
+    damage_primary_score: cp_model.LinearExpr | None = None
+    damage_pair_wave_terms: list[cp_model.IntVar] = []
+    damage_primary_balance_spread: cp_model.IntVar | None = None
+    damage_balance_tolerance_excess: cp_model.IntVar | None = None
+    damage_balance_spread: cp_model.IntVar | None = None
+    damage_average_scale = _damage_average_scale(solver_input)
+    if damage_rule is not None:
+        primary_team_index = team_index_by_key[damage_rule.primary_team_key]
+        primary_slot_count = sum(
+            teams[primary_team_index].member_count
+            - buffer_count_targets[wave_no, damage_rule.primary_team_key]
+            for wave_no in waves
+        )
+        ranked_damage_indices = sorted(
+            (
+                participant_index
+                for participant_index, participant in enumerate(participants)
+                if participant.role_type == RoleType.DAMAGE
+            ),
+            key=lambda participant_index: (
+                -participants[participant_index].score,
+                participants[participant_index].participant_id,
+            ),
+        )
+        selected_damage_indices = ranked_damage_indices[:primary_slot_count]
+        damage_primary_terms = [
+            x[participant_index, wave_no, primary_team_index]
+            for participant_index in selected_damage_indices
+            for wave_no in waves
+        ]
+        damage_primary_score = cp_model.LinearExpr.sum(
+            [
+                participants[participant_index].score
+                * x[participant_index, wave_no, primary_team_index]
+                for participant_index in ranked_damage_indices
+                for wave_no in waves
+            ]
+        )
+
+        if damage_rule.pair_extremes_in_double_buffer_teams:
+            remaining_ranked = list(selected_damage_indices)
+            minimum_primary_buffer_count = _buffer_count_bounds(solver_input)[
+                damage_rule.primary_team_key
+            ][0]
+            double_buffer_waves = [
+                wave_no
+                for wave_no in waves
+                if buffer_count_targets[wave_no, damage_rule.primary_team_key]
+                > minimum_primary_buffer_count
+            ]
+            for wave_no in double_buffer_waves:
+                if len(remaining_ranked) < 2:
+                    break
+                strongest_index = remaining_ranked.pop(0)
+                weakest_index = remaining_ranked.pop()
+                damage_pair_wave_terms.extend(
+                    (
+                        x[strongest_index, wave_no, primary_team_index],
+                        x[weakest_index, wave_no, primary_team_index],
+                    )
+                )
+
+        primary_single_waves = [
+            wave_no
+            for wave_no in waves
+            if buffer_count_targets[wave_no, damage_rule.primary_team_key]
+            == _buffer_count_bounds(solver_input)[damage_rule.primary_team_key][0]
+        ]
+        if len(primary_single_waves) > 1:
+            primary_totals = [
+                metric_totals[RoleType.DAMAGE, wave_no, primary_team_index]
+                for wave_no in primary_single_waves
+            ]
+            primary_maximum = model.new_int_var(
+                0, score_upper_bound, "damage_primary_single_max"
+            )
+            primary_minimum = model.new_int_var(
+                0, score_upper_bound, "damage_primary_single_min"
+            )
+            damage_primary_balance_spread = model.new_int_var(
+                0, score_upper_bound, "damage_primary_single_spread"
+            )
+            model.add_max_equality(primary_maximum, primary_totals)
+            model.add_min_equality(primary_minimum, primary_totals)
+            model.add(
+                damage_primary_balance_spread == primary_maximum - primary_minimum
+            )
+
+        balanced_full = [
+            team_full[wave_no, team_index_by_key[team_key]]
+            for wave_no in waves
+            for team_key in damage_rule.balanced_team_keys
+        ]
+        any_balanced_full = model.new_bool_var("damage_balance_any_full")
+        model.add_max_equality(any_balanced_full, balanced_full)
+        average_upper_bound = score_upper_bound * damage_average_scale
+        balanced_averages: list[cp_model.IntVar] = []
+        balanced_min_candidates: list[cp_model.IntVar] = []
+        for wave_no in waves:
+            for team_key in damage_rule.balanced_team_keys:
+                team_index = team_index_by_key[team_key]
+                full = team_full[wave_no, team_index]
+                average = model.new_int_var(
+                    0,
+                    average_upper_bound,
+                    f"damage_average_{wave_no}_{team_index}",
+                )
+                for rule_index, composition in enumerate(composition_rules):
+                    composition_selection = selected_composition.get(
+                        (wave_no, team_index, rule_index)
+                    )
+                    if composition_selection is None:
+                        continue
+                    damage_count = composition.roles.get(RoleType.DAMAGE, 0)
+                    if damage_count:
+                        model.add(
+                            average * damage_count
+                            == metric_totals[RoleType.DAMAGE, wave_no, team_index]
+                            * damage_average_scale
+                        ).only_enforce_if(composition_selection)
+                    else:
+                        model.add(average == 0).only_enforce_if(
+                            composition_selection
+                        )
+                model.add(average == 0).only_enforce_if(~full)
+                minimum_candidate = model.new_int_var(
+                    0,
+                    average_upper_bound,
+                    f"damage_average_min_candidate_{wave_no}_{team_index}",
+                )
+                model.add(minimum_candidate == average).only_enforce_if(full)
+                model.add(minimum_candidate == average_upper_bound).only_enforce_if(~full)
+                balanced_averages.append(average)
+                balanced_min_candidates.append(minimum_candidate)
+
+        balance_maximum = model.new_int_var(
+            0, average_upper_bound, "damage_balance_average_max"
+        )
+        balance_minimum = model.new_int_var(
+            0, average_upper_bound, "damage_balance_average_min"
+        )
+        damage_balance_spread = model.new_int_var(
+            0, average_upper_bound, "damage_balance_average_spread"
+        )
+        model.add_max_equality(balance_maximum, balanced_averages)
+        model.add_min_equality(balance_minimum, balanced_min_candidates)
+        model.add(
+            damage_balance_spread == balance_maximum - balance_minimum
+        ).only_enforce_if(any_balanced_full)
+        model.add(damage_balance_spread == 0).only_enforce_if(~any_balanced_full)
+        damage_balance_tolerance_excess = model.new_int_var(
+            0, average_upper_bound * 100, "damage_balance_tolerance_excess"
+        )
+        model.add(
+            damage_balance_tolerance_excess
+            >= 100 * balance_maximum
+            - (100 + solver_input.damage_balance_tolerance_percent) * balance_minimum
+        ).only_enforce_if(any_balanced_full)
+        model.add(damage_balance_tolerance_excess == 0).only_enforce_if(
+            ~any_balanced_full
+        )
 
     assigned_total = cp_model.LinearExpr.sum(assigned)
     position_assignment_upper_bound = min(
@@ -734,6 +939,103 @@ def solve(solver_input: SolverInput) -> SolverResult:
         )
         model.add(evaluated_objective == stage_value)
 
+    if buffer_placement_terms:
+        if buffer_strength_order_penalties:
+            optimize_and_fix_stage(
+                "BUFFER_STRENGTH_ORDER",
+                cp_model.LinearExpr.sum(buffer_strength_order_penalties),
+                maximize=False,
+                budget_ratio=0.06,
+                target_value=0,
+            )
+        optimize_and_fix_stage(
+            "BUFFER_PLACEMENT",
+            cp_model.LinearExpr.sum(buffer_placement_terms),
+            maximize=True,
+            budget_ratio=0.10,
+            target_value=len(buffer_placement_terms),
+        )
+        for participant_index, participant in enumerate(participants):
+            if participant.role_type != RoleType.BUFFER:
+                continue
+            for wave_no in waves:
+                for team_index, _team in enumerate(teams):
+                    variable = x[participant_index, wave_no, team_index]
+                    model.add(variable == best_solver.value(variable))
+
+    if damage_primary_terms:
+        optimize_and_fix_stage(
+            "DAMAGE_PRIMARY_COUNT",
+            cp_model.LinearExpr.sum(damage_primary_terms),
+            maximize=True,
+            budget_ratio=0.08,
+            target_value=min(
+                len(
+                    [
+                        participant
+                        for participant in participants
+                        if participant.role_type == RoleType.DAMAGE
+                    ]
+                ),
+                sum(
+                    teams[team_index_by_key[damage_rule.primary_team_key]].member_count
+                    - buffer_count_targets[wave_no, damage_rule.primary_team_key]
+                    for wave_no in waves
+                )
+                if damage_rule is not None
+                else 0,
+            ),
+        )
+    if damage_primary_score is not None:
+        primary_slot_count = (
+            sum(
+                teams[team_index_by_key[damage_rule.primary_team_key]].member_count
+                - buffer_count_targets[wave_no, damage_rule.primary_team_key]
+                for wave_no in waves
+            )
+            if damage_rule is not None
+            else 0
+        )
+        damage_scores = sorted(
+            (
+                participant.score
+                for participant in participants
+                if participant.role_type == RoleType.DAMAGE
+            ),
+            reverse=True,
+        )
+        optimize_and_fix_stage(
+            "DAMAGE_PRIMARY_SCORE",
+            damage_primary_score,
+            maximize=True,
+            budget_ratio=0.08,
+            target_value=sum(damage_scores[:primary_slot_count]),
+        )
+    if damage_pair_wave_terms:
+        optimize_and_fix_stage(
+            "DAMAGE_PRIMARY_PAIRING",
+            cp_model.LinearExpr.sum(damage_pair_wave_terms),
+            maximize=True,
+            budget_ratio=0.06,
+            target_value=len(damage_pair_wave_terms),
+        )
+    if damage_primary_balance_spread is not None:
+        optimize_and_fix_stage(
+            "DAMAGE_PRIMARY_BALANCE",
+            damage_primary_balance_spread,
+            maximize=False,
+            budget_ratio=0.06,
+            target_value=0,
+        )
+    if damage_rule is not None:
+        primary_team_index = team_index_by_key[damage_rule.primary_team_key]
+        for participant_index, participant in enumerate(participants):
+            if participant.role_type != RoleType.DAMAGE:
+                continue
+            for wave_no in waves:
+                variable = x[participant_index, wave_no, primary_team_index]
+                model.add(variable == best_solver.value(variable))
+
     if spread_objective is not None:
         optimize_and_fix_stage(
             "WAVE_FILL_SPREAD",
@@ -807,6 +1109,23 @@ def solve(solver_input: SolverInput) -> SolverResult:
         budget_ratio=0.10,
         target_value=0,
     )
+
+    if damage_balance_tolerance_excess is not None:
+        optimize_and_fix_stage(
+            "DAMAGE_BALANCE_TOLERANCE",
+            damage_balance_tolerance_excess,
+            maximize=False,
+            budget_ratio=0.06,
+            target_value=0,
+        )
+    if damage_balance_spread is not None:
+        optimize_and_fix_stage(
+            "DAMAGE_BALANCE_SPREAD",
+            damage_balance_spread,
+            maximize=False,
+            budget_ratio=0.06,
+            target_value=0,
+        )
 
     if special_satisfied:
         maximum_complete_waves = min(
@@ -898,8 +1217,12 @@ def solve(solver_input: SolverInput) -> SolverResult:
         if participant.participant_id not in assigned_locations
     )
     unassigned_reasons = _diagnose_unassigned(solver_input, assignments, unassigned)
-    objective_summary = _objective_summary(solver_input, summaries, special_assignments)
-    issues = _solver_issues(solver_input, summaries, special_assignments)
+    objective_summary = _objective_summary(
+        solver_input, assignments, summaries, special_assignments
+    )
+    issues = _solver_issues(
+        solver_input, summaries, special_assignments, objective_summary
+    )
     result_status = (
         SolverStatus.PARTIAL
         if unassigned or any(summary.composition_code is None for summary in summaries)
@@ -918,6 +1241,116 @@ def solve(solver_input: SolverInput) -> SolverResult:
         wall_time_seconds=elapsed,
         objective_stages=tuple(objective_stages),
     )
+
+
+def _buffer_count_bounds(
+    solver_input: SolverInput,
+) -> dict[str, tuple[int, int]]:
+    bounds: dict[str, tuple[int, int]] = {}
+    for team in solver_input.dungeon.teams:
+        counts = [
+            composition.roles.get(RoleType.BUFFER, 0)
+            for composition in solver_input.dungeon.composition_rules.allowed
+            if team.team_key in composition.applicable_team_keys
+        ]
+        bounds[team.team_key] = (min(counts), max(counts))
+    return bounds
+
+
+def _buffer_count_targets(solver_input: SolverInput) -> dict[tuple[int, str], int]:
+    """Distribute all buffers by configured team priority, then by wave order."""
+
+    rule = solver_input.dungeon.optimization_rules.buffer_placement
+    if rule is None:
+        return {}
+    bounds = _buffer_count_bounds(solver_input)
+    targets = {
+        (wave_no, team_key): bounds[team_key][0]
+        for team_key in rule.team_order
+        for wave_no in range(1, solver_input.wave_count + 1)
+    }
+    buffer_count = sum(
+        participant.role_type == RoleType.BUFFER
+        for participant in solver_input.participants
+    )
+    remaining = buffer_count - sum(targets.values())
+    if remaining < 0:
+        return {}
+    for team_key in rule.double_buffer_team_keys:
+        _minimum, maximum = bounds[team_key]
+        for wave_no in range(1, solver_input.wave_count + 1):
+            while remaining and targets[wave_no, team_key] < maximum:
+                targets[wave_no, team_key] += 1
+                remaining -= 1
+    if remaining:
+        return {}
+    return targets
+
+
+def _build_buffer_placement_targets(
+    solver_input: SolverInput,
+    team_index_by_key: dict[str, int],
+) -> tuple[tuple[int, int, int], ...]:
+    """Build the ideal high-low buffer assignment without weakening hard rules."""
+
+    rule = solver_input.dungeon.optimization_rules.buffer_placement
+    if rule is None:
+        return ()
+    targets = _buffer_count_targets(solver_input)
+    if not targets:
+        return ()
+    bounds = _buffer_count_bounds(solver_input)
+    remaining = [
+        participant_index
+        for participant_index, participant in sorted(
+            enumerate(solver_input.participants),
+            key=lambda item: (-item[1].score, item[1].participant_id),
+        )
+        if participant.role_type == RoleType.BUFFER
+    ]
+    placements: list[tuple[int, int, int]] = []
+    placed_count: defaultdict[tuple[int, str], int] = defaultdict(int)
+
+    def take_largest(wave_no: int, team_key: str) -> None:
+        if remaining:
+            placements.append(
+                (remaining.pop(0), wave_no, team_index_by_key[team_key])
+            )
+            placed_count[wave_no, team_key] += 1
+
+    def take_smallest(wave_no: int, team_key: str) -> None:
+        if remaining:
+            placements.append((remaining.pop(), wave_no, team_index_by_key[team_key]))
+            placed_count[wave_no, team_key] += 1
+
+    if rule.pair_extremes:
+        for team_key in rule.double_buffer_team_keys:
+            minimum, _maximum = bounds[team_key]
+            for wave_no in range(1, solver_input.wave_count + 1):
+                if targets[wave_no, team_key] <= minimum:
+                    continue
+                take_largest(wave_no, team_key)
+                take_smallest(wave_no, team_key)
+
+    for team_key in rule.team_order:
+        for wave_no in range(1, solver_input.wave_count + 1):
+            while placed_count[wave_no, team_key] < targets[wave_no, team_key]:
+                take_largest(wave_no, team_key)
+    return tuple(placements)
+
+
+def _damage_average_scale(solver_input: SolverInput) -> int:
+    rule = solver_input.dungeon.optimization_rules.damage_placement
+    if rule is None:
+        return 1
+    relevant_team_keys = {rule.primary_team_key, *rule.balanced_team_keys}
+    damage_counts = {
+        composition.roles.get(RoleType.DAMAGE, 0)
+        for composition in solver_input.dungeon.composition_rules.allowed
+        if relevant_team_keys.intersection(composition.applicable_team_keys)
+        and composition.roles.get(RoleType.DAMAGE, 0) > 0
+    }
+    return lcm(*damage_counts) if damage_counts else 1
 
 
 def _find_assignment_target_hint(
@@ -963,6 +1396,28 @@ def _find_assignment_target_hint(
         order.metric: {team_key: rank for rank, team_key in enumerate(order.teams)}
         for order in solver_input.dungeon.strength_order_rules.orders
     }
+    ordered_damage_rule = (
+        solver_input.dungeon.optimization_rules.damage_placement
+        if _buffer_count_targets(solver_input)
+        else None
+    )
+    if ordered_damage_rule is not None:
+        damage_team_order = (
+            ordered_damage_rule.primary_team_key,
+            *ordered_damage_rule.balanced_team_keys,
+            *(
+                team.team_key
+                for team in teams
+                if team.team_key
+                not in {
+                    ordered_damage_rule.primary_team_key,
+                    *ordered_damage_rule.balanced_team_keys,
+                }
+            ),
+        )
+        team_rank_by_role[RoleType.DAMAGE] = {
+            team_key: rank for rank, team_key in enumerate(damage_team_order)
+        }
 
     group_assignment: dict[tuple[int, int, int], cp_model.IntVar] = {}
     for group_index, group_key in enumerate(group_keys):
@@ -1158,6 +1613,36 @@ def _find_assignment_target_hint(
                         selection
                     )
             model.add(sum(selections) == full)
+
+    buffer_targets = _buffer_count_targets(solver_input)
+    for (wave_no, team_key), target_count in buffer_targets.items():
+        team_index = team_index_by_key[team_key]
+        model.add(
+            sum(
+                group_assignment[group_index, wave_no, team_index]
+                for group_index, group_key in enumerate(group_keys)
+                if group_key[1] == RoleType.BUFFER
+            )
+            == target_count
+        )
+    damage_rule = (
+        solver_input.dungeon.optimization_rules.damage_placement
+        if buffer_targets
+        else None
+    )
+    if damage_rule is not None:
+        primary_team_index = team_index_by_key[damage_rule.primary_team_key]
+        primary_capacity = teams[primary_team_index].member_count
+        for wave_no in waves:
+            model.add(
+                sum(
+                    group_assignment[group_index, wave_no, primary_team_index]
+                    for group_index, group_key in enumerate(group_keys)
+                    if group_key[1] == RoleType.DAMAGE
+                )
+                == primary_capacity
+                - buffer_targets[wave_no, damage_rule.primary_team_key]
+            )
 
     assigned_total = cp_model.LinearExpr.sum(list(group_assignment.values()))
     model.add(assigned_total <= assignment_target)
@@ -1433,6 +1918,8 @@ def _validate_input(solver_input: SolverInput) -> None:
         raise ValueError(f"排表总位置数不能超过 {MAX_SCHEDULE_POSITIONS}")
     if not 1 <= solver_input.time_limit_seconds <= 60:
         raise ValueError("time_limit_seconds 必须位于 1..60")
+    if not 0 <= solver_input.damage_balance_tolerance_percent <= 100:
+        raise ValueError("damage_balance_tolerance_percent 必须位于 0..100")
     if len({participant.participant_id for participant in solver_input.participants}) != len(
         solver_input.participants
     ):
@@ -1554,6 +2041,12 @@ def _validate_input(solver_input: SolverInput) -> None:
     total_score = sum(participant.score for participant in solver_input.participants)
     if total_score > INT64_MAX:
         raise ValueError("参与角色总评分超过有符号 64 位整数范围")
+    if definition.optimization_rules.buffer_placement is not None:
+        _buffer_count_targets(solver_input)
+    if definition.optimization_rules.damage_placement is not None:
+        average_factor = _damage_average_scale(solver_input) * 100
+        if total_score > INT64_MAX // average_factor:
+            raise ValueError("C 平均伤害目标的最坏情况超过有符号 64 位整数范围")
     strength_slack_count = sum(
         max(0, len(order.teams) - 1) * solver_input.wave_count
         for order in definition.strength_order_rules.orders
@@ -1677,6 +2170,7 @@ def _diagnose_unassigned(
 
 def _objective_summary(
     solver_input: SolverInput,
+    assignments: list[SolverAssignment],
     summaries: tuple[TeamSummary, ...],
     special_assignments: list[SpecialAssignment],
 ) -> ObjectiveSummary:
@@ -1714,6 +2208,111 @@ def _objective_summary(
         sum(summary.buffer_total for summary in by_wave[wave_no]) for wave_no in complete_waves
     ]
     violations = _strength_order_violations(solver_input, by_wave, set(complete_waves))
+    assignment_by_participant = {
+        assignment.participant_id: (assignment.wave_no, assignment.team_key)
+        for assignment in assignments
+    }
+    buffer_targets = _buffer_count_targets(solver_input)
+    target_composition_count = sum(
+        summary in complete_teams
+        and summary.role_counts[RoleType.BUFFER]
+        == buffer_targets.get((summary.wave_no, summary.team_key))
+        for summary in summaries
+        if (summary.wave_no, summary.team_key) in buffer_targets
+    )
+    team_index_by_key = {
+        team.team_key: index for index, team in enumerate(solver_input.dungeon.teams)
+    }
+    buffer_placement_count = sum(
+        assignment_by_participant.get(
+            solver_input.participants[participant_index].participant_id
+        )
+        == (wave_no, solver_input.dungeon.teams[team_index].team_key)
+        for participant_index, wave_no, team_index in _build_buffer_placement_targets(
+            solver_input, team_index_by_key
+        )
+    )
+    damage_primary_count = 0
+    damage_pair_count = 0
+    damage_pair_wave_count = 0
+    damage_balance_spread = 0
+    damage_balance_tolerance_excess = 0
+    damage_balance_percent = 0
+    damage_rule = (
+        solver_input.dungeon.optimization_rules.damage_placement
+        if buffer_targets
+        else None
+    )
+    if damage_rule is not None:
+        primary_team = next(
+            team
+            for team in solver_input.dungeon.teams
+            if team.team_key == damage_rule.primary_team_key
+        )
+        primary_slot_count = sum(
+            primary_team.member_count
+            - buffer_targets[wave_no, damage_rule.primary_team_key]
+            for wave_no in range(1, solver_input.wave_count + 1)
+        )
+        selected_damage = sorted(
+            (
+                participant
+                for participant in solver_input.participants
+                if participant.role_type == RoleType.DAMAGE
+            ),
+            key=lambda participant: (-participant.score, participant.participant_id),
+        )[:primary_slot_count]
+        damage_primary_count = sum(
+            assignment_by_participant.get(participant.participant_id, (None, None))[1]
+            == damage_rule.primary_team_key
+            for participant in selected_damage
+        )
+        remaining_damage = list(selected_damage)
+        minimum_primary_buffers = _buffer_count_bounds(solver_input)[
+            damage_rule.primary_team_key
+        ][0]
+        for wave_no in range(1, solver_input.wave_count + 1):
+            if (
+                buffer_targets[wave_no, damage_rule.primary_team_key]
+                <= minimum_primary_buffers
+                or len(remaining_damage) < 2
+            ):
+                continue
+            damage_pair_wave_count += 1
+            strongest = remaining_damage.pop(0)
+            weakest = remaining_damage.pop()
+            damage_pair_count += (
+                assignment_by_participant.get(strongest.participant_id)
+                == (wave_no, damage_rule.primary_team_key)
+                and assignment_by_participant.get(weakest.participant_id)
+                == (wave_no, damage_rule.primary_team_key)
+            )
+
+        average_scale = _damage_average_scale(solver_input)
+        balanced_averages = [
+            summary.damage_total * average_scale // summary.role_counts[RoleType.DAMAGE]
+            for summary in complete_teams
+            if summary.team_key in damage_rule.balanced_team_keys
+            and summary.role_counts[RoleType.DAMAGE] > 0
+        ]
+        if balanced_averages:
+            minimum_average = min(balanced_averages)
+            maximum_average = max(balanced_averages)
+            damage_balance_spread = maximum_average - minimum_average
+            damage_balance_tolerance_excess = max(
+                0,
+                100 * maximum_average
+                - (100 + solver_input.damage_balance_tolerance_percent)
+                * minimum_average,
+            )
+            damage_balance_percent = (
+                (damage_balance_spread * 100 + minimum_average - 1)
+                // minimum_average
+                if minimum_average
+                else 0
+                if maximum_average == 0
+                else 100
+            )
     return ObjectiveSummary(
         assigned_count=sum(summary.member_count for summary in summaries),
         participant_count=len(solver_input.participants),
@@ -1727,6 +2326,15 @@ def _objective_summary(
         damage_spread=max(damage_totals) - min(damage_totals) if damage_totals else 0,
         buffer_spread=max(buffer_totals) - min(buffer_totals) if buffer_totals else 0,
         strength_order_violation_count=len(violations),
+        target_composition_count=target_composition_count,
+        buffer_placement_count=buffer_placement_count,
+        damage_primary_count=damage_primary_count,
+        damage_pair_count=damage_pair_count,
+        damage_pair_wave_count=damage_pair_wave_count,
+        damage_balance_spread=damage_balance_spread,
+        damage_balance_tolerance_excess=damage_balance_tolerance_excess,
+        damage_balance_percent=damage_balance_percent,
+        damage_average_scale=_damage_average_scale(solver_input),
     )
 
 
@@ -1763,6 +2371,7 @@ def _solver_issues(
     solver_input: SolverInput,
     summaries: tuple[TeamSummary, ...],
     special_assignments: list[SpecialAssignment],
+    objective_summary: ObjectiveSummary,
 ) -> tuple[SolverIssue, ...]:
     team_by_key = {team.team_key: team for team in solver_input.dungeon.teams}
     by_wave: dict[int, list[TeamSummary]] = defaultdict(list)
@@ -1779,6 +2388,26 @@ def _solver_issues(
         )
     }
     issues: list[SolverIssue] = []
+    buffer_target_count = len(
+        _build_buffer_placement_targets(
+            solver_input,
+            {
+                team.team_key: index
+                for index, team in enumerate(solver_input.dungeon.teams)
+            },
+        )
+    )
+    if objective_summary.buffer_placement_count < buffer_target_count:
+        issues.append(
+            SolverIssue(
+                "WARNING",
+                "BUFFER_PLACEMENT_DEVIATION",
+                {
+                    "target": buffer_target_count,
+                    "current": objective_summary.buffer_placement_count,
+                },
+            )
+        )
     special_counts: defaultdict[tuple[int, str], int] = defaultdict(int)
     for assignment in special_assignments:
         special_counts[assignment.wave_no, assignment.rule_code] += 1
@@ -1819,4 +2448,90 @@ def _solver_issues(
                 },
             )
         )
+    damage_rule = (
+        solver_input.dungeon.optimization_rules.damage_placement
+        if _buffer_count_targets(solver_input)
+        else None
+    )
+    if damage_rule is not None:
+        primary_team = next(
+            team
+            for team in solver_input.dungeon.teams
+            if team.team_key == damage_rule.primary_team_key
+        )
+        primary_target = sum(
+            primary_team.member_count
+            - _buffer_count_targets(solver_input)[wave_no, damage_rule.primary_team_key]
+            for wave_no in range(1, solver_input.wave_count + 1)
+        )
+        if objective_summary.damage_primary_count < primary_target:
+            issues.append(
+                SolverIssue(
+                    "WARNING",
+                    "DAMAGE_PRIMARY_SELECTION_DEVIATION",
+                    {
+                        "teamKey": damage_rule.primary_team_key,
+                        "target": primary_target,
+                        "current": objective_summary.damage_primary_count,
+                    },
+                )
+            )
+        buffer_targets = _buffer_count_targets(solver_input)
+        minimum_primary_buffers = _buffer_count_bounds(solver_input)[
+            damage_rule.primary_team_key
+        ][0]
+        pair_target = sum(
+            buffer_targets[wave_no, damage_rule.primary_team_key]
+            > minimum_primary_buffers
+            for wave_no in range(1, solver_input.wave_count + 1)
+        )
+        if (
+            damage_rule.pair_extremes_in_double_buffer_teams
+            and objective_summary.damage_pair_count < pair_target
+        ):
+            issues.append(
+                SolverIssue(
+                    "WARNING",
+                    "DAMAGE_PAIRING_DEVIATION",
+                    {
+                        "target": pair_target,
+                        "current": objective_summary.damage_pair_count,
+                    },
+                )
+            )
+        balanced = [
+            summary
+            for summary in summaries
+            if summary.member_count == team_by_key[summary.team_key].member_count
+            and summary.composition_code is not None
+            and summary.team_key in damage_rule.balanced_team_keys
+            and summary.role_counts[RoleType.DAMAGE] > 0
+        ]
+        scale = _damage_average_scale(solver_input)
+        averages = [
+            summary.damage_total * scale // summary.role_counts[RoleType.DAMAGE]
+            for summary in balanced
+        ]
+        if averages:
+            minimum = min(averages)
+            maximum = max(averages)
+            actual_percent = (
+                ((maximum - minimum) * 100 + minimum - 1) // minimum
+                if minimum
+                else 0
+                if maximum == 0
+                else 100
+            )
+            if actual_percent > solver_input.damage_balance_tolerance_percent:
+                issues.append(
+                    SolverIssue(
+                        "WARNING",
+                        "DAMAGE_BALANCE_TOLERANCE_EXCEEDED",
+                        {
+                            "teamKeys": list(damage_rule.balanced_team_keys),
+                            "configuredPercent": solver_input.damage_balance_tolerance_percent,
+                            "actualPercent": actual_percent,
+                        },
+                    )
+                )
     return tuple(issues)

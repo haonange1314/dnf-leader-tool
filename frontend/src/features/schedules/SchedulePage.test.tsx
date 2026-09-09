@@ -22,6 +22,7 @@ const summary = {
   dungeonVersionId: "version-1",
   bufferConversionVersionId: "buffer-version-1",
   waveCount: 1,
+  damageBalanceTolerancePercent: 20,
   status: "DRAFT" as const,
   revision: 1,
   validationSummary: null,
@@ -637,6 +638,13 @@ describe("SchedulePage", () => {
               damageSpreadDisplay: "0.00",
               bufferSpreadDisplay: "0.0",
               strengthOrderViolationCount: 0,
+              targetCompositionCount: 1,
+              bufferPlacementCount: 1,
+              damagePrimaryCount: 1,
+              damagePairCount: 0,
+              damagePairWaveCount: 0,
+              damageBalanceToleranceExcess: 0,
+              damageBalancePercent: 0,
             },
             diagnostics: {
               solverStatus: "OPTIMAL",
@@ -699,7 +707,10 @@ describe("SchedulePage", () => {
 
     expect(await screen.findByText("最近一次自动排表")).toBeInTheDocument();
     expect(screen.getByText("已安排 1/1")).toBeInTheDocument();
-    expect(screen.getByText("优先组成 1")).toBeInTheDocument();
+    expect(screen.getByText("目标组成 1/1")).toBeInTheDocument();
+    expect(screen.getByText("奶位排序命中 1")).toBeInTheDocument();
+    expect(screen.getByText("强 C 进红 1")).toBeInTheDocument();
+    expect(screen.getByText("红队首尾配对 0/0")).toBeInTheDocument();
     expect(screen.getByText("C 跨波差 0.00 亿")).toBeInTheDocument();
     expect(screen.getByText("奶跨波差 0.0")).toBeInTheDocument();
     expect(screen.getByText("安排人数 · 达到理论界")).toBeInTheDocument();
@@ -739,7 +750,9 @@ describe("SchedulePage", () => {
 
     expect(await screen.findByText("本次求解达到时限")).toBeInTheDocument();
     expect(screen.getByText(/高级参数已更新为建议值/)).toBeInTheDocument();
-    expect(screen.getByDisplayValue("20")).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("dialog")).getByDisplayValue("20"),
+    ).toBeInTheDocument();
     expect(screen.getByDisplayValue("43")).toBeInTheDocument();
     expect(onError).toHaveBeenCalledWith(expect.objectContaining({
       code: "SCHEDULE_GENERATION_TIMEOUT",

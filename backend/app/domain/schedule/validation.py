@@ -76,6 +76,30 @@ def composition_role_requirements(
     return RoleRequirements(ideal_damage=ideal_damage, base_buffers=base_buffers)
 
 
+def ordered_buffer_limits(
+    composition_rules: CompositionRules,
+    team_keys: Iterable[str],
+    double_buffer_team_keys: Iterable[str],
+) -> tuple[int, int]:
+    """Return the total buffer range allowed by an ordered placement rule."""
+
+    doubled = set(double_buffer_team_keys)
+    minimum_total = 0
+    maximum_total = 0
+    for team_key in team_keys:
+        counts = [
+            rule.roles.get(RoleType.BUFFER, 0)
+            for rule in composition_rules.allowed
+            if team_key in rule.applicable_team_keys
+        ]
+        if not counts:
+            raise ValueError(f"队伍 {team_key} 没有适用的组成规则")
+        minimum = min(counts)
+        minimum_total += minimum
+        maximum_total += max(counts) if team_key in doubled else minimum
+    return minimum_total, maximum_total
+
+
 def composition_feasibility(
     composition_rules: CompositionRules,
     team_keys: Iterable[str],

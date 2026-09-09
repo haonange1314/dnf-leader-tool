@@ -54,6 +54,7 @@ database_state="$(
             || (SELECT '\''|'\'' || CASE WHEN to_regclass('\''public.schedule_rule_sets'\'') IS NOT NULL THEN 1 ELSE 0 END)
             || (SELECT '\''|'\'' || CASE WHEN to_regclass('\''public.natural_language_rate_limits'\'') IS NOT NULL THEN 1 ELSE 0 END)
             || (SELECT '\''|'\'' || count(*) FROM information_schema.columns WHERE table_schema = '\''public'\'' AND table_name = '\''schedules'\'' AND column_name = '\''active_rule_set_id'\'')
+            || (SELECT '\''|'\'' || count(*) FROM information_schema.columns WHERE table_schema = '\''public'\'' AND table_name = '\''schedules'\'' AND column_name = '\''damage_balance_tolerance_percent'\'')
             || (SELECT '\''|'\'' || count(*) FROM information_schema.columns WHERE table_schema = '\''public'\'' AND table_name = '\''generation_runs'\'' AND column_name IN ('\''schedule_rule_set_id'\'', '\''rule_compiler_version'\'', '\''effective_rules'\'', '\''rule_evaluation'\''))
             || (SELECT '\''|'\'' || count(*) FROM roles)
             || (SELECT '\''|'\'' || count(*) FROM permissions)
@@ -62,7 +63,7 @@ database_state="$(
         "'
 )"
 
-if [ "$database_state" != "20260909_0017|1|1|3|12|1|1|1|4|3|19|34" ]; then
+if [ "$database_state" != "20260909_0018|1|1|3|12|1|1|1|1|4|3|19|34" ]; then
     echo "unexpected database state: $database_state" >&2
     exit 1
 fi

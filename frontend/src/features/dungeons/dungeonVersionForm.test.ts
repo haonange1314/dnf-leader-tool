@@ -13,7 +13,7 @@ describe("dungeon version form mapping", () => {
     const values = defaultDungeonVersionForm();
     const payload = dungeonVersionFormToInput(values, DEFAULT_FORMULA);
 
-    expect(payload.defaultWaveCount).toBe(12);
+    expect(payload.defaultWaveCount).toBe(13);
     expect(payload.teams.map((team) => team.teamKey)).toEqual([
       "RED",
       "YELLOW",
@@ -29,6 +29,14 @@ describe("dungeon version form mapping", () => {
       { metric: "BUFFER", teams: ["RED", "YELLOW", "GREEN"] },
     ]);
     expect(payload.specialRoleRules.rules).toEqual([]);
+    expect(payload.optimizationRules.bufferPlacement).toMatchObject({
+      teamOrder: ["RED", "YELLOW", "GREEN"],
+      doubleBufferTeamKeys: ["RED", "YELLOW"],
+    });
+    expect(payload.optimizationRules.damagePlacement).toMatchObject({
+      primaryTeamKey: "RED",
+      balancedTeamKeys: ["YELLOW", "GREEN"],
+    });
     expect(versionFormWarnings(values)).toEqual([]);
   });
 
@@ -70,6 +78,8 @@ describe("dungeon version form mapping", () => {
         schemaVersion: 1,
         balanceAcrossWaves: [],
         respectPlayerPreferences: true,
+        bufferPlacement: null,
+        damagePlacement: null,
       },
       missingSlotPolicy: { schemaVersion: 1, mode: "FILL_EARLIER_WAVES" },
       createdAt: "2026-09-01T00:00:00Z",

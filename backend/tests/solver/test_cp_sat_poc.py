@@ -6,6 +6,7 @@ from ortools.sat.python import cp_model
 import app.solver.cp_sat as cp_sat_module
 from app.schemas.dungeon import MissingSlotPolicy, OptimizationRules, RoleType
 from app.solver import (
+    LockedAssignment,
     ObjectiveStageOutcome,
     SolverInput,
     SolverParticipant,
@@ -49,6 +50,148 @@ def test_default_12_wave_raid_is_complete_and_valid() -> None:
             participants[assignment.participant_id].player_id
         )
     assert all(len(players) == len(set(players)) for players in players_by_wave.values())
+
+
+def test_builtin_rule_uses_actual_buffer_count_then_places_damage() -> None:
+    participants = [
+        SolverParticipant(
+            participant_id=f"damage-{index:02d}",
+            player_id=f"damage-player-{index:02d}",
+            role_type=RoleType.DAMAGE,
+            score=20_000 - index * 100,
+        )
+        for index in range(23)
+    ]
+    participants.extend(
+        SolverParticipant(
+            participant_id=f"buffer-{score:02d}",
+            player_id=f"buffer-player-{score:02d}",
+            role_type=RoleType.BUFFER,
+            score=score,
+        )
+        for score in range(1, 14)
+    )
+
+    result = solve(
+        SolverInput(
+            dungeon=default_raid_12_input().dungeon,
+            wave_count=3,
+            participants=tuple(participants),
+            damage_balance_tolerance_percent=20,
+            time_limit_seconds=10,
+        )
+    )
+
+    assert result.status in (SolverStatus.OPTIMAL, SolverStatus.FEASIBLE)
+    summary_by_position = {
+        (summary.wave_no, summary.team_key): summary
+        for summary in result.team_summaries
+    }
+    assert [
+        summary_by_position[wave_no, "RED"].role_counts[RoleType.BUFFER]
+        for wave_no in range(1, 4)
+    ] == [2, 2, 2]
+    assert [
+        summary_by_position[wave_no, "YELLOW"].role_counts[RoleType.BUFFER]
+        for wave_no in range(1, 4)
+    ] == [2, 1, 1]
+    assert [
+        summary_by_position[wave_no, "GREEN"].role_counts[RoleType.BUFFER]
+        for wave_no in range(1, 4)
+    ] == [1, 1, 1]
+
+    locations = {
+        assignment.participant_id: (assignment.wave_no, assignment.team_key)
+        for assignment in result.assignments
+    }
+    assert locations["buffer-13"] == locations["buffer-01"] == (1, "RED")
+    assert locations["buffer-12"] == locations["buffer-02"] == (2, "RED")
+    assert locations["buffer-11"] == locations["buffer-03"] == (3, "RED")
+    assert locations["buffer-10"] == locations["buffer-04"] == (1, "YELLOW")
+    assert {
+        participant_id
+        for participant_id, (_wave_no, team_key) in locations.items()
+        if participant_id.startswith("damage-") and team_key == "RED"
+    } == {f"damage-{index:02d}" for index in range(6)}
+    assert locations["damage-00"] == locations["damage-05"] == (1, "RED")
+    assert locations["damage-01"] == locations["damage-04"] == (2, "RED")
+    assert locations["damage-02"] == locations["damage-03"] == (3, "RED")
+    assert result.objective_summary.damage_pair_count == 3
+    assert result.objective_summary.damage_pair_wave_count == 3
+    assert result.objective_summary.damage_balance_percent <= 20
+
+
+def test_builtin_rule_reports_infeasible_when_locks_conflict_with_buffer_structure() -> None:
+    participants = tuple(
+        [
+            SolverParticipant(
+                f"damage-{index}", f"damage-player-{index}", RoleType.DAMAGE, 1000
+            )
+            for index in range(8)
+        ]
+        + [
+            SolverParticipant(
+                f"buffer-{index}", f"buffer-player-{index}", RoleType.BUFFER, 500
+            )
+            for index in range(4)
+        ]
+    )
+
+    result = solve(
+        SolverInput(
+            dungeon=default_raid_12_input().dungeon,
+            wave_count=1,
+            participants=participants,
+            locked_assignments=(
+                LockedAssignment("buffer-0", 1, "GREEN"),
+                LockedAssignment("buffer-1", 1, "GREEN"),
+            ),
+            time_limit_seconds=3,
+        )
+    )
+
+    assert result.status == SolverStatus.INFEASIBLE
+
+
+def test_builtin_damage_shortage_keeps_red_full_and_completes_earlier_waves() -> None:
+    participants = tuple(
+        [
+            SolverParticipant(
+                f"damage-{index}",
+                f"damage-player-{index}",
+                RoleType.DAMAGE,
+                10_000 - index,
+            )
+            for index in range(24)
+        ]
+        + [
+            SolverParticipant(
+                f"buffer-{index}", f"buffer-player-{index}", RoleType.BUFFER, 500
+            )
+            for index in range(9)
+        ]
+    )
+
+    result = solve(
+        SolverInput(
+            dungeon=default_raid_12_input().dungeon,
+            wave_count=3,
+            participants=participants,
+            time_limit_seconds=10,
+        )
+    )
+
+    assert result.status == SolverStatus.PARTIAL
+    wave_fill = Counter(assignment.wave_no for assignment in result.assignments)
+    assert wave_fill == {1: 12, 2: 12, 3: 9}
+    red_summaries = [
+        summary for summary in result.team_summaries if summary.team_key == "RED"
+    ]
+    assert all(summary.member_count == 4 for summary in red_summaries)
+    assert all(
+        summary.role_counts == {RoleType.DAMAGE: 3, RoleType.BUFFER: 1}
+        for summary in red_summaries
+    )
 
 
 def test_late_stage_timeout_keeps_incumbent_and_records_remaining_stages(
@@ -310,7 +453,9 @@ def test_confirmed_schedule_soft_rule_has_its_own_objective_stage() -> None:
 
 
 def test_participant_can_be_restricted_to_definition_team_keys() -> None:
-    definition = default_raid_12_input().dungeon
+    definition = default_raid_12_input().dungeon.model_copy(
+        update={"optimization_rules": OptimizationRules()}
+    )
     participants = tuple(
         [
             SolverParticipant(
@@ -347,7 +492,9 @@ def test_participant_can_be_restricted_to_definition_team_keys() -> None:
 
 
 def test_player_upper_bound_search_falls_back_when_team_capacity_is_tighter() -> None:
-    definition = default_raid_12_input().dungeon
+    definition = default_raid_12_input().dungeon.model_copy(
+        update={"optimization_rules": OptimizationRules()}
+    )
     participants = (
         SolverParticipant(
             "damage-0", "player-0", RoleType.DAMAGE, 1000, allowed_team_keys=("RED",)
@@ -383,7 +530,9 @@ def test_player_upper_bound_search_falls_back_when_team_capacity_is_tighter() ->
 
 
 def test_dense_player_hint_uses_reachable_assignment_bound() -> None:
-    definition = default_raid_12_input().dungeon
+    definition = default_raid_12_input().dungeon.model_copy(
+        update={"optimization_rules": OptimizationRules()}
+    )
     participants = tuple(
         SolverParticipant(
             participant_id=f"player-{player_index}-role-{role_index}",

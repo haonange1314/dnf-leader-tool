@@ -79,6 +79,7 @@ class SolverInput:
     dungeon: DungeonVersionDefinition
     wave_count: int
     participants: tuple[SolverParticipant, ...]
+    damage_balance_tolerance_percent: int = 20
     schedule_id: str | None = None
     revision: int = 1
     player_preferences: tuple[SolverPlayerPreference, ...] = ()
@@ -140,6 +141,15 @@ class ObjectiveSummary:
     damage_spread: int
     buffer_spread: int
     strength_order_violation_count: int
+    target_composition_count: int = 0
+    buffer_placement_count: int = 0
+    damage_primary_count: int = 0
+    damage_pair_count: int = 0
+    damage_pair_wave_count: int = 0
+    damage_balance_spread: int = 0
+    damage_balance_tolerance_excess: int = 0
+    damage_balance_percent: int = 0
+    damage_average_scale: int = 1
 
 
 @dataclass(frozen=True, slots=True)

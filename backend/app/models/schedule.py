@@ -32,6 +32,11 @@ class Schedule(TimestampMixin, Base):
     __tablename__ = "schedules"
     __table_args__ = (
         CheckConstraint("wave_count > 0 AND wave_count <= 50", name="valid_wave_count"),
+        CheckConstraint(
+            "damage_balance_tolerance_percent >= 0 "
+            "AND damage_balance_tolerance_percent <= 100",
+            name="valid_damage_balance_tolerance_percent",
+        ),
         CheckConstraint("status IN ('DRAFT', 'PUBLISHED', 'ARCHIVED')", name="valid_status"),
         CheckConstraint("revision > 0", name="positive_revision"),
     )
@@ -53,6 +58,9 @@ class Schedule(TimestampMixin, Base):
     )
     buffer_conversion_version: Mapped[BufferConversionVersion] = relationship(lazy="selectin")
     wave_count: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    damage_balance_tolerance_percent: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, default=20, server_default="20"
+    )
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="DRAFT")
     note: Mapped[str | None] = mapped_column(Text)
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
